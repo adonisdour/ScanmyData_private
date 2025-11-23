@@ -9097,6 +9097,15 @@ def epsilon_preview():
         from epsilon_bridge_multiclient_strict import build_preview_rows_for_ui as build_preview_func
     
     client_db_path = _resolve_client_db_path(vat)
+    
+    # Διάβασμα ενεργού έτους για φιλτράρισμα
+    fiscal_year = None
+    try:
+        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
+    except Exception:
+        pass
+    
     rows, issues, _ok = build_preview_func(
         vat=vat,
         credentials_json=credentials_path_for_request(),
@@ -9104,6 +9113,7 @@ def epsilon_preview():
         invoices_json=None,
         client_db=client_db_path,
         base_invoices_dir=group_path("epsilon"),
+        fiscal_year=fiscal_year,
     )
     # πέρασέ τα στο template
     return render_template("epsilon_preview.html",
@@ -9152,6 +9162,14 @@ def export_fastimport_kinitseis():
         )
 
     # 1) Preview για να εντοπίσουμε receipts χωρίς CUSTID
+    # Διάβασμα ενεργού έτους
+    fiscal_year = None
+    try:
+        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
+    except Exception:
+        pass
+    
     preview = build_preview(
         vat=vat,
         credentials_json=credentials_path_for_request(),
@@ -9159,6 +9177,7 @@ def export_fastimport_kinitseis():
         invoices_json=None,
         client_db=base_client_db,
         base_invoices_dir=group_path("epsilon"),
+        fiscal_year=fiscal_year,
     )
 
     if apod_type == "afm" and not confirm:
@@ -9186,6 +9205,14 @@ def export_fastimport_kinitseis():
             )
 
     # 3) Κανονικό export (χρησιμοποιεί το σωστό module ανάλογα με book_category)
+    # Διάβασμα ενεργού έτους
+    fiscal_year = None
+    try:
+        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        fiscal_year = _read_active_fiscal_year(group_path("epsilon"))
+    except Exception:
+        pass
+    
     ok, out_path, issues = export_func(
         vat=vat,
         credentials_json=credentials_path_for_request(),
@@ -9195,6 +9222,7 @@ def export_fastimport_kinitseis():
         out_xlsx=None,
         base_invoices_dir=group_path("epsilon"),
         base_exports_dir=group_path("exports"),
+        fiscal_year=fiscal_year,
     )
 
     if ok and out_path:

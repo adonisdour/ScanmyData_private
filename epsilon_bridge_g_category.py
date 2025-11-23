@@ -8,8 +8,16 @@ epsilon_bridge_g_category.py
 Κύριες διαφορές από Β Κατηγορία:
 1. ΥΠΟΧΡΕΩΤΙΚΟΣ κωδικός κίνησης (MTYPE)
 2. Λογαριασμοί μορφής ΧΧ-ΧΧ-ΧΧ-ΧΧΧΧ (αντί ΧΧ-ΧΧΧΧ)
-3. NETAMT/VATAMT υποχρεωτικά στα ARTICLE_DETAIL
-4. Prefix account_g_ για λογαριασμούς
+3. ΔΙΠΛΟΓΡΑΦΙΚΗ ΜΕΘΟΔΟΣ με CRDB (Χρέωση/Πίστωση)
+4. NETAMT/VATAMT/AMOUNT υποχρεωτικά στα ARTICLE_DETAIL
+5. Prefix account_g_ για λογαριασμούς
+6. LCODE (header) ΠΑΝΤΑ ΚΕΝΟ - χρήση μόνο LCODE_DETAIL
+
+Δομή Εξαγωγής:
+- Κάθε τιμολόγιο → πολλαπλές γραμμές ARTICLE_DETAIL
+- ΧΡΕΩΣΕΙΣ (CRDB=0): μία γραμμή για κάθε κατηγορία δαπάνης
+- ΠΙΣΤΩΣΗ (CRDB=1): μία γραμμή για τον προμηθευτή (σύνολο)
+- Όλες οι γραμμές μοιράζονται το ίδιο ARTID
 """
 from __future__ import annotations
 
@@ -56,6 +64,20 @@ DEFAULT_MTYPE_MAPPING = {
     'εγγυοδοσια': '3',  # Γενικά έξοδα
     'αποδειξακια': '3',  # Γενικά έξοδα
 }
+
+
+def _get_article_movement_type(settings: Dict[str, Any]) -> str:
+    """
+    Βρίσκει τον κωδικό είδους κίνησης άρθρου (Article Movement Type).
+    Αυτός είναι διαφορετικός από το MTYPE κατηγοριών.
+    π.χ. 11=Συμψηφιστική, 12=Αγορών-Εξόδων, 13=Πωλήσεων, 14=Ταμειακή
+    """
+    setts = _settings_norm(settings)
+    key = _norm_key("article_movement_type_g")
+    val = setts.get(key, "")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return "12"  # Default: Αγορών-Εξόδων
 
 
 def _get_mtype_for_category(settings: Dict[str, Any], canon_category: str) -> str:
@@ -197,23 +219,21 @@ def build_preview_rows_for_ui_g(
         logger.error(f"[Γ Category] Failed to load invoices: {e}")
         return [], [{"code": "load_fail", "message": f"Αδυναμία φόρτωσης invoices: {e}"}], False
 
-    # Fiscal year filter
+    # Fiscal year filter - Φιλτράρει μόνο παραστατικά που εκδόθηκαν το ίδιο έτος με το αποθηκευμένο
     fy = fiscal_year if fiscal_year is not None else _read_active_fiscal_year(base_invoices_dir)
     logger.info(f"[Γ Category] Fiscal year filter: {fy}")
     if fy is not None:
-        orig_count = len(invoices)
-        invoices = [
-            inv for inv in invoices
-            if _to_date(inv.get("issueDate") or inv.get("date")) and
-            _to_date(inv.get("issueDate") or inv.get("date")).year == fy
-        ]
-        filtered = orig_count - len(invoices)
-        logger.info(f"[Γ Category] After fiscal year filter: {len(invoices)} invoices (filtered {filtered})")
-        if filtered > 0:
-            issues.append({
-                "code": "filtered_out_by_year",
-                "message": f"Φιλτραρίστηκαν {filtered} εγγραφές εκτός οικ. έτους {fy}"
-            })
+        _filtered = []
+        filtered_count = 0
+        for _rec in invoices:
+            _dt = _to_date(_rec.get("issueDate") or _rec.get("ΗΜΕΡΟΜΗΝΙΑ"))
+            if _dt is None or _dt.year != int(fy):
+                filtered_count += 1
+                continue
+            _filtered.append(_rec)
+        invoices = _filtered
+        logger.info(f"[Γ Category] After year filter: {len(invoices)} invoices (filtered {filtered_count})")
+        # Σιωπηλό φιλτράρισμα - ΔΕΝ προσθέτουμε issue (όπως το Β Category)
 
     credentials = _safe_json_read(credentials_json, default=[])
     settings_all = _safe_json_read(cred_settings_json, default={})
@@ -309,17 +329,21 @@ def build_preview_rows_for_ui_g(
             net = _round2(ln.get("net", 0))
             vat = _round2(ln.get("vat", 0))
 
-            # Force 0% για receipts και εγγυοδοσία (ίδια λογική με Β Category)
+            # Κρατάμε το πραγματικό vat_rate για preview
+            # αλλά θα χρησιμοποιήσουμε forced_rate=0 μόνο για account lookup
             canon = _canon_category(cat)
-            if is_receipt or canon == "εγγυοδοσια":
-                vr = 0
             
-            if vr is None:
+            # Έλεγχος για missing VAT rate - ΜΕ ΕΞΑΙΡΕΣΗ ΤΙΣ ΑΠΟΔΕΙΞΕΙΣ (όπως στο Β Category)
+            if vr is None and (not is_receipt or canon != "αποδειξακια"):
                 issues.append({
                     "code": "missing_vat_rate",
                     "message": f"Λείπει VAT rate για γραμμή στο MARK={mark}, category={cat}"
                 })
                 continue
+            
+            # Για αποδείξεις αποδειξακια, αν δεν υπάρχει VAT rate, θέτουμε 0
+            if vr is None and is_receipt and canon == "αποδειξακια":
+                vr = 0
 
             key = (cat, int(vr))
             if key not in aggregated:
@@ -338,6 +362,15 @@ def build_preview_rows_for_ui_g(
         lines_out = []     # Για preview (ίδιο format με Β Category)
         lcodes_summary = []
         
+        # Πρώτα βρες τον λογαριασμό προμηθευτή (θα χρειαστεί για έλεγχο)
+        account_p = _account_header_P_g(settings_all, is_receipt)
+        if not account_p:
+            issues.append({
+                "code": "missing_supplier_account_g",
+                "message": f"Λείπει λογαριασμός προμηθευτή Γ για MARK={rec.get('mark')}"
+            })
+            continue
+        
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
@@ -350,7 +383,7 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
 
-            # Λογαριασμός Γ Κατηγορίας
+            # Λογαριασμός Γ Κατηγορίας (ΧΡΕΩΣΗ)
             account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr)
             if not account:
                 issues.append({
@@ -359,7 +392,7 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
 
-            # Detail row για export (με MTYPE)
+            # Detail row για export (με MTYPE) - ΧΡΕΩΣΗ
             detail_rows.append({
                 "MTYPE": mtype,
                 "LCODE": account,
@@ -367,30 +400,52 @@ def build_preview_rows_for_ui_g(
                 "VATAMT": agg["vat"],
                 "category": canon,
                 "vat_rate": vr,
+                "CRDB": 0,  # Χρέωση
             })
             
-            # Line για preview (format συμβατό με Β Category)
+            # Line για preview - ΧΡΕΩΣΗ (Debit)
             lines_out.append({
                 "category": canon,
-                "vat_rate": vr,
+                "vat_rate": int(vr) if vr is not None else 0,  # Βεβαιώσου ότι είναι int, όχι None
+                "vat_rate_in": int(vr) if vr is not None else 0,  # Συμβατότητα με template (Β Category)
                 "lcode": account,
+                "lcode_detail": account,  # Συμβατότητα με template
                 "net": _round2(agg["net"]),
                 "vat": _round2(agg["vat"]),
                 "gross": _round2(agg["net"] + agg["vat"]),
+                "crdb": "Χ",  # Χρέωση για preview
+                "mtype": mtype,
             })
             lcodes_summary.append(account)
 
         if not detail_rows:
             continue
 
-        # Header λογαριασμός (Προμηθευτής)
-        account_p = _account_header_P_g(settings_all, is_receipt)
-        if not account_p:
-            issues.append({
-                "code": "missing_supplier_account_g",
-                "message": f"Λείπει λογαριασμός προμηθευτή Γ για MARK={rec.get('mark')}"
-            })
-            continue
+        # Προσθήκη ΠΙΣΤΩΣΗΣ προμηθευτή στα details και preview
+        detail_rows.append({
+            "MTYPE": detail_rows[0]["MTYPE"] if detail_rows else "",  # Χρήση του πρώτου MTYPE
+            "LCODE": account_p,
+            "NETAMT": sum_net,
+            "VATAMT": sum_vat,
+            "category": "προμηθευτής",
+            "vat_rate": 0,  # 0 για πίστωση προμηθευτή
+            "CRDB": 1,  # Πίστωση
+        })
+        
+        # Line για preview - ΠΙΣΤΩΣΗ προμηθευτή
+        lines_out.append({
+            "category": "προμηθευτής",
+            "vat_rate": 0,  # 0 για πίστωση προμηθευτή (όχι None)
+            "vat_rate_in": 0,  # Συμβατότητα με template
+            "lcode": account_p,
+            "lcode_detail": account_p,  # Συμβατότητα με template
+            "net": _round2(sum_net),
+            "vat": _round2(sum_vat),
+            "gross": _round2(sum_net + sum_vat),
+            "crdb": "Π",  # Πίστωση για preview
+            "mtype": detail_rows[0]["MTYPE"] if detail_rows else "",
+        })
+        lcodes_summary.append(account_p)
 
         # Πάρε issuer info από το record
         aa = str(rec.get("aa") or rec.get("AA") or "")
@@ -425,7 +480,7 @@ def build_preview_rows_for_ui_g(
             # Export fields (για export_g_category)
             "MDATE": date_str,
             "INVOICE": invoice_val,
-            "ISKEPYO": 0,
+            "ISKEPYO": 1,  # 1 = ΚΕΠΥΟ Υπόχρεος
             "ISAGRYP": 0,
             "SUMKEPYOYP": round(sum_net, 2),
             "SUMKEPYONOTYP": 0,
@@ -477,7 +532,11 @@ def export_g_category(
     fiscal_year: Optional[int] = None
 ) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
     """
-    Export γέφυρας για Γ Κατηγορία.
+    Export γέφυρας για Γ Κατηγορία με διπλογραφική μέθοδο.
+    
+    Κάθε τιμολόγιο παράγει:
+    - Πολλαπλές ΧΡΕΩΣΕΙΣ (μία για κάθε κατηγορία με NET+VAT)
+    - Μία ΠΙΣΤΩΣΗ στον προμηθευτή (σύνολο)
     
     Returns:
         (success, output_path, issues)
@@ -512,24 +571,41 @@ def export_g_category(
     
     nonfatal_issues = [i for i in preview["issues"] if str(i.get("code", "")) in nonfatal_codes]
 
+    # Δημιουργία custom out_xlsx path με prefix "G_CATEGORY_" για διαχωρισμό
+    if not out_xlsx:
+        out_xlsx = os.path.join(base_exports_dir, f"{vat}_G_CATEGORY_EPSILON_BRIDGE_KINHSEIS.xlsx")
+    
     paths = resolve_paths_for_vat(vat, invoices_json, client_db, out_xlsx, base_invoices_dir, base_exports_dir)
     rows = preview["rows"]
 
-    # Δημιουργία ΚΙΝΗΣΕΙΣ με MTYPE
+    # Δημιουργία ΚΙΝΗΣΕΙΣ με διπλογραφική μέθοδο
     flat: List[Dict[str, Any]] = []
     artid = 1
     
+    # Διάβασμα settings για article movement type
+    settings_all = _safe_json_read(cred_settings_json, default={})
+    credentials = _safe_json_read(credentials_json, default=[])
+    cred_list = credentials if isinstance(credentials, list) else [credentials]
+    active = next((c for c in cred_list if str(c.get("vat")) == str(vat)), (cred_list[0] if cred_list else {}))
+    settings_all = _merge_custom_accounts(settings_all, active)
+    
+    # Πάρε τον article movement type (π.χ. 12 για Αγορών-Εξόδων)
+    article_mtype = _get_article_movement_type(settings_all)
+    
     for rec in rows:
-        # Χρησιμοποίησε τα _g_details για export (που έχουν MTYPE)
+        # Χρησιμοποίησε τα _g_details για export (που έχουν category MTYPE codes)
         details = rec.get("_g_details", [])
         if not details:
             continue
         
-        # Για κάθε detail (λογαριασμός εξόδων), δημιούργησε ΧΡΕΩΣΗ
+        # ΧΡΕΩΣΕΙΣ: Μία γραμμή για κάθε κατηγορία (λογαριασμός εξόδων)
         for detail in details:
+            if detail.get("CRDB") == 1:  # Αγνόησε την πίστωση από τα details (θα την προσθέσουμε μετά)
+                continue
+                
             flat.append({
                 "ARTID": artid,
-                "MTYPE": detail["MTYPE"],
+                "MTYPE": article_mtype,  # Κωδικός είδους κίνησης άρθρου (π.χ. 12)
                 "ISKEPYO": rec["ISKEPYO"],
                 "ISAGRYP": rec["ISAGRYP"],
                 "CUSTID": rec["CUSTID"],
@@ -540,22 +616,24 @@ def export_g_category(
                 "SUMKEPYONOTYP": rec["SUMKEPYONOTYP"],
                 "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
                 "MSIGN": rec.get("MSIGN", ""),
-                "LCODE": "",  # Άδειο για Γ Category
-                # ARTICLE_DETAIL: ΧΡΕΩΣΗ στον λογαριασμό εξόδων
+                "LCODE": "",  # Άδειο για Γ Category (χρησιμοποιούμε LCODE_DETAIL)
+                # ARTICLE_DETAIL
                 "LCODE_DETAIL": detail["LCODE"],
                 "ISAGRYP_DETAIL": rec["ISAGRYP"],
                 "KEPYOPARTY": "",
-                "CRDB": "Χ",  # Χρέωση (Debit)
-                "AMOUNT": round(detail["NETAMT"] + detail["VATAMT"], 2),
+                "CRDB": 0,  # 0 = Χρέωση (Debit)
+                "NETAMT": round(detail["NETAMT"], 2),  # Καθαρή αξία
+                "VATAMT": round(detail["VATAMT"], 2),  # ΦΠΑ
+                "AMOUNT": round(detail["NETAMT"] + detail["VATAMT"], 2),  # Σύνολο
                 "INVOICE_DETAIL": rec["INVOICE"],
                 "REASON_DETAIL": rec["REASON"],
             })
         
-        # Προσθήκη ΠΙΣΤΩΣΗΣ στον προμηθευτή (μία γραμμή για το σύνολο)
+        # ΠΙΣΤΩΣΗ: Μία γραμμή για τον προμηθευτή (σύνολο)
         total_amount = rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"]
         flat.append({
             "ARTID": artid,
-            "MTYPE": details[0]["MTYPE"] if details else "",  # Χρησιμοποίησε το MTYPE του πρώτου detail
+            "MTYPE": article_mtype,  # Ίδιο MTYPE με τις χρεώσεις
             "ISKEPYO": rec["ISKEPYO"],
             "ISAGRYP": rec["ISAGRYP"],
             "CUSTID": rec["CUSTID"],
@@ -567,12 +645,14 @@ def export_g_category(
             "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
             "MSIGN": rec.get("MSIGN", ""),
             "LCODE": "",  # Άδειο για Γ Category
-            # ARTICLE_DETAIL: ΠΙΣΤΩΣΗ στον προμηθευτή
+            # ARTICLE_DETAIL
             "LCODE_DETAIL": rec["LCODE_HEADER"],
             "ISAGRYP_DETAIL": rec["ISAGRYP"],
             "KEPYOPARTY": "",
-            "CRDB": "Π",  # Πίστωση (Credit)
-            "AMOUNT": round(total_amount, 2),
+            "CRDB": 1,  # 1 = Πίστωση (Credit)
+            "NETAMT": round(rec["SUMKEPYOYP"], 2),  # Καθαρή αξία συνόλου
+            "VATAMT": round(rec["SUMKEPYOFPA"], 2),  # ΦΠΑ συνόλου
+            "AMOUNT": round(total_amount, 2),  # Σύνολο
             "INVOICE_DETAIL": rec["INVOICE"],
             "REASON_DETAIL": rec["REASON"],
         })
@@ -582,7 +662,7 @@ def export_g_category(
     df_moves = pd.DataFrame(flat, columns=[
         "ARTID", "MTYPE", "ISKEPYO", "ISAGRYP", "CUSTID", "MDATE", "REASON", "INVOICE",
         "SUMKEPYOYP", "SUMKEPYONOTYP", "SUMKEPYOFPA", "MSIGN", "LCODE",
-        "LCODE_DETAIL", "ISAGRYP_DETAIL", "KEPYOPARTY", "CRDB", "AMOUNT",
+        "LCODE_DETAIL", "ISAGRYP_DETAIL", "KEPYOPARTY", "CRDB", "NETAMT", "VATAMT", "AMOUNT",
         "INVOICE_DETAIL", "REASON_DETAIL"
     ])
 

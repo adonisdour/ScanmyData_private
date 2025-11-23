@@ -757,6 +757,10 @@ def export_multiclient_strict(
     # capture non-fatal issues (e.g., filtered_out_by_year); we will return them alongside success
     nonfatal_issues = [i for i in preview["issues"] if str(i.get("code","")) in nonfatal_codes]
 
+    # Δημιουργία custom out_xlsx path με prefix "B_CATEGORY_" για διαχωρισμό
+    if not out_xlsx:
+        out_xlsx = os.path.join(base_exports_dir, f"{vat}_B_CATEGORY_EPSILON_BRIDGE_KINHSEIS.xlsx")
+
     paths = resolve_paths_for_vat(
         vat, invoices_json, client_db, out_xlsx, base_invoices_dir, base_exports_dir
     )
