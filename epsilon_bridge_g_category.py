@@ -184,14 +184,22 @@ def build_preview_rows_for_ui_g(
     """
     paths = resolve_paths_for_vat(vat, invoices_json, client_db, None, base_invoices_dir)
     issues: List[Dict[str, Any]] = []
+    
+    # Debug logging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[Γ Category] Paths: invoices={paths.get('invoices')}, client_db={paths.get('client_db')}")
 
     try:
         invoices = load_epsilon_invoices(paths["invoices"])
+        logger.info(f"[Γ Category] Loaded {len(invoices)} invoices from {paths['invoices']}")
     except Exception as e:
+        logger.error(f"[Γ Category] Failed to load invoices: {e}")
         return [], [{"code": "load_fail", "message": f"Αδυναμία φόρτωσης invoices: {e}"}], False
 
     # Fiscal year filter
     fy = fiscal_year if fiscal_year is not None else _read_active_fiscal_year(base_invoices_dir)
+    logger.info(f"[Γ Category] Fiscal year filter: {fy}")
     if fy is not None:
         orig_count = len(invoices)
         invoices = [
@@ -200,6 +208,7 @@ def build_preview_rows_for_ui_g(
             _to_date(inv.get("issueDate") or inv.get("date")).year == fy
         ]
         filtered = orig_count - len(invoices)
+        logger.info(f"[Γ Category] After fiscal year filter: {len(invoices)} invoices (filtered {filtered})")
         if filtered > 0:
             issues.append({
                 "code": "filtered_out_by_year",
@@ -216,6 +225,8 @@ def build_preview_rows_for_ui_g(
     apod_type = (active or {}).get("apodeixakia_type", "")
     apod_supplier_id = _safe_int((active or {}).get("apodeixakia_supplier", ""))
     other_expenses_flag = 1 if bool((active or {}).get("apodeixakia_other_expenses")) else 0
+    
+    logger.info(f"[Γ Category] Settings: apod_type={apod_type}, apod_supplier_id={apod_supplier_id}")
 
     # Client map
     client_map = {"by_afm": {}, "ids": set(), "names": {}, "columns": []}
@@ -226,28 +237,48 @@ def build_preview_rows_for_ui_g(
             client_map["ids"] = cm.get("ids", set())
             client_map["names"] = cm.get("names", {})
             client_map["columns"] = cm.get("columns", [])
+            logger.info(f"[Γ Category] Loaded client_db: {len(client_map['by_afm'])} AFMs, {len(client_map['ids'])} IDs")
         except Exception as e:
+            logger.error(f"[Γ Category] Failed to load client_db: {e}")
             issues.append({"code": "client_db_fail", "message": f"Αδυναμία φόρτωσης client_db: {e}"})
 
     rows: List[Dict[str, Any]] = []
+    
+    logger.info(f"[Γ Category] Processing {len(invoices)} invoices...")
 
     for rec in invoices:
         is_receipt = _is_receipt(rec)
         afm_issuer = str(rec.get("AFM_issuer") or rec.get("counterpart_vat") or "").strip()
+        mark = rec.get("mark")
+        
+        logger.debug(f"[Γ Category] Processing MARK={mark}, is_receipt={is_receipt}, AFM={afm_issuer}")
         
         # CUSTID
         custid_val = None
-        if apod_type.lower() == "afm" and is_receipt and apod_supplier_id:
-            custid_val = apod_supplier_id
-        elif afm_issuer and client_map["by_afm"]:
+        if is_receipt and apod_type == "supplier":
+            # Supplier mode για αποδείξεις
+            logger.debug(f"[Γ Category] Receipt with supplier mode: checking if {apod_supplier_id} in {client_map['ids']}")
+            if apod_supplier_id is not None and apod_supplier_id in (client_map["ids"] or set()):
+                custid_val = apod_supplier_id
+                logger.debug(f"[Γ Category] Using supplier CUSTID: {custid_val}")
+            else:
+                logger.warning(f"[Γ Category] Supplier ID {apod_supplier_id} not in client_db!")
+                issues.append({
+                    "code": "apodeixakia_supplier_not_in_client_db",
+                    "message": f"Απόδειξη MARK={mark}: apodeixakia_supplier={apod_supplier_id} δεν υπάρχει στο client_db."
+                })
+                continue
+        else:
+            # Αναζήτηση με AFM στο client_db
+            logger.debug(f"[Γ Category] Looking up AFM {afm_issuer} in client_db")
             custid_val = client_map["by_afm"].get(afm_issuer)
-        
-        if custid_val is None:
-            issues.append({
-                "code": "missing_custid",
-                "message": f"Δεν βρέθηκε CUSTID για AFM={afm_issuer}, MARK={rec.get('mark')}"
-            })
-            continue
+            if custid_val is None:
+                logger.warning(f"[Γ Category] AFM {afm_issuer} not found in client_db")
+                issues.append({
+                    "code": "missing_custid",
+                    "message": f"Δεν βρέθηκε CUSTID για AFM={afm_issuer}, MARK={mark}"
+                })
+                continue
 
         # Reason
         reason = _reason_for_rec_enhanced(rec, is_receipt, client_map.get("names"))
@@ -278,16 +309,21 @@ def build_preview_rows_for_ui_g(
             net = _round2(ln.get("net", 0))
             vat = _round2(ln.get("vat", 0))
 
+            # Force 0% για receipts και εγγυοδοσία (ίδια λογική με Β Category)
+            canon = _canon_category(cat)
+            if is_receipt or canon == "εγγυοδοσια":
+                vr = 0
+            
             if vr is None:
                 issues.append({
                     "code": "missing_vat_rate",
-                    "message": f"Λείπει VAT rate για γραμμή στο MARK={rec.get('mark')}"
+                    "message": f"Λείπει VAT rate για γραμμή στο MARK={mark}, category={cat}"
                 })
                 continue
 
-            key = (cat, vr)
+            key = (cat, int(vr))
             if key not in aggregated:
-                aggregated[key] = {"net": 0.0, "vat": 0.0, "category": cat, "vat_rate": vr}
+                aggregated[key] = {"net": 0.0, "vat": 0.0, "category": cat, "vat_rate": int(vr)}
             aggregated[key]["net"] += net
             aggregated[key]["vat"] += vat
             sum_net += net
@@ -296,8 +332,12 @@ def build_preview_rows_for_ui_g(
         if not aggregated:
             continue
 
-        # Δημιουργία γραμμών με MTYPE
-        detail_rows = []
+        # Δημιουργία γραμμών με MTYPE για export (details)
+        # Αλλά και formatted lines για preview (LINES)
+        detail_rows = []  # Για export
+        lines_out = []     # Για preview (ίδιο format με Β Category)
+        lcodes_summary = []
+        
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
@@ -319,6 +359,7 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
 
+            # Detail row για export (με MTYPE)
             detail_rows.append({
                 "MTYPE": mtype,
                 "LCODE": account,
@@ -327,6 +368,17 @@ def build_preview_rows_for_ui_g(
                 "category": canon,
                 "vat_rate": vr,
             })
+            
+            # Line για preview (format συμβατό με Β Category)
+            lines_out.append({
+                "category": canon,
+                "vat_rate": vr,
+                "lcode": account,
+                "net": _round2(agg["net"]),
+                "vat": _round2(agg["vat"]),
+                "gross": _round2(agg["net"] + agg["vat"]),
+            })
+            lcodes_summary.append(account)
 
         if not detail_rows:
             continue
@@ -340,10 +392,38 @@ def build_preview_rows_for_ui_g(
             })
             continue
 
+        # Πάρε issuer info από το record
+        aa = str(rec.get("aa") or rec.get("AA") or "")
+        series = str(rec.get("series") or rec.get("SERIES") or "")
+        doc_type = str(rec.get("type") or "")
+        issuer_name = str(rec.get("Name_issuer") or rec.get("issuerName") or rec.get("name") or client_map.get("names", {}).get(afm_issuer, ""))
+        
+        # Characts
+        characts = characts_from_lines(rec)
+
+        # Append row με format συμβατό με Β Category (για preview)
+        # + extra fields για export
         rows.append({
+            # Preview fields (format Β Category)
+            "MARK": mark,
+            "AA": aa,
+            "SERIES": series,
+            "DATE": date_str,
+            "AFM_ISSUER": afm_issuer,
+            "ISSUER_NAME": issuer_name,
             "CUSTID": custid_val,
-            "MDATE": date_str,
+            "NET": round(sum_net, 2),
+            "VAT": round(sum_vat, 2),
+            "GROSS": round(sum_net + sum_vat, 2),
+            "DOCTYPE": doc_type,
             "REASON": reason,
+            "CHARACTS": characts,
+            "LINES": lines_out,
+            "LCODE_DETAIL_SUMMARY": ", ".join(sorted(set(lcodes_summary))),
+            "LCODE": account_p,
+            "OTHEREXPEND": other_expenses_flag,
+            # Export fields (για export_g_category)
+            "MDATE": date_str,
             "INVOICE": invoice_val,
             "ISKEPYO": 0,
             "ISAGRYP": 0,
@@ -351,14 +431,14 @@ def build_preview_rows_for_ui_g(
             "SUMKEPYONOTYP": 0,
             "SUMKEPYOFPA": round(sum_vat, 2),
             "LCODE_HEADER": account_p,
-            "OTHEREXPEND": other_expenses_flag,
             "MSIGN": "",
-            "details": detail_rows,
-            "characts": characts_from_lines(rec),
+            "_g_details": detail_rows,  # Κρατάμε τα MTYPE details για export
             "_source": rec,
         })
+        logger.debug(f"[Γ Category] Successfully added row for MARK={mark}, CUSTID={custid_val}")
 
     ok = len(rows) > 0
+    logger.info(f"[Γ Category] Final result: {len(rows)} rows, {len(issues)} issues, ok={ok}")
     return rows, issues, ok
 
 
@@ -414,8 +494,21 @@ def export_g_category(
     
     nonfatal_codes = {"filtered_out_by_year"}
     fatals = [i for i in preview["issues"] if str(i.get("code", "")) not in nonfatal_codes]
+    
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[Γ Export] Preview has {len(preview.get('rows', []))} rows, {len(preview['issues'])} issues")
+    logger.info(f"[Γ Export] Fatal issues: {fatals}")
+    logger.info(f"[Γ Export] Preview OK: {preview.get('ok')}")
+    
     if fatals:
+        logger.error(f"[Γ Export] Export failed due to fatal issues: {fatals}")
         return False, None, preview["issues"]
+    
+    # Έλεγχος αν υπάρχουν rows
+    if not preview.get("rows"):
+        logger.error(f"[Γ Export] No rows to export after filtering")
+        return False, None, preview["issues"] + [{"code": "no_rows", "message": "Δεν υπάρχουν εγγραφές για εξαγωγή"}]
     
     nonfatal_issues = [i for i in preview["issues"] if str(i.get("code", "")) in nonfatal_codes]
 
@@ -427,10 +520,16 @@ def export_g_category(
     artid = 1
     
     for rec in rows:
-        for detail in rec.get("details", []):
+        # Χρησιμοποίησε τα _g_details για export (που έχουν MTYPE)
+        details = rec.get("_g_details", [])
+        if not details:
+            continue
+        
+        # Για κάθε detail (λογαριασμός εξόδων), δημιούργησε ΧΡΕΩΣΗ
+        for detail in details:
             flat.append({
                 "ARTID": artid,
-                "MTYPE": detail["MTYPE"],  # ΥΠΟΧΡΕΩΤΙΚΟ για Γ
+                "MTYPE": detail["MTYPE"],
                 "ISKEPYO": rec["ISKEPYO"],
                 "ISAGRYP": rec["ISAGRYP"],
                 "CUSTID": rec["CUSTID"],
@@ -440,27 +539,51 @@ def export_g_category(
                 "SUMKEPYOYP": rec["SUMKEPYOYP"],
                 "SUMKEPYONOTYP": rec["SUMKEPYONOTYP"],
                 "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
-                "LCODE": rec["LCODE_HEADER"],
                 "MSIGN": rec.get("MSIGN", ""),
-                "OTHEREXPEND": rec.get("OTHEREXPEND", 0),
-                # ARTICLE_DETAIL fields
+                "LCODE": "",  # Άδειο για Γ Category
+                # ARTICLE_DETAIL: ΧΡΕΩΣΗ στον λογαριασμό εξόδων
                 "LCODE_DETAIL": detail["LCODE"],
                 "ISAGRYP_DETAIL": rec["ISAGRYP"],
                 "KEPYOPARTY": "",
-                "NETAMT_DETAIL": detail["NETAMT"],  # ΥΠΟΧΡΕΩΤΙΚΟ για Γ
-                "VATAMT_DETAIL": detail["VATAMT"],  # ΥΠΟΧΡΕΩΤΙΚΟ για Γ
-                "CRDB": "Χ",
+                "CRDB": "Χ",  # Χρέωση (Debit)
                 "AMOUNT": round(detail["NETAMT"] + detail["VATAMT"], 2),
                 "INVOICE_DETAIL": rec["INVOICE"],
                 "REASON_DETAIL": rec["REASON"],
             })
-            artid += 1
+        
+        # Προσθήκη ΠΙΣΤΩΣΗΣ στον προμηθευτή (μία γραμμή για το σύνολο)
+        total_amount = rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"]
+        flat.append({
+            "ARTID": artid,
+            "MTYPE": details[0]["MTYPE"] if details else "",  # Χρησιμοποίησε το MTYPE του πρώτου detail
+            "ISKEPYO": rec["ISKEPYO"],
+            "ISAGRYP": rec["ISAGRYP"],
+            "CUSTID": rec["CUSTID"],
+            "MDATE": rec["MDATE"],
+            "REASON": rec["REASON"],
+            "INVOICE": rec["INVOICE"],
+            "SUMKEPYOYP": rec["SUMKEPYOYP"],
+            "SUMKEPYONOTYP": rec["SUMKEPYONOTYP"],
+            "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
+            "MSIGN": rec.get("MSIGN", ""),
+            "LCODE": "",  # Άδειο για Γ Category
+            # ARTICLE_DETAIL: ΠΙΣΤΩΣΗ στον προμηθευτή
+            "LCODE_DETAIL": rec["LCODE_HEADER"],
+            "ISAGRYP_DETAIL": rec["ISAGRYP"],
+            "KEPYOPARTY": "",
+            "CRDB": "Π",  # Πίστωση (Credit)
+            "AMOUNT": round(total_amount, 2),
+            "INVOICE_DETAIL": rec["INVOICE"],
+            "REASON_DETAIL": rec["REASON"],
+        })
+        
+        artid += 1
 
     df_moves = pd.DataFrame(flat, columns=[
         "ARTID", "MTYPE", "ISKEPYO", "ISAGRYP", "CUSTID", "MDATE", "REASON", "INVOICE",
-        "SUMKEPYOYP", "SUMKEPYONOTYP", "SUMKEPYOFPA", "MSIGN", "LCODE", "OTHEREXPEND",
+        "SUMKEPYOYP", "SUMKEPYONOTYP", "SUMKEPYOFPA", "MSIGN", "LCODE",
         "LCODE_DETAIL", "ISAGRYP_DETAIL", "KEPYOPARTY", "CRDB", "AMOUNT",
-        "NETAMT_DETAIL", "VATAMT_DETAIL", "INVOICE_DETAIL", "REASON_DETAIL"
+        "INVOICE_DETAIL", "REASON_DETAIL"
     ])
 
     # Διάβασμα credentials για supplier mode

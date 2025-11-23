@@ -1437,7 +1437,16 @@ def _resolve_client_db_path(vat: str) -> str | None:
         if os.path.exists(p):
             return p
 
-    # 2) Fallback: «έξυπνη» ανακάλυψη στο global data/
+    # 2) Fallback: «έξυπνη» ανακάλυψη στον φάκελο της ομάδας
+    try:
+        from epsilon_bridge_multiclient_strict import _discover_client_db_in_data_dir
+        fb = _discover_client_db_in_data_dir(base, vat=vat)
+        if fb:
+            return fb
+    except Exception:
+        pass
+
+    # 3) Fallback: «έξυπνη» ανακάλυψη στο global data/
     try:
         from epsilon_bridge_multiclient_strict import _discover_client_db_in_data_dir
         fb = _discover_client_db_in_data_dir(os.path.join(BASE_DIR, "data"), vat=vat)
