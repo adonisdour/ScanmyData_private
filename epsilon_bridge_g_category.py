@@ -475,6 +475,9 @@ def build_preview_rows_for_ui_g(
         
         # Characts
         characts = characts_from_lines(rec)
+        
+        # OTHEREXPEND: Λοιπές δαπάνες - μόνο για αποδείξεις
+        receipt_other_flag = 1 if (is_receipt and other_expenses_flag) else 0
 
         # Append row με format συμβατό με Β Category (για preview)
         # + extra fields για export
@@ -496,7 +499,7 @@ def build_preview_rows_for_ui_g(
             "LINES": lines_out,
             "LCODE_DETAIL_SUMMARY": ", ".join(sorted(set(lcodes_summary))),
             "LCODE": account_p,
-            "OTHEREXPEND": other_expenses_flag,
+            "OTHEREXPEND": receipt_other_flag,
             # Export fields (για export_g_category)
             "MDATE": date_str,
             "INVOICE": invoice_val,
@@ -571,7 +574,7 @@ def export_g_category(
         fiscal_year=fiscal_year
     )
     
-    nonfatal_codes = {"filtered_out_by_year"}
+    nonfatal_codes = {"filtered_out_by_year", "auto_created_supplier"}
     fatals = [i for i in preview["issues"] if str(i.get("code", "")) not in nonfatal_codes]
     
     import logging
@@ -637,6 +640,7 @@ def export_g_category(
                 "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
                 "MSIGN": rec.get("MSIGN", ""),
                 "LCODE": "",  # Άδειο για Γ Category (χρησιμοποιούμε LCODE_DETAIL)
+                "OTHEREXPEND": int(rec.get("OTHEREXPEND", 0) or 0),
                 # ARTICLE_DETAIL
                 "LCODE_DETAIL": detail["LCODE"],
                 "ISAGRYP_DETAIL": rec["ISAGRYP"],
@@ -665,6 +669,7 @@ def export_g_category(
             "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
             "MSIGN": rec.get("MSIGN", ""),
             "LCODE": "",  # Άδειο για Γ Category
+            
             # ARTICLE_DETAIL
             "LCODE_DETAIL": rec["LCODE_HEADER"],
             "ISAGRYP_DETAIL": rec["ISAGRYP"],
@@ -675,15 +680,16 @@ def export_g_category(
             "AMOUNT": round(total_amount, 2),  # Σύνολο
             "INVOICE_DETAIL": rec["INVOICE"],
             "REASON_DETAIL": rec["REASON"],
+            "OTHEREXPEND": int(rec.get("OTHEREXPEND", 0) or 0)
         })
         
         artid += 1
 
     df_moves = pd.DataFrame(flat, columns=[
         "ARTID", "MTYPE", "ISKEPYO", "ISAGRYP", "CUSTID", "MDATE", "REASON", "INVOICE",
-        "SUMKEPYOYP", "SUMKEPYONOTYP", "SUMKEPYOFPA", "MSIGN", "LCODE",
+        "SUMKEPYOYP", "SUMKEPYONOTYP", "SUMKEPYOFPA", "MSIGN", "LCODE", 
         "LCODE_DETAIL", "ISAGRYP_DETAIL", "KEPYOPARTY", "CRDB", "NETAMT", "VATAMT", "AMOUNT",
-        "INVOICE_DETAIL", "REASON_DETAIL"
+        "INVOICE_DETAIL", "REASON_DETAIL","OTHEREXPEND"
     ])
 
     # ---------- Διαβάσε ρυθμίσεις για supplier mode (χωρίς να αλλάξεις τίποτα άλλο) ----------
@@ -756,7 +762,7 @@ def export_g_category(
         fmt_int  = wb.add_format({"num_format": "0"})
         fmt_date = wb.add_format({"num_format": "dd/mm/yyyy"})
         idx = {n: i for i, n in enumerate(df_moves.columns)}
-        for n in ["ARTID","MTYPE","ISKEPYO","ISAGRYP","ISAGRYP_DETAIL","MSIGN","CUSTID","CRDB"]:
+        for n in ["ARTID","MTYPE","ISKEPYO","ISAGRYP","ISAGRYP_DETAIL","MSIGN","CUSTID","CRDB","OTHEREXPEND"]:
             if n in idx:
                 ws.set_column(idx[n], idx[n], 10, fmt_int)
         for n in ["SUMKEPYOYP","SUMKEPYONOTYP","SUMKEPYOFPA","KEPYOPARTY","NETAMT","VATAMT","AMOUNT"]:

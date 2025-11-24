@@ -93,5 +93,35 @@
         "vat_category": ""
       }
     ]
+  },
+  {
+    "mark": "400011600281002",
+    "issueDate": "10/11/2025",
+    "series": "TΔA",
+    "aa": "60939",
+    "AA": "60939",
+    "type": "Πιστωτικό Τιμολόγιο / Συσχετιζόμενο",
+    "vatCategory": "",
+    "totalNetValue": "-33,06",
+    "totalVatAmount": "-7,93",
+    "totalValue": "-40,99",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "AFM_issuer": "800916954",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+    "AFM": "800916954",
+    "lines": [
+      {
+        "id": "400011600281002_inst0",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "-33,06",
+        "vat": "-7,93",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ],
+    "_updated_at": "2025-11-24T12:53:15.955070+00:00"
   }
 ]
