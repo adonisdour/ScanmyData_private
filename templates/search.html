@@ -160,7 +160,13 @@
         <h4 class="font-medium mt-4 mb-2">Γραμμές Παραστατικού (για χαρακτηρισμό)</h4>
         <div id="summaryLinesContainer" class="overflow-auto max-h-96 border rounded p-2"></div>
 
-
+        <!-- MTYPE για Γ Category (invoice-level) -->
+        <div id="invoiceMtypeContainer" class="mt-4" style="display:none;">
+            <label class="font-medium text-sm">Είδος Κίνησης (για Γ Κατηγορία)</label>
+            <select id="invoiceMtypeSelect" class="mt-1 p-2 border rounded w-full max-w-md">
+                <option value="">-- επίλεξε είδος κίνησης --</option>
+            </select>
+        </div>
 
         <!-- FOOTER -->
         <div class="mt-4 flex justify-between items-center">
@@ -1090,6 +1096,11 @@ try {
     // ώστε στο redirect/refresh να παραμείνει.
     document.getElementById('saveSummaryForm')?.addEventListener('submit', () => {
       try {
+        // Ενημέρωση του summaryJsonInput με τα τελευταία δεδομένα από το DOM (categories + MTYPE)
+        if (typeof window.updateSummaryFromDom === 'function') {
+          window.updateSummaryFromDom();
+        }
+        
         const raw = document.getElementById('summaryJsonInput')?.value || '';
         const s = raw ? JSON.parse(raw) : {};
         const isReceipt = s.is_receipt === true ||
@@ -1331,6 +1342,8 @@ let CUSTOMER_CATEGORIES = (function(){
 })();
 if (typeof window !== 'undefined') {
   window.CUSTOMER_CATEGORIES = window.CUSTOMER_CATEGORIES || CUSTOMER_CATEGORIES.slice();
+  // Expose G_CATEGORY_DATA for MTYPE support
+  window.G_CATEGORY_DATA = {{ g_category_data | tojson | safe if g_category_data else 'null' }};
 }
 
 // Helper: show transient flash (client-side)
@@ -1420,6 +1433,7 @@ if (typeof window !== 'undefined') {
   function buildTableHTML(lines, categories){
     const table = document.createElement('table');
     table.className = 'w-full border-collapse';
+    
     const thead = document.createElement('thead');
     thead.className = 'bg-gray-100 sticky top-0';
     thead.innerHTML = '<tr>' +
@@ -1444,7 +1458,7 @@ if (typeof window !== 'undefined') {
         '<td class="p-2 border text-right">' + escapeHtml(String(ln.vat || '')) + '</td>' +
         '<td class="p-2 border"></td>';
 
-      // create select
+      // create category select
       const select = document.createElement('select');
       select.className = 'expense-category p-1 border rounded w-full';
       select.dataset.lineId = ln.id || ('l' + idx);
@@ -1511,6 +1525,7 @@ if (typeof window !== 'undefined') {
 
     controls.appendChild(btnwrap);
     wrapper.appendChild(controls);
+    
     return wrapper;
   }
 
@@ -1531,6 +1546,45 @@ if (typeof window !== 'undefined') {
       if(Array.isArray(js) && js.length) return js;
     } catch(e){}
     return window.CUSTOMER_CATEGORIES || [];
+  }
+
+  // Setup invoice-level MTYPE dropdown for Γ Category
+  function setupInvoiceMtype(summary) {
+    const mtypeContainer = document.getElementById('invoiceMtypeContainer');
+    const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+    
+    if (!mtypeContainer || !mtypeSelect) return;
+    
+    // Check if Γ Category
+    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
+    
+    if (isGCategory) {
+      // Show container
+      mtypeContainer.style.display = 'block';
+      
+      // Clear and populate dropdown
+      mtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+      const movementTypes = window.G_CATEGORY_DATA.movement_types || [];
+      const savedMtype = summary.mtype || '';
+      
+      movementTypes.forEach(mt => {
+        const option = document.createElement('option');
+        option.value = mt.value;
+        option.textContent = mt.label + ' (' + mt.value + ')';
+        if (mt.value === savedMtype) {
+          option.selected = true;
+        }
+        mtypeSelect.appendChild(option);
+      });
+      
+      // Add change listener
+      mtypeSelect.addEventListener('change', function() {
+        updateSummaryFromDom();
+      });
+    } else {
+      // Hide container for non-Γ Category
+      mtypeContainer.style.display = 'none';
+    }
   }
 
   // render everything into the container
@@ -1565,6 +1619,9 @@ if (typeof window !== 'undefined') {
 
     // after building DOM, wire events
     wireInteractions();
+    
+    // Setup invoice-level MTYPE dropdown (για Γ Category)
+    setupInvoiceMtype(summary);
   }
 
   // update hidden input from current DOM selections/buttons
@@ -1654,8 +1711,12 @@ if (typeof window !== 'undefined') {
     try { obs.observe(modal, { attributes: true, attributeFilter:['style','class'] }); } catch(e){ /* ignore */ }
   }
 
-  // expose for debug
+  // expose for debug and for RC_AUTO_INJECT modal
   window._renderSummaryLines = renderSummaryLines;
+  window.buildTableHTML = buildTableHTML;
+  window.buildSingleLineHTML = buildSingleLineHTML;
+  window.wireInteractions = wireInteractions;
+  window.updateSummaryFromDom = updateSummaryFromDom;
 })();
   function persist() {
     summaryInput.value = JSON.stringify(obj || {});
@@ -3618,6 +3679,7 @@ function prefillSummaryModal(){
           const btn = container.querySelector('.category-btn.bg-sky-600[data-line-id="'+lid+'"]');
           if(btn) chosen = btn.dataset.cat || '';
         }
+        
         // find or create line entry
         let found = data.lines.find(x => String(x.id) === lid);
         if(!found){
@@ -3626,6 +3688,12 @@ function prefillSummaryModal(){
         }
         found.category = chosen || '';
       });
+      
+      // Συλλογή invoice-level MTYPE (για Γ Category)
+      const invoiceMtypeSelect = document.getElementById('invoiceMtypeSelect');
+      if (invoiceMtypeSelect && invoiceMtypeSelect.value) {
+        data.mtype = invoiceMtypeSelect.value;
+      }
 
       input.value = JSON.stringify(data);
     } catch(err){
@@ -5119,24 +5187,40 @@ function readMappingFromUI(){
         return;
       }
 
-      // build a small table
-      const tbl = document.createElement('table');
-      tbl.className = 'w-full text-sm';
-      tbl.style.borderCollapse = 'collapse';
-      const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th class="p-1 border text-left">#</th><th class="p-1 border text-left">Περιγραφή</th><th class="p-1 border text-right">Ποσό</th><th class="p-1 border text-right">ΦΠΑ</th></tr>';
-      tbl.appendChild(thead);
-      const tbody = document.createElement('tbody');
-      lines.forEach((ln, idx) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="p-1 border text-left">${idx+1}</td>
-                        <td class="p-1 border text-left">${(ln.description||ln.desc||'').toString().slice(0,200)}</td>
-                        <td class="p-1 border text-right">${ln.amount||ln.lineTotal||''}</td>
-                        <td class="p-1 border text-right">${ln.vat||ln.vatRate||''}</td>`;
-        tbody.appendChild(tr);
-      });
-      tbl.appendChild(tbody);
-      linesContainer.appendChild(tbl);
+      // Χρησιμοποιούμε τα ίδια functions που χρησιμοποιεί το server-rendered modal
+      const categories = window.CUSTOMER_CATEGORIES || [];
+      
+      // Αν υπάρχει το buildTableHTML function (από το server-rendered modal), χρησιμοποίησέ το
+      if (typeof window.buildTableHTML === 'function') {
+        linesContainer.appendChild(window.buildTableHTML(lines, categories));
+      } else if (typeof window.buildSingleLineHTML === 'function' && lines.length === 1) {
+        linesContainer.appendChild(window.buildSingleLineHTML(lines[0], categories));
+      } else {
+        // Fallback: απλό table χωρίς κατηγορίες (μόνο για εμφάνιση)
+        const tbl = document.createElement('table');
+        tbl.className = 'w-full text-sm';
+        tbl.style.borderCollapse = 'collapse';
+        const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
+        const thead = document.createElement('thead');
+        thead.innerHTML = '<tr><th class="p-1 border text-left">#</th><th class="p-1 border text-left">Περιγραφή</th><th class="p-1 border text-right">Ποσό</th><th class="p-1 border text-right">ΦΠΑ</th>' + (isGCategory ? '<th class="p-1 border text-left">MTYPE</th>' : '') + '</tr>';
+        tbl.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        lines.forEach((ln, idx) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td class="p-1 border text-left">${idx+1}</td>
+                          <td class="p-1 border text-left">${(ln.description||ln.desc||'').toString().slice(0,200)}</td>
+                          <td class="p-1 border text-right">${ln.amount||ln.lineTotal||''}</td>
+                          <td class="p-1 border text-right">${ln.vat||ln.vatRate||''}</td>` + (isGCategory ? `<td class="p-1 border text-left">${ln.mtype||''}</td>` : '');
+          tbody.appendChild(tr);
+        });
+        tbl.appendChild(tbody);
+        linesContainer.appendChild(tbl);
+      }
+      
+      // Wire interactions αν υπάρχει το function
+      if (typeof window.wireInteractions === 'function') {
+        window.wireInteractions();
+      }
     }
 
     function populateOnce(){

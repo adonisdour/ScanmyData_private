@@ -6685,6 +6685,25 @@ def search():
             "δαπανες_χωρις_φπα"
         ]
     customer_vat_constraints = _category_vat_constraints(active_cred)
+    
+    # Γ Category: Filter categories to only those with MTYPE codes
+    g_category_data = None
+    if active_cred:
+        from g_category_helpers import is_g_category_active, get_available_categories_for_g, enrich_categories_with_mtype
+        if is_g_category_active(active_cred):
+            # Φορτώνουμε settings για Γ
+            settings = load_settings()
+            log.info(f"[Γ Category UI] Settings loaded: {bool(settings)}, categories before filter: {customer_categories}")
+            if settings:
+                # Φιλτράρουμε μόνο τις categories με MTYPE
+                filtered_categories = get_available_categories_for_g(settings, customer_categories)
+                log.info(f"[Γ Category UI] Categories after filter: {filtered_categories}")
+                customer_categories = filtered_categories
+                # Εμπλουτίζουμε με MTYPE info
+                g_category_data = enrich_categories_with_mtype(customer_categories, settings)
+                log.info(f"[Γ Category UI] G category data: {g_category_data}")
+            else:
+                log.warning("[Γ Category UI] No settings found - categories not filtered")
 
     # --- Handle JSON AJAX request to save repeat mapping ---
     if request.method == "POST" and request.is_json:
@@ -6883,10 +6902,10 @@ def search():
                             )
                             fiscal_mismatch_block = True
                             log.info("search: fiscal year mismatch for MARK %s vat %s invoice_year=%s selected_year=%s", mark, vat, issue_year, sel_year_int)
-                            modal_summary = None
-                            invoice_lines = []
+                            # ΜΗΝ κάνουμε None το modal_summary - αφήνουμε να εμφανιστεί με warning
                             allow_edit_existing = False
-                        else:
+                        # Συνεχίζουμε με invoice processing ακόμα και με mismatch
+                        if True:  # Changed from 'else:' to always process
                             # =======================
                             #   HARD STOP ΓΙΑ ΤΙΜΟΛΟΓΙΑ
                             # =======================
@@ -7093,6 +7112,9 @@ def search():
                                                 continue
                                         if matched:
                                             modal_summary['χαρακτηρισμός'] = matched.get('χαρακτηρισμός') or matched.get('characteristic') or modal_summary.get('χαρακτηρισμός', '') or "αποδειξακια"
+                                            # MTYPE είναι invoice-level - φορτώνουμε από matched root
+                                            if matched.get("mtype"):
+                                                modal_summary["mtype"] = matched.get("mtype")
                                             eps_lines = matched.get("lines", []) or []
                                             eps_by_id = {str(l.get("id", "")): l for l in eps_lines if l.get("id") is not None}
                                             for ml in modal_summary.get("lines", []):
@@ -7261,6 +7283,9 @@ def search():
 
                                         if matched:
                                             modal_summary['χαρακτηρισμός'] = matched.get('χαρακτηρισμός') or matched.get('characteristic') or modal_summary.get('χαρακτηρισμός', '') or ""
+                                            # MTYPE είναι invoice-level - φορτώνουμε από matched root
+                                            if matched.get("mtype"):
+                                                modal_summary["mtype"] = matched.get("mtype")
                                             
                                             # Update epsilon cache with enriched issuer name if applicable
                                             if enriched_flag and issuer_name:
@@ -7396,6 +7421,7 @@ def search():
         repeat_entry_conf=repeat_entry_conf,
         active_year=active_year_val,
         category_vat_constraints=customer_vat_constraints,
+        g_category_data=g_category_data,
     )
 @app.get("/profiles")
 def profiles_page():
@@ -8187,6 +8213,8 @@ def save_summary():
         except Exception: return 0.0
 
     lines = summary.get("lines", []) or []
+    log.info("save_summary: received %d lines from request, first line mtype: %s", 
+             len(lines), lines[0].get("mtype") if lines and isinstance(lines[0], dict) else "N/A")
     if not lines:
         try:
             mark = str(summary.get("mark","")).strip()
@@ -8365,6 +8393,12 @@ def save_summary():
                         "vat_category": ln.get("vatCategory","") or ""
                     }); updated = True
 
+            # Ενημέρωση MTYPE στο top-level του παραστατικού (αν υπάρχει στο summary)
+            new_mtype = summary.get("mtype","") or ""
+            if new_mtype and str(existing.get("mtype","")) != new_mtype:
+                existing["mtype"] = new_mtype
+                updated = True
+            
             if updated:
                 try:
                     if _dt and _tz: 
@@ -8514,6 +8548,7 @@ def save_summary():
             "category": ("αποδειξακια" if is_receipt else (summary.get("category") or "")),
             "χαρακτηρισμός": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
             "characteristic": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
+            "mtype": summary.get("mtype","") or "",  # Είδος Κίνησης για Γ Category (invoice-level)
             "AFM_issuer": summary.get("AFM_issuer","") or summary.get("AFM",""),
             "Name_issuer": summary.get("Name_issuer") or summary.get("Name",""),
             "AFM": summary.get("AFM","") or vat,

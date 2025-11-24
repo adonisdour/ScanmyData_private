@@ -167,11 +167,18 @@ def _get_article_movement_type(settings: Dict[str, Any]) -> str:
     return "12"  # Default: Αγορών-Εξόδων
 
 
-def _get_mtype_for_category(settings: Dict[str, Any], canon_category: str) -> str:
+def _get_mtype_for_category(settings: Dict[str, Any], canon_category: str, line_mtype: str = None) -> str:
     """
     Βρίσκει τον κωδικό κίνησης (MTYPE) για την κατηγορία.
-    Ψάχνει πρώτα στις ρυθμίσεις, μετά στο default mapping.
+    Προτεραιότητα:
+    1. line_mtype (από modal summary)
+    2. Ρυθμίσεις (credentials_settings.json)
+    3. Default mapping
     """
+    # Πρώτα ελέγχουμε αν έχουμε mtype στη γραμμή (από UI)
+    if line_mtype and str(line_mtype).strip():
+        return str(line_mtype).strip()
+    
     setts = _settings_norm(settings)
     
     # Ψάξε στις custom ρυθμίσεις
@@ -468,7 +475,15 @@ def build_preview_rows_for_ui_g(
 
             key = (cat, int(vr))
             if key not in aggregated:
-                aggregated[key] = {"net": 0.0, "vat": 0.0, "category": cat, "vat_rate": int(vr)}
+                # Διαβάζουμε το mtype από τη γραμμή (αν υπάρχει)
+                line_mtype = ln.get("mtype", "")
+                aggregated[key] = {
+                    "net": 0.0, 
+                    "vat": 0.0, 
+                    "category": cat, 
+                    "vat_rate": int(vr),
+                    "mtype": line_mtype  # Κρατάμε το mtype από την πρώτη γραμμή
+                }
             aggregated[key]["net"] += net
             aggregated[key]["vat"] += vat
             sum_net += net
@@ -495,8 +510,9 @@ def build_preview_rows_for_ui_g(
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
-            # ΥΠΟΧΡΕΩΤΙΚΟΣ MTYPE
-            mtype = _get_mtype_for_category(settings_all, canon)
+            # ΥΠΟΧΡΕΩΤΙΚΟΣ MTYPE - προτεραιότητα στο mtype από τη γραμμή
+            line_mtype = agg.get("mtype", "")
+            mtype = _get_mtype_for_category(settings_all, canon, line_mtype)
             if not mtype:
                 issues.append({
                     "code": "missing_mtype",
