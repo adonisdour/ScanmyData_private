@@ -4514,6 +4514,8 @@ def api_repeat_entry_save():
     mapping_in = data.get("mapping") or {}
     # "" => Γενικό
     profile_name = (data.get("profile_name") or "").strip()
+    # MTYPE για Γ Κατηγορία (invoice-level)
+    invoice_mtype = (data.get("invoice_mtype") or "").strip()
 
     # Επιτρέπουμε ΜΟΝΟ ποσοστά ΦΠΑ
     VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
@@ -4539,6 +4541,8 @@ def api_repeat_entry_save():
         "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         # ΠΑΝΤΑ γράφουμε το profile_name — κενό σημαίνει «Γενικό»
         "profile_name": profile_name,
+        # Αποθηκεύουμε το invoice-level MTYPE
+        "invoice_mtype": invoice_mtype,
     })
     client["repeat_entry"] = repeat
     creds[idx] = client
@@ -8153,13 +8157,14 @@ def save_summary():
                         out = c.get("repeat_entry") or {}
                         return {
                             "enabled": bool(out.get("enabled")),
-                            "mapping": out.get("mapping") or {}
+                            "mapping": out.get("mapping") or {},
+                            "invoice_mtype": out.get("invoice_mtype") or ""
                         }
                 except Exception:
                     continue
         except Exception:
             pass
-        return {"enabled": False, "mapping": {}}
+        return {"enabled": False, "mapping": {}, "invoice_mtype": ""}
 
     # ---------------- parse payload ----------------
     try:
@@ -8195,6 +8200,8 @@ def save_summary():
         log.exception("save_summary: cannot parse payload")
         flash("Μη έγκυρα δεδομένα περίληψης", "error")
         return redirect(url_for("search"))
+
+    log.info("save_summary: received summary with keys: %s, mtype: %s", list(summary.keys()), summary.get("mtype", "NO MTYPE"))
 
     # ---------------- active VAT ----------------
     active = get_active_credential_from_session()
@@ -8281,6 +8288,11 @@ def save_summary():
                     key2 = key.replace('%','')
                     if key2 in mapping:
                         ln["category"] = mapping[key2]
+            
+            # Προσθήκη invoice-level MTYPE από repeat_entry (για Γ Κατηγορία)
+            if conf.get("invoice_mtype") and not summary.get("mtype"):
+                summary["mtype"] = conf["invoice_mtype"]
+                log.info("save_summary: Applied invoice_mtype='%s' from repeat_entry", conf["invoice_mtype"])
     else:
         # ΑΠΟΔΕΙΞΕΙΣ: ΠΑΝΤΑ ανά γραμμή "αποδειξακια" (αν λείπει)
         if summary.get("lines"):
@@ -8289,6 +8301,11 @@ def save_summary():
                     continue
                 if not str(ln.get("category","")).strip():
                     ln["category"] = "αποδειξακια"
+        
+        # Προσθήκη invoice-level MTYPE από repeat_entry για αποδείξεις
+        if conf.get("enabled") and conf.get("invoice_mtype") and not summary.get("mtype"):
+            summary["mtype"] = conf["invoice_mtype"]
+            log.info("save_summary (receipt): Applied invoice_mtype='%s' from repeat_entry", conf["invoice_mtype"])
 
     # --- GUARD: μπλοκάρουμε άδεια/άκυρα summaries ---
     try:
@@ -8598,6 +8615,7 @@ def save_receipt():
     vat = receipt.get("issuer_vat")
     year = receipt.get("issue_date")[-4:]
     category = receipt.get("category")
+    mtype = receipt.get("mtype", "")  # Είδος Κίνησης για Γ Κατηγορία
 
     # --- Αποθήκευση Excel ---
     excel_file = f"uploads/{vat}_{year}_invoices.xlsx"
@@ -8618,6 +8636,9 @@ def save_receipt():
         data = []
 
     receipt["category"] = category  # αποθηκεύουμε τον server-side χαρακτηρισμό
+    # Αποθηκεύουμε το mtype στο root level του invoice (αν υπάρχει)
+    if mtype:
+        receipt["mtype"] = mtype
     data.append(receipt)
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -8757,6 +8778,15 @@ def api_confirm_receipt():
     if not vat:
         return jsonify({"ok": False, "error": "No active VAT"}), 400
 
+    # Ανάκτηση MTYPE από repeat_entry (αν είναι Γ Κατηγορία)
+    invoice_mtype = summary.get("mtype", "")
+    if not invoice_mtype and active:
+        try:
+            repeat_entry = active.get("repeat_entry") or {}
+            invoice_mtype = repeat_entry.get("invoice_mtype", "")
+        except Exception:
+            pass
+
     # φόρτωσε epsilon cache χωρίς auto-build
     try:
         epsilon_cache = load_epsilon_cache_for_vat(vat) or []
@@ -8807,6 +8837,9 @@ def api_confirm_receipt():
             "vat_category": ln.get("vat_category", "") or ""
         } for ln in (summary.get("lines") or [])]
     }
+    # Προσθήκη MTYPE στο root level (μόνο για Γ Κατηγορία)
+    if invoice_mtype:
+        epsilon_item["mtype"] = invoice_mtype
 
     # idempotent update
     if existing_idx is not None:

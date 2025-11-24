@@ -176,8 +176,11 @@ def _get_mtype_for_category(settings: Dict[str, Any], canon_category: str, line_
     3. Default mapping
     """
     # Πρώτα ελέγχουμε αν έχουμε mtype στη γραμμή (από UI)
-    if line_mtype and str(line_mtype).strip():
-        return str(line_mtype).strip()
+    # Μετατροπή σε string για ασφάλεια (μπορεί να είναι int στο JSON)
+    if line_mtype is not None:
+        mtype_str = str(line_mtype).strip()
+        if mtype_str:
+            return mtype_str
     
     setts = _settings_norm(settings)
     
@@ -450,6 +453,10 @@ def build_preview_rows_for_ui_g(
         aggregated: Dict[Tuple[str, int], Dict[str, Any]] = {}
         sum_net = 0.0
         sum_vat = 0.0
+        
+        # MTYPE είναι invoice-level (όχι line-level)
+        invoice_mtype = rec.get("mtype", "")
+        logger.debug(f"[Γ Category] MARK={mark}, invoice_mtype from JSON: '{invoice_mtype}'")
 
         for ln in lines:
             cat = ln.get("category", "")
@@ -475,14 +482,11 @@ def build_preview_rows_for_ui_g(
 
             key = (cat, int(vr))
             if key not in aggregated:
-                # Διαβάζουμε το mtype από τη γραμμή (αν υπάρχει)
-                line_mtype = ln.get("mtype", "")
                 aggregated[key] = {
                     "net": 0.0, 
                     "vat": 0.0, 
                     "category": cat, 
                     "vat_rate": int(vr),
-                    "mtype": line_mtype  # Κρατάμε το mtype από την πρώτη γραμμή
                 }
             aggregated[key]["net"] += net
             aggregated[key]["vat"] += vat
@@ -510,9 +514,9 @@ def build_preview_rows_for_ui_g(
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
-            # ΥΠΟΧΡΕΩΤΙΚΟΣ MTYPE - προτεραιότητα στο mtype από τη γραμμή
-            line_mtype = agg.get("mtype", "")
-            mtype = _get_mtype_for_category(settings_all, canon, line_mtype)
+            # ΥΠΟΧΡΕΩΤΙΚΟΣ MTYPE - χρήση invoice-level MTYPE
+            mtype = _get_mtype_for_category(settings_all, canon, invoice_mtype)
+            logger.debug(f"[Γ Category] MARK={mark}, category={canon}, invoice_mtype='{invoice_mtype}', final mtype='{mtype}'")
             if not mtype:
                 issues.append({
                     "code": "missing_mtype",
@@ -801,7 +805,7 @@ def export_g_category(
                 
             flat.append({
                 "ARTID": artid,
-                "MTYPE": article_mtype,  # Κωδικός είδους κίνησης άρθρου (π.χ. 12)
+                "MTYPE": detail["MTYPE"],  # Χρήση του MTYPE από το detail (π.χ. "15")
                 "ISKEPYO": rec["ISKEPYO"],
                 "ISAGRYP": rec["ISAGRYP"],
                 "CUSTID": rec["CUSTID"],
@@ -826,11 +830,13 @@ def export_g_category(
                 "REASON_DETAIL": rec["REASON"],
             })
         
-        # ΠΙΣΤΩΣΗ: Μία γραμμή για τον προμηθευτή (σύνολο)
+        # ΠΙΣΤΩΣΧ: Μία γραμμή για τον προμηθευτή (σύνολο)
         total_amount = rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"]
+        # Χρησιμοποίησε το MTYPE από το πρώτο detail (όλα τα details έχουν το ίδιο MTYPE)
+        first_mtype = details[0]["MTYPE"] if details else article_mtype
         flat.append({
             "ARTID": artid,
-            "MTYPE": article_mtype,  # Ίδιο MTYPE με τις χρεώσεις
+            "MTYPE": first_mtype,  # Χρήση του MTYPE από το invoice
             "ISKEPYO": rec["ISKEPYO"],
             "ISAGRYP": rec["ISAGRYP"],
             "CUSTID": rec["CUSTID"],

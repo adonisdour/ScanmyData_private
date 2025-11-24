@@ -218,6 +218,14 @@
 
       <!-- Εδώ αποδίδονται ΜΟΝΟ τα 5 dropdowns με JS -->
       <div id="repeatMappingList" class="space-y-2"></div>
+      
+      <!-- MTYPE dropdown (για Γ Κατηγορία) - invoice-level -->
+      <div id="repeatMtypeContainer" class="mt-4" style="display:none;">
+        <label class="text-sm font-medium">Είδος Κίνησης (για Γ Κατηγορία)</label>
+        <select id="repeatMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">
+          <option value="">-- επίλεξε είδος κίνησης --</option>
+        </select>
+      </div>
     </div>
 
     <div class="mt-4 flex justify-end gap-2">
@@ -762,6 +770,10 @@ function katToPercent(k){
 
   const profileName = selProfile?.value || "";   // "" = Γενικό
   const vatToUse = window._repeatModalVAT || "{{ vat or '' }}";  // χρησιμοποίησε το ανιχνευθέν VAT
+  
+  // Για Γ Κατηγορία: συμπεριλαμβάνουμε το invoice-level MTYPE
+  const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+  const invoiceMtype = (repeatMtypeSelect && repeatMtypeSelect.value) || "";
 
   try {
     const r = await fetch('/api/repeat_entry/save', {
@@ -772,6 +784,7 @@ function katToPercent(k){
         vat: vatToUse,
         enabled: true,
         mapping: out,                  // 0/6/13/17/24
+        invoice_mtype: invoiceMtype,   // MTYPE για όλο το invoice
         profile_name: profileName      // <-- ΣΗΜΑΝΤΙΚΟ
       })
     });
@@ -808,6 +821,7 @@ function katToPercent(k){
       const repeat = j.repeat_entry || {};
       return {
         defaultMap: (repeat.mapping || {}),
+        invoiceMtype: (repeat.invoice_mtype || ""),
         savedName: (repeat.profile_name || "")
       };
     }
@@ -820,10 +834,11 @@ function katToPercent(k){
     const repeat = j.repeat_entry || {};
     return {
       defaultMap: (repeat.mapping || {}),
+      invoiceMtype: (repeat.invoice_mtype || ""),
       savedName: (repeat.profile_name || "")
     };
   }catch(_){}
-  return { defaultMap:{}, savedName:"" };
+  return { defaultMap:{}, invoiceMtype:"", savedName:"" };
 }
   // Άνοιγμα modal: ΠΑΝΤΑ καθαρό render, χωρίς διπλο-append
   async function openModal(){
@@ -883,6 +898,7 @@ function katToPercent(k){
 
   const defaultMap = Object.keys(state.defaultMap || {}).length ? state.defaultMap : defaultFromGet;
   const savedName  = state.savedName || "";
+  const invoiceMtype = state.invoiceMtype || "";
 
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
@@ -902,6 +918,27 @@ function katToPercent(k){
       o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || p.map || {}));
       sel.appendChild(o);
     });
+    
+    // Populate MTYPE dropdown (μόνο για Γ Κατηγορία)
+    const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
+    const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+    if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0) {
+      // Είναι Γ Κατηγορία - δείξε το MTYPE dropdown
+      if (repeatMtypeContainer) repeatMtypeContainer.style.display = '';
+      if (repeatMtypeSelect) {
+        repeatMtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+        window.G_CATEGORY_DATA.movement_types.forEach(mt => {
+          const opt = document.createElement('option');
+          opt.value = mt.value;
+          opt.textContent = mt.label + ' (' + mt.value + ')';
+          if (mt.value === invoiceMtype) opt.selected = true;
+          repeatMtypeSelect.appendChild(opt);
+        });
+      }
+    } else {
+      // Όχι Γ Κατηγορία - κρύψε το MTYPE dropdown
+      if (repeatMtypeContainer) repeatMtypeContainer.style.display = 'none';
+    }
 
     // 3) αν έχει αποθηκευτεί ενεργό προφίλ, επίλεξέ το και προ-συμπλήρωσε
     if (savedName && Array.from(sel.options).some(o => o.value === savedName)){
@@ -1558,14 +1595,31 @@ if (typeof window !== 'undefined') {
     // Check if Γ Category
     const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
     
-    if (isGCategory) {
+    // Check if repeat is enabled (με fallback αν η συνάρτηση δεν υπάρχει ακόμα)
+    let repeatEnabled = false;
+    try {
+      if (typeof repeatSwitchOn === 'function') {
+        repeatEnabled = repeatSwitchOn();
+      } else {
+        repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
+      }
+    } catch (e) {
+      repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
+    }
+    
+    // Εμφάνιση dropdown αν:
+    // 1. Είναι Γ Κατηγορία ΚΑΙ
+    // 2. (Η επαναληψιμή είναι ΚΛΕΙΣΤΗ ή ΔΕΝ υπάρχει αποθηκευμένο MTYPE)
+    const savedMtype = summary.mtype || '';
+    const shouldShow = isGCategory && (!repeatEnabled || !savedMtype);
+    
+    if (shouldShow) {
       // Show container
       mtypeContainer.style.display = 'block';
       
       // Clear and populate dropdown
       mtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
       const movementTypes = window.G_CATEGORY_DATA.movement_types || [];
-      const savedMtype = summary.mtype || '';
       
       movementTypes.forEach(mt => {
         const option = document.createElement('option');
@@ -1582,7 +1636,7 @@ if (typeof window !== 'undefined') {
         updateSummaryFromDom();
       });
     } else {
-      // Hide container for non-Γ Category
+      // Hide container if not needed
       mtypeContainer.style.display = 'none';
     }
   }
@@ -3690,9 +3744,11 @@ function prefillSummaryModal(){
       });
       
       // Συλλογή invoice-level MTYPE (για Γ Category)
+      const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
       const invoiceMtypeSelect = document.getElementById('invoiceMtypeSelect');
-      if (invoiceMtypeSelect && invoiceMtypeSelect.value) {
-        data.mtype = invoiceMtypeSelect.value;
+      if (isGCategory && invoiceMtypeSelect) {
+        // Μπαίνει πάντα αν είναι Γ Category και υπάρχει το dropdown, ακόμα και αν είναι κενό
+        data.mtype = invoiceMtypeSelect.value || '';
       }
 
       input.value = JSON.stringify(data);
@@ -3778,6 +3834,18 @@ function prefillSummaryModal(){
     saveForm.addEventListener('submit', function(e){
       try {
         updateSummaryFromDom();
+        // Ensure repeat_enabled is posted if repeat is on
+        const repeatSwitch = document.getElementById('repeatEntrySwitch');
+        if (repeatSwitch && repeatSwitch.checked) {
+          let h = saveForm.querySelector('input[name="repeat_enabled"]');
+          if (!h) {
+            h = document.createElement('input');
+            h.type = 'hidden';
+            h.name = 'repeat_enabled';
+            saveForm.appendChild(h);
+          }
+          h.value = '1';
+        }
         // small synchronous update only; let the submit continue
       } catch(err){ console.warn('pre-submit update failed', err); }
     });
@@ -5640,6 +5708,15 @@ document.addEventListener('submit', function(ev){
     if (!form) return;
     once.submitted = true;
     sessionStorage.setItem(key,'1');                 // ώστε στο επόμενο reload να ΜΗΝ ξαναστείλει
+    // Ensure repeat_enabled is posted
+    let h = form.querySelector('input[name="repeat_enabled"]');
+    if (!h) {
+      h = document.createElement('input');
+      h.type = 'hidden';
+      h.name = 'repeat_enabled';
+      form.appendChild(h);
+    }
+    h.value = '1';
     form.submit();
   }
 

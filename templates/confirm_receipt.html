@@ -13,6 +13,19 @@
       <input type="hidden" name="{{ key }}" value="{{ value }}">
     {% endfor %}
     <input type="hidden" name="category" value="{{ category }}">
+    
+    <!-- MTYPE dropdown (μόνο για Γ Κατηγορία) -->
+    {% if g_category_data and g_category_data.movement_types %}
+    <div class="mb-4">
+      <label class="block text-sm font-medium mb-2">Είδος Κίνησης (Γ Κατηγορία)</label>
+      <select name="mtype" class="border rounded px-2 py-1 w-full" required>
+        <option value="">-- επίλεξε είδος κίνησης --</option>
+        {% for mt in g_category_data.movement_types %}
+          <option value="{{ mt.value }}">{{ mt.label }} ({{ mt.value }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded">Αποθήκευση</button>
     <a href="{{ url_for('search') }}" class="px-4 py-2 bg-gray-300 rounded">Ακύρωση</a>
   </form>
