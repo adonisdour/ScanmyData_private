@@ -35,6 +35,7 @@ from epsilon_bridge_multiclient_strict import (
     _safe_int,
     _round2,
     _norm_key,
+    _norm_afm,
     _settings_norm,
     _merge_custom_accounts,
     _canon_category,
@@ -262,6 +263,10 @@ def build_preview_rows_for_ui_g(
             logger.error(f"[Γ Category] Failed to load client_db: {e}")
             issues.append({"code": "client_db_fail", "message": f"Αδυναμία φόρτωσης client_db: {e}"})
 
+    # Tracking για νέους συναλλασσόμενους
+    new_suppliers = {}  # afm -> {"custid": int, "name": str}
+    next_custid = max(client_map["ids"]) + 1 if client_map["ids"] else 1
+
     rows: List[Dict[str, Any]] = []
     
     logger.info(f"[Γ Category] Processing {len(invoices)} invoices...")
@@ -293,12 +298,27 @@ def build_preview_rows_for_ui_g(
             logger.debug(f"[Γ Category] Looking up AFM {afm_issuer} in client_db")
             custid_val = client_map["by_afm"].get(afm_issuer)
             if custid_val is None:
-                logger.warning(f"[Γ Category] AFM {afm_issuer} not found in client_db")
-                issues.append({
-                    "code": "missing_custid",
-                    "message": f"Δεν βρέθηκε CUSTID για AFM={afm_issuer}, MARK={mark}"
-                })
-                continue
+                # Έλεγχος αν έχουμε ήδη δημιουργήσει νέο CUSTID για αυτό το AFM
+                if afm_issuer in new_suppliers:
+                    custid_val = new_suppliers[afm_issuer]["custid"]
+                    logger.debug(f"[Γ Category] Using previously created CUSTID {custid_val} for AFM {afm_issuer}")
+                else:
+                    # Δημιουργία νέου CUSTID
+                    custid_val = next_custid
+                    counterpart_name = str(rec.get("counterpart_name") or rec.get("Name_issuer") or "").strip()
+                    if not counterpart_name:
+                        counterpart_name = f"Συναλλασσόμενος {afm_issuer}"
+                    
+                    new_suppliers[afm_issuer] = {
+                        "custid": custid_val,
+                        "name": counterpart_name
+                    }
+                    next_custid += 1
+                    logger.info(f"[Γ Category] Created new CUSTID {custid_val} for AFM {afm_issuer} ({counterpart_name})")
+                    issues.append({
+                        "code": "auto_created_supplier",
+                        "message": f"Δημιουργήθηκε αυτόματα νέος συναλλασσόμενος: CUSTID={custid_val}, AFM={afm_issuer}, NAME={counterpart_name}"
+                    })
 
         # Reason
         reason = _reason_for_rec_enhanced(rec, is_receipt, client_map.get("names"))
@@ -666,66 +686,98 @@ def export_g_category(
         "INVOICE_DETAIL", "REASON_DETAIL"
     ])
 
-    # Διάβασμα credentials για supplier mode
+    # ---------- Διαβάσε ρυθμίσεις για supplier mode (χωρίς να αλλάξεις τίποτα άλλο) ----------
     try:
         credentials = _safe_json_read(credentials_json, default=[])
     except Exception:
         credentials = []
-    
     cred_list = credentials if isinstance(credentials, list) else [credentials]
     active = next((c for c in cred_list if str(c.get("vat")) == str(vat)), (cred_list[0] if cred_list else {}))
     apod_type = (active or {}).get("apodeixakia_type", "")
     apod_supplier_id = _safe_int((active or {}).get("apodeixakia_supplier", ""))
 
-    # Δημιουργία ΣΥΝΑΛΛΑΣΣΟΜΕΝΩΝ
-    used_ids = sorted(set(df_moves["CUSTID"].dropna().unique()))
-    used_ids_unique = [int(x) for x in used_ids if _safe_int(x) is not None]
+    # ---------- Χτίσε ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥΣ με ΜΟΝΗ προσαρμογή για supplier mode ----------
+    # 1) used CUSTIDs από το df_moves
+    import math as _math
+    used_ids_unique: List[Any] = []
+    if not df_moves.empty and "CUSTID" in df_moves.columns:
+        for x in df_moves["CUSTID"].tolist():
+            if x is None:
+                continue
+            if isinstance(x, float):
+                try:
+                    if _math.isnan(x):
+                        continue
+                except Exception:
+                    pass
+            try:
+                fx = float(x)
+                x = int(fx) if fx.is_integer() else x
+            except Exception:
+                pass
+            if x not in used_ids_unique:
+                used_ids_unique.append(x)
 
-    suppliers_data = []
-    
-    # Load client_db για πληροφορίες
-    client_data_by_id = {}
-    if paths["client_db"] and os.path.exists(paths["client_db"]):
+    # 2) Χτίσε mapping CUSTID -> (AFM, NAME) από τα rows (χωρίς αλλαγές σε λογικές)
+    partners: Dict[Any, Tuple[str, str]] = {}
+    for rec in rows:
+        cid = rec.get("CUSTID")
+        if cid in (None, ""):
+            continue
+        afm = _norm_afm(rec.get("AFM_ISSUER") or rec.get("AFM") or "")
+        nm  = str(rec.get("ISSUER_NAME") or rec.get("Name") or "").strip()
+        if cid not in partners:
+            partners[cid] = (afm, nm)
+
+    # 3) Αν είναι supplier mode και ο supplier id χρησιμοποιήθηκε, ΕΠΙΒΑΛΕ default "000000000 / ΠΡΟΜΗΘΕΥΤΕΣ ΔΑΠΑΝΩΝ"
+    if str(apod_type).lower() == "supplier" and apod_supplier_id not in (None, ""):
+        if apod_supplier_id in used_ids_unique:
+            partners[apod_supplier_id] = ("000000000", "ΠΡΟΜΗΘΕΥΤΕΣ ΔΑΠΑΝΩΝ")
+
+    # 4) Κράτα ΜΟΝΟ όσους χρησιμοποιήθηκαν πράγματι στις κινήσεις (με τη σωστή σειρά)
+    partners_rows: List[Dict[str, Any]] = []
+    for cid in used_ids_unique:
+        afm, nm = partners.get(cid, ("", ""))
+        partners_rows.append({"Α/Α": cid, "ΑΦΜ": afm, "ΕΠΩΝΥΜΙΑ": nm})
+
+    df_partners = pd.DataFrame(partners_rows, columns=["Α/Α","ΑΦΜ","ΕΠΩΝΥΜΙΑ"]).drop_duplicates(subset=["Α/Α"])
+    try:
+        df_partners["_k"] = df_partners["Α/Α"].apply(lambda x: int(x) if str(x).isdigit() else x)
+        df_partners = df_partners.sort_values(by="_k", kind="mergesort").drop(columns=["_k"])
+    except Exception:
+        pass
+
+    # ---------- Γράψε Excel: ΚΙΝΗΣΕΙΣ + ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΙ ----------
+    with pd.ExcelWriter(paths["out"], engine="xlsxwriter", datetime_format="dd/mm/yyyy") as writer:
+        # ΚΙΝΗΣΕΙΣ
+        df_moves.to_excel(writer, index=False, sheet_name="ΚΙΝΗΣΕΙΣ")
+        wb, ws = writer.book, writer.sheets["ΚΙΝΗΣΕΙΣ"]
+        fmt_num  = wb.add_format({"num_format": "0.00"})
+        fmt_int  = wb.add_format({"num_format": "0"})
+        fmt_date = wb.add_format({"num_format": "dd/mm/yyyy"})
+        idx = {n: i for i, n in enumerate(df_moves.columns)}
+        for n in ["ARTID","MTYPE","ISKEPYO","ISAGRYP","ISAGRYP_DETAIL","MSIGN","CUSTID","CRDB"]:
+            if n in idx:
+                ws.set_column(idx[n], idx[n], 10, fmt_int)
+        for n in ["SUMKEPYOYP","SUMKEPYONOTYP","SUMKEPYOFPA","KEPYOPARTY","NETAMT","VATAMT","AMOUNT"]:
+            if n in idx:
+                ws.set_column(idx[n], idx[n], 14, fmt_num)
+        if "MDATE" in idx:
+            ws.set_column(idx["MDATE"], idx["MDATE"], 12, fmt_date)
+        for n, w in [("REASON", 40), ("REASON_DETAIL", 40), ("INVOICE", 18), ("INVOICE_DETAIL", 18), ("LCODE_DETAIL", 16), ("LCODE", 16)]:
+            if n in idx:
+                ws.set_column(idx[n], idx[n], w)
+
+        # ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΙ
+        if df_partners.empty:
+            df_partners = pd.DataFrame(columns=["Α/Α","ΑΦΜ","ΕΠΩΝΥΜΙΑ"])
+        df_partners.to_excel(writer, index=False, sheet_name="ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΙ")
+        ws2 = writer.sheets["ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΙ"]
         try:
-            cm = _load_client_map(paths["client_db"])
-            # Reverse mapping: id -> afm/name
-            afm_by_id = {cid: afm for afm, cid in cm.get("by_afm", {}).items()}
-            names = cm.get("names", {})
-            for cid in used_ids_unique:
-                afm = afm_by_id.get(cid, "")
-                name = names.get(afm, f"Συναλλασσόμενος {cid}")
-                client_data_by_id[cid] = {"afm": afm, "name": name}
+            ws2.set_column(0, 0, 8,  fmt_int)  # Α/Α
+            ws2.set_column(1, 1, 14)           # ΑΦΜ
+            ws2.set_column(2, 2, 40)           # ΕΠΩΝΥΜΙΑ
         except Exception:
             pass
 
-    for cid in used_ids_unique:
-        info = client_data_by_id.get(cid, {})
-        afm = info.get("afm", "")
-        name = info.get("name", f"Συναλλασσόμενος {cid}")
-        
-        suppliers_data.append({
-            "CUSTID": cid,
-            "NAME": name,
-            "VAT": afm,
-            "JOB": "",
-            "DOYCODE": "",
-            "ISKEPYO": 0,
-            "ISAGRYP": 0,
-            "ADDRESS": "",
-            "ZIP": "",
-            "CITY": "",
-            "PHONE1": "",
-        })
-
-    df_suppliers = pd.DataFrame(suppliers_data, columns=[
-        "CUSTID", "NAME", "VAT", "JOB", "DOYCODE", "ISKEPYO", "ISAGRYP",
-        "ADDRESS", "ZIP", "CITY", "PHONE1"
-    ])
-
-    # Εξαγωγή Excel
-    out_path = paths["out"]
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        df_moves.to_excel(writer, sheet_name="Φύλλο1", index=False)
-        df_suppliers.to_excel(writer, sheet_name="Φύλλο2", index=False)
-
-    return True, out_path, nonfatal_issues
+    return True, paths["out"], nonfatal_issues

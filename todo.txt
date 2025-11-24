@@ -2,4 +2,7 @@ REQUESTDOCS ΠΕΡΙΛΑΜΒΑΝΕΙ αναλυση τιμολογιου στο 
 curl -v \
   "https://mydatapi.aade.gr/myDATA/RequestDocs?mark=400011161858608" \
   -H "aade-user-id: tester97" \
-  -H "Ocp-Apim-Subscription-Key: 614aa5de28548ac726679355d84b36d4" εντολη για να δουλεψει σωστα
+  -H "Ocp-Apim-Subscription-Key: " εντολη για να δουλεψει σωστα
+
+
+  ΤΕΣΤ ΓΙΑ 0% ΤΙΜΟΛΟΓΙΟ ΑΓΟΡΩΝ ΓΕΦΥΡΑ ΑΝ ΘΑ ΧΤΥΠΗΣΕΙ ΣΤΟ EPSILON_PREVIEW.
