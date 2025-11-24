@@ -5621,6 +5621,224 @@ def upload_client_db():
         return jsonify(success=False, message='Εσωτερικό σφάλμα server.'), 500
 
 
+@app.route('/upload_chart_of_accounts', methods=['POST'])
+def upload_chart_of_accounts():
+    """
+    Upload λογιστικού σχεδίου για Γ Κατηγορία.
+    Αναμένει αρχείο Excel με στήλες: Κωδικός, Περιγραφή, Ποσοστό ΦΠΑ, Λογαριασμός ΦΠΑ
+    """
+    try:
+        from auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            log.warning("[CoA Upload] No active group selected")
+            return jsonify(ok=False, error='Δεν επιλέχθηκε ενεργή ομάδα.'), 403
+        if not getattr(current_user, 'is_authenticated', False):
+            log.warning("[CoA Upload] User not authenticated")
+            return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
+        log.info("[CoA Upload] User: %s, Group: %s", current_user.username, grp.name)
+    except Exception as e:
+        log.exception("[CoA Upload] Permission check failed")
+        return jsonify(ok=False, error='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
+
+    try:
+        if 'coa_file' not in request.files:
+            log.warning("[CoA Upload] No file in request")
+            return jsonify(ok=False, error='Δεν βρέθηκε το αρχείο.'), 400
+
+        f = request.files['coa_file']
+        vat = request.form.get('vat', '').strip()
+        log.info("[CoA Upload] VAT: %s, File: %s", vat, f.filename if f else 'None')
+        
+        if not f or not getattr(f, 'filename', '').strip():
+            log.warning("[CoA Upload] Empty file or filename")
+            return jsonify(ok=False, error='Δεν επιλέχθηκε αρχείο.'), 400
+
+        filename = secure_filename(f.filename)
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in ['.xls', '.xlsx']:
+            log.warning("[CoA Upload] Invalid extension: %s", ext)
+            return jsonify(ok=False, error='Επιτρέπονται μόνο αρχεία .xls ή .xlsx'), 400
+
+        # --- ΕΛΕΓΧΟΣ ΣΤΗΛΩΝ ΠΡΙΝ ΤΗΝ ΑΠΟΘΗΚΕΥΣΗ ---
+        log.info("[CoA Upload] Reading Excel file...")
+        try:
+            df = pd.read_excel(f.stream, dtype=str)
+            df.fillna('', inplace=True)
+            log.info("[CoA Upload] Excel read successfully: %d rows", len(df))
+        except Exception as e:
+            log.exception("Failed to read chart of accounts file")
+            return jsonify(ok=False, error=f'Σφάλμα ανάγνωσης: {e}'), 500
+
+        # Έλεγχος απαιτούμενων στηλών
+        required_cols = {'Κωδικός', 'Περιγραφή', 'Ποσοστό ΦΠΑ', 'Λογαριασμός ΦΠΑ'}
+        headers_set = {str(h).strip() for h in df.columns}
+        log.info("[CoA Upload] Columns found: %s", sorted(headers_set))
+        missing = required_cols - headers_set
+        if missing:
+            log.warning("[CoA Upload] Missing columns: %s", missing)
+            return jsonify(
+                ok=False, 
+                error=f'Λείπουν υποχρεωτικές στήλες: {", ".join(sorted(missing))}',
+                missing_columns=sorted(list(missing)),
+                detected_columns=sorted(list(headers_set))
+            ), 400
+        
+        account_count = len(df)
+        if account_count == 0:
+            log.warning("[CoA Upload] File has no accounts")
+            return jsonify(ok=False, error='Το αρχείο δεν περιέχει λογαριασμούς.'), 400
+
+        log.info("[CoA Upload] Validation passed: %d accounts", account_count)
+
+        # --- BACKUP SYSTEM (όπως το client_db) ---
+        # ΣΗΜΑΝΤΙΚΟ: Το CoA είναι GROUP-WIDE, όχι per-VAT!
+        target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
+        os.makedirs(target_base, exist_ok=True)
+        log.info("[CoA Upload] Target directory (GROUP-WIDE): %s", target_base)
+        
+        # Ένα αρχείο για όλη την ομάδα
+        dest_name = 'chart_of_accounts.xlsx'
+        dest_path = os.path.join(target_base, dest_name)
+
+        # 1) Διαγραφή παλιών backups
+        for existing in os.listdir(target_base):
+            if existing.startswith('chart_of_accounts') and ('.bak.' in existing or existing.endswith('.bak')):
+                try:
+                    os.remove(os.path.join(target_base, existing))
+                    log.info("Removed old CoA backup: %s", existing)
+                except Exception:
+                    log.exception("Failed to remove old CoA backup %s", existing)
+
+        # 2) Backup του υπάρχοντος αρχείου (αν υπάρχει)
+        if os.path.exists(dest_path):
+            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
+            backup_name = f"{dest_name}.bak.{ts}"
+            backup_path = os.path.join(target_base, backup_name)
+            try:
+                os.rename(dest_path, backup_path)
+                log.info("Backed up previous CoA: %s -> %s", dest_name, backup_name)
+            except Exception:
+                log.exception("Failed to backup previous CoA %s", dest_name)
+
+        # 3) Αποθήκευση νέου αρχείου
+        try:
+            f.stream.seek(0)
+            f.save(dest_path)
+            log.info("Saved new CoA to: %s", dest_path)
+        except Exception as e:
+            log.exception("Failed to save CoA file")
+            return jsonify(ok=False, error=f'Σφάλμα κατά την αποθήκευση: {e}'), 500
+        
+        uploaded_at = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
+        
+        # 4) Αποθήκευση metadata
+        meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
+        meta = {
+            'filename': filename,
+            'uploaded_at': uploaded_at,
+            'account_count': account_count,
+            'scope': 'group-wide',  # Κοινόχρηστο για όλη την ομάδα
+            'columns': sorted(list(headers_set))
+        }
+        try:
+            with open(meta_path, 'w', encoding='utf-8') as mf:
+                json.dump(meta, mf, ensure_ascii=False, indent=2)
+        except Exception:
+            log.exception("Failed to write CoA metadata")
+
+        return jsonify(
+            ok=True,
+            message='Το λογιστικό σχέδιο αποθηκεύτηκε επιτυχώς (κοινόχρηστο για όλη την ομάδα)',
+            filename=filename,
+            uploaded_at=uploaded_at,
+            account_count=account_count,
+            detected_columns=sorted(list(headers_set))
+        ), 200
+
+    except Exception:
+        log.exception("Unhandled exception in upload_chart_of_accounts")
+        return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
+
+
+@app.route('/remove_chart_of_accounts', methods=['POST'])
+def remove_chart_of_accounts():
+    """Αφαίρεση λογιστικού σχεδίου"""
+    try:
+        from auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return jsonify(ok=False, error='Δεν επιλέχθηκε ενεργή ομάδα.'), 403
+        if not getattr(current_user, 'is_authenticated', False):
+            return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
+    except Exception:
+        return jsonify(ok=False, error='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
+
+    try:
+        target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
+        # GROUP-WIDE: Ένα αρχείο για όλη την ομάδα
+        dest_name = 'chart_of_accounts.xlsx'
+        dest_path = os.path.join(target_base, dest_name)
+        meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
+        
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        if os.path.exists(meta_path):
+            os.remove(meta_path)
+        
+        return jsonify(ok=True), 200
+
+    except Exception:
+        log.exception("Unhandled exception in remove_chart_of_accounts")
+        return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
+
+
+@app.route('/get_chart_of_accounts_status', methods=['GET'])
+def get_chart_of_accounts_status():
+    """Επιστρέφει το status του λογιστικού σχεδίου"""
+    try:
+        from auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return jsonify(ok=False, error='Δεν επιλέχθηκε ενεργή ομάδα.'), 403
+        if not getattr(current_user, 'is_authenticated', False):
+            return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
+    except Exception:
+        return jsonify(ok=False, error='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
+
+    try:
+        target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
+        # GROUP-WIDE: Ένα αρχείο για όλη την ομάδα
+        dest_name = 'chart_of_accounts.xlsx'
+        dest_path = os.path.join(target_base, dest_name)
+        meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
+        
+        if not os.path.exists(dest_path):
+            return jsonify(ok=True, exists=False), 200
+        
+        # Load metadata
+        meta = {}
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as mf:
+                    meta = json.load(mf)
+            except:
+                pass
+        
+        return jsonify(
+            ok=True,
+            exists=True,
+            filename=meta.get('filename', dest_name),
+            uploaded_at=meta.get('uploaded_at', ''),
+            account_count=meta.get('account_count', 0)
+        ), 200
+
+    except Exception:
+        log.exception("Unhandled exception in get_chart_of_accounts_status")
+        return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
 
 
 @app.route("/api/profiles", methods=["GET"])

@@ -12,6 +12,7 @@ epsilon_bridge_g_category.py
 4. NETAMT/VATAMT/AMOUNT υποχρεωτικά στα ARTICLE_DETAIL
 5. Prefix account_g_ για λογαριασμούς
 6. LCODE (header) ΠΑΝΤΑ ΚΕΝΟ - χρήση μόνο LCODE_DETAIL
+7. Υποστήριξη Chart of Accounts με αυτόματη προσθήκη λογαριασμών ΦΠΑ
 
 Δομή Εξαγωγής:
 - Κάθε τιμολόγιο → πολλαπλές γραμμές ARTICLE_DETAIL
@@ -23,6 +24,8 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -50,6 +53,89 @@ from epsilon_bridge_multiclient_strict import (
     _read_active_fiscal_year,
     characts_from_lines,
 )
+
+
+# ============================================================================
+# Chart of Accounts (Λογιστικό Σχέδιο) - ΝΕΟΣ ΚΩΔΙΚΑΣ
+# ============================================================================
+
+def _load_chart_of_accounts(base_dir: str = "data") -> Optional[pd.DataFrame]:
+    """
+    Φορτώνει το λογιστικό σχέδιο (group-wide).
+    Επιστρέφει DataFrame με στήλες: Κωδικός, Περιγραφή, Ποσοστό ΦΠΑ, Λογαριασμός ΦΠΑ
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Ένα αρχείο για όλη την ομάδα
+    coa_path = os.path.join(base_dir, 'chart_of_accounts.xlsx')
+    
+    if not os.path.exists(coa_path):
+        logger.debug(f"[Chart of Accounts] No chart of accounts file found in {base_dir}")
+        return None
+    
+    try:
+        df = pd.read_excel(coa_path, dtype=str)
+        df.fillna('', inplace=True)
+        
+        # Έλεγχος στηλών
+        required = {'Κωδικός', 'Περιγραφή', 'Ποσοστό ΦΠΑ', 'Λογαριασμός ΦΠΑ'}
+        if not required.issubset(set(df.columns)):
+            logger.warning(f"[Chart of Accounts] Missing required columns in {coa_path}")
+            return None
+        
+        logger.info(f"[Chart of Accounts] Loaded {len(df)} accounts from {coa_path}")
+        return df
+    
+    except Exception as e:
+        logger.error(f"[Chart of Accounts] Failed to load {coa_path}: {e}")
+        return None
+
+
+def _validate_account_in_coa(account: str, coa_df: Optional[pd.DataFrame]) -> bool:
+    """Ελέγχει αν ο λογαριασμός υπάρχει στο chart of accounts"""
+    if coa_df is None:
+        return True  # Αν δεν υπάρχει CoA, δεν κάνουμε validation
+    
+    account = str(account).strip()
+    if not account:
+        return False
+    
+    return account in coa_df['Κωδικός'].values
+
+
+def _get_vat_account_from_coa(account: str, vat_rate: int, coa_df: Optional[pd.DataFrame]) -> Optional[str]:
+    """
+    Βρίσκει τον λογαριασμό ΦΠΑ για έναν λογαριασμό εξόδων από το CoA.
+    Επιστρέφει None αν δεν υπάρχει ή αν το Ποσοστό ΦΠΑ δεν ταιριάζει.
+    """
+    if coa_df is None:
+        return None
+    
+    account = str(account).strip()
+    if not account:
+        return None
+    
+    # Βρες τη γραμμή με αυτόν τον κωδικό
+    matching = coa_df[coa_df['Κωδικός'] == account]
+    if matching.empty:
+        return None
+    
+    row = matching.iloc[0]
+    vat_account = str(row.get('Λογαριασμός ΦΠΑ', '')).strip()
+    vat_pct_str = str(row.get('Ποσοστό ΦΠΑ', '')).strip()
+    
+    if not vat_account:
+        return None
+    
+    # Έλεγχος ότι το ποσοστό ΦΠΑ ταιριάζει
+    try:
+        vat_pct = int(float(vat_pct_str))
+        if vat_pct != vat_rate:
+            return None
+    except:
+        return None
+    
+    return vat_account
 
 
 # ============================================================================
@@ -204,6 +290,7 @@ def build_preview_rows_for_ui_g(
     - MTYPE υποχρεωτικό
     - Λογαριασμούς account_g_
     - NETAMT/VATAMT στα details
+    - Validation με Chart of Accounts
     """
     paths = resolve_paths_for_vat(vat, invoices_json, client_db, None, base_invoices_dir)
     issues: List[Dict[str, Any]] = []
@@ -212,6 +299,20 @@ def build_preview_rows_for_ui_g(
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"[Γ Category] Paths: invoices={paths.get('invoices')}, client_db={paths.get('client_db')}")
+    
+    # Φόρτωση Chart of Accounts
+    # Το base_invoices_dir είναι π.χ. "data/tony/epsilon"
+    # Θέλουμε το CoA στο "data/tony/" (parent directory) - GROUP-WIDE
+    if base_invoices_dir:
+        coa_base_dir = os.path.dirname(os.path.abspath(base_invoices_dir))
+    else:
+        coa_base_dir = "data"
+    
+    coa_df = _load_chart_of_accounts(coa_base_dir)
+    if coa_df is not None:
+        logger.info(f"[Γ Category] Chart of Accounts loaded with {len(coa_df)} accounts from {coa_base_dir}")
+    else:
+        logger.info(f"[Γ Category] No Chart of Accounts found in {coa_base_dir} - validation disabled")
 
     try:
         invoices = load_epsilon_invoices(paths["invoices"])
@@ -411,32 +512,88 @@ def build_preview_rows_for_ui_g(
                     "message": f"Δεν βρέθηκε λογαριασμός Γ για {canon}, VAT={vr}%. Tried: {dbg.get('tried_keys')}"
                 })
                 continue
+            
+            # Validation με Chart of Accounts
+            if coa_df is not None and not _validate_account_in_coa(account, coa_df):
+                issues.append({
+                    "code": "account_not_in_coa",
+                    "message": f"Ο λογαριασμός {account} δεν υπάρχει στο λογιστικό σχέδιο (κατηγορία: {canon}, ΦΠΑ: {vr}%)"
+                })
+                # Συνέχισε ούτως ή άλλως - θα δουν το warning
 
             # Detail row για export (με MTYPE) - ΧΡΕΩΣΗ
-            detail_rows.append({
-                "MTYPE": mtype,
-                "LCODE": account,
-                "NETAMT": agg["net"],
-                "VATAMT": agg["vat"],
-                "category": canon,
-                "vat_rate": vr,
-                "CRDB": 0,  # Χρέωση
-            })
+            # ΣΗΜΑΝΤΙΚΟ: Αν έχουμε CoA και θα προστεθεί λογαριασμός ΦΠΑ,
+            # τότε η χρέωση εξόδων ΔΕΝ πρέπει να περιλαμβάνει το ΦΠΑ στο VATAMT
+            vat_account = None
+            if coa_df is not None and vr > 0:
+                vat_account = _get_vat_account_from_coa(account, vr, coa_df)
+                if vat_account:
+                    logger.debug(f"[Γ Category] Found VAT account {vat_account} for {account} (ΦΠΑ: {vr}%)")
+            
+            if vat_account:
+                # Αν υπάρχει λογαριασμός ΦΠΑ, χρέωσε μόνο το NET στα έξοδα
+                detail_rows.append({
+                    "MTYPE": mtype,
+                    "LCODE": account,
+                    "NETAMT": agg["net"],
+                    "VATAMT": 0.0,  # Το ΦΠΑ θα πάει σε ξεχωριστή εγγραφή
+                    "category": canon,
+                    "vat_rate": vr,
+                    "CRDB": 0,  # Χρέωση
+                })
+                
+                # Προσθήκη ξεχωριστής εγγραφής για τον λογαριασμό ΦΠΑ
+                detail_rows.append({
+                    "MTYPE": mtype,
+                    "LCODE": vat_account,
+                    "NETAMT": agg["vat"],  # Το ποσό του ΦΠΑ
+                    "VATAMT": 0.0,  # Δεν έχει δικό του ΦΠΑ
+                    "category": f"{canon}_fpa",
+                    "vat_rate": 0,
+                    "CRDB": 0,  # Χρέωση
+                })
+            else:
+                # Αν ΔΕΝ υπάρχει λογαριασμός ΦΠΑ, χρέωσε NET + VAT όπως πριν
+                detail_rows.append({
+                    "MTYPE": mtype,
+                    "LCODE": account,
+                    "NETAMT": agg["net"],
+                    "VATAMT": agg["vat"],
+                    "category": canon,
+                    "vat_rate": vr,
+                    "CRDB": 0,  # Χρέωση
+                })
             
             # Line για preview - ΧΡΕΩΣΗ (Debit)
             lines_out.append({
                 "category": canon,
-                "vat_rate": int(vr) if vr is not None else 0,  # Βεβαιώσου ότι είναι int, όχι None
-                "vat_rate_in": int(vr) if vr is not None else 0,  # Συμβατότητα με template (Β Category)
+                "vat_rate": int(vr) if vr is not None else 0,
+                "vat_rate_in": int(vr) if vr is not None else 0,
                 "lcode": account,
-                "lcode_detail": account,  # Συμβατότητα με template
+                "lcode_detail": account,
                 "net": _round2(agg["net"]),
-                "vat": _round2(agg["vat"]),
-                "gross": _round2(agg["net"] + agg["vat"]),
-                "crdb": "Χ",  # Χρέωση για preview
+                "vat": _round2(agg["vat"]) if not vat_account else 0.0,
+                "gross": _round2(agg["net"] + (agg["vat"] if not vat_account else 0.0)),
+                "crdb": "Χ",
                 "mtype": mtype,
             })
             lcodes_summary.append(account)
+            
+            # Αν προστέθηκε ΦΠΑ λογαριασμός, πρόσθεσε και στο preview
+            if vat_account:
+                lines_out.append({
+                    "category": f"{canon} (ΦΠΑ {vr}%)",
+                    "vat_rate": 0,
+                    "vat_rate_in": 0,
+                    "lcode": vat_account,
+                    "lcode_detail": vat_account,
+                    "net": _round2(agg["vat"]),
+                    "vat": 0.0,
+                    "gross": _round2(agg["vat"]),
+                    "crdb": "Χ",
+                    "mtype": mtype,
+                })
+                lcodes_summary.append(vat_account)
 
         if not detail_rows:
             continue
@@ -574,7 +731,7 @@ def export_g_category(
         fiscal_year=fiscal_year
     )
     
-    nonfatal_codes = {"filtered_out_by_year", "auto_created_supplier"}
+    nonfatal_codes = {"filtered_out_by_year", "auto_created_supplier", "account_not_in_coa"}
     fatals = [i for i in preview["issues"] if str(i.get("code", "")) not in nonfatal_codes]
     
     import logging

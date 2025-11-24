@@ -1075,3 +1075,20 @@ Traceback (most recent call last):
                      ^^^^^^^^^^^^^
 NameError: name 'new_suppliers' is not defined
 
+2025-11-24 16:03:30+0200 WARNING [CoA Upload] Invalid extension: 
+2025-11-24 16:03:45+0200 ERROR Unhandled exception: name 'has_vat_account' is not defined
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/ScanmyData_private/app.py", line 9327, in epsilon_preview
+    rows, issues, _ok = build_preview_func(
+                        ^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/ScanmyData_private/epsilon_bridge_g_category.py", line 601, in build_preview_rows_for_ui_g
+    if has_vat_account:
+       ^^^^^^^^^^^^^^^
+NameError: name 'has_vat_account' is not defined. Did you mean: 'vat_account'?
+
