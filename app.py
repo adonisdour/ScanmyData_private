@@ -3387,6 +3387,45 @@ def json_write(path, obj):
         raise
 
 
+def get_expected_mtype_for_payment(payment_method_type: str) -> dict:
+    """
+    Επιστρέφει τον αναμενόμενο MTYPE code για ένα paymentMethodDetails.type.
+    
+    Mapping (βασισμένο σε οδηγίες χρήστη):
+    - Types 1, 2, 6, 7, 8 → "Αγορών Εξόδων Όψεως" (MTYPE code: "3.4.1")
+    - Types 4, 5 → "Αγορών Εξόδων" (MTYPE code: "3.4")
+    - Type 3 → "Αγορών Εξόδων Ταμειακή" (MTYPE code: "3.4.2")
+    
+    Returns:
+        dict με keys: "code", "label", "matched" (True/False)
+    """
+    pmt = str(payment_method_type).strip()
+    
+    # Mapping table
+    PAYMENT_TO_MTYPE = {
+        "1": {"code": "3.4.1", "label": "Αγορών Εξόδων Όψεως"},
+        "2": {"code": "3.4.1", "label": "Αγορών Εξόδων Όψεως"},
+        "6": {"code": "3.4.1", "label": "Αγορών Εξόδων Όψεως"},
+        "7": {"code": "3.4.1", "label": "Αγορών Εξόδων Όψεως"},
+        "8": {"code": "3.4.1", "label": "Αγορών Εξόδων Όψεως"},
+        "3": {"code": "3.4.2", "label": "Αγορών Εξόδων Ταμειακή"},
+        "4": {"code": "3.4", "label": "Αγορών Εξόδων"},
+        "5": {"code": "3.4", "label": "Αγορών Εξόδων"},
+    }
+    
+    if pmt in PAYMENT_TO_MTYPE:
+        result = PAYMENT_TO_MTYPE[pmt].copy()
+        result["matched"] = True
+        return result
+    else:
+        # Unmapped type
+        return {
+            "code": "",
+            "label": f"Άγνωστος τύπος πληρωμής: {pmt}",
+            "matched": False
+        }
+
+
 def load_credentials():
     # use per-group credentials loader
     try:
@@ -4514,8 +4553,9 @@ def api_repeat_entry_save():
     mapping_in = data.get("mapping") or {}
     # "" => Γενικό
     profile_name = (data.get("profile_name") or "").strip()
-    # MTYPE για Γ Κατηγορία (invoice-level)
+    # MTYPE για Γ Κατηγορία (διαχωρισμός τιμολογίων/αποδείξεων)
     invoice_mtype = (data.get("invoice_mtype") or "").strip()
+    receipt_mtype = (data.get("receipt_mtype") or "").strip()
 
     # Επιτρέπουμε ΜΟΝΟ ποσοστά ΦΠΑ
     VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
@@ -4541,8 +4581,9 @@ def api_repeat_entry_save():
         "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         # ΠΑΝΤΑ γράφουμε το profile_name — κενό σημαίνει «Γενικό»
         "profile_name": profile_name,
-        # Αποθηκεύουμε το invoice-level MTYPE
+        # Αποθηκεύουμε τα MTYPE ξεχωριστά για τιμολόγια και αποδείξεις
         "invoice_mtype": invoice_mtype,
+        "receipt_mtype": receipt_mtype,
     })
     client["repeat_entry"] = repeat
     creds[idx] = client
@@ -4553,6 +4594,146 @@ def api_repeat_entry_save():
     labels = _category_labels_for_client(client)
 
     return jsonify(ok=True, repeat_entry=repeat, expense_tags=expense_tags, category_labels=labels)
+
+
+@app.post("/api/validate_payment_mtype")
+def api_validate_payment_mtype():
+    """
+    Ελέγχει αν το paymentMethodType ταιριάζει με το επιλεγμένο MTYPE.
+    
+    Payload:
+        {
+            "mark": "...",
+            "vat": "...",
+            "selected_mtype": "3.4.1"
+        }
+    
+    Returns:
+        {
+            "ok": true,
+            "warning": "..." (αν υπάρχει ασυμφωνία),
+            "payment_method_type": "3",
+            "expected_mtype": {"code": "3.4.2", "label": "..."},
+            "selected_mtype": "3.4.1"
+        }
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        mark = str(data.get("mark") or "").strip()
+        vat = str(data.get("vat") or "").strip()
+        selected_mtype = str(data.get("selected_mtype") or "").strip()
+        
+        if not mark or not vat:
+            return jsonify({"ok": False, "error": "Missing mark or vat"}), 400
+        
+        # Βρες το invoice από το customer file
+        customer_file = get_customer_docs_file(vat)
+        if not os.path.exists(customer_file):
+            # Δεν υπάρχει αρχείο - δεν μπορούμε να ελέγξουμε
+            return jsonify({"ok": True, "warning": None})
+        
+        invoices = json_read(customer_file) or []
+        invoice = None
+        for inv in invoices:
+            if str(inv.get("mark", "")).strip() == mark:
+                invoice = inv
+                break
+        
+        if not invoice:
+            # Δεν βρέθηκε το invoice - δεν μπορούμε να ελέγξουμε
+            return jsonify({"ok": True, "warning": None})
+        
+        payment_method_type = str(invoice.get("paymentMethodType", "")).strip()
+        if not payment_method_type:
+            # Δεν υπάρχει paymentMethodType - δεν μπορούμε να ελέγξουμε
+            return jsonify({"ok": True, "warning": None})
+        
+        # Ελεγξε αν ταιριάζει με το επιλεγμένο MTYPE
+        expected = get_expected_mtype_for_payment(payment_method_type)
+        
+        if not expected["matched"]:
+            # Άγνωστος τύπος πληρωμής
+            return jsonify({
+                "ok": True,
+                "warning": f"Άγνωστος τύπος πληρωμής: {payment_method_type}. Παρακαλώ επιβεβαίωσε ότι το MTYPE είναι σωστό.",
+                "payment_method_type": payment_method_type,
+                "expected_mtype": expected,
+                "selected_mtype": selected_mtype
+            })
+        
+        if expected["code"] != selected_mtype:
+            # Ασυμφωνία
+            return jsonify({
+                "ok": True,
+                "warning": (
+                    f"Προσοχή: Το παραστατικό έχει τύπο πληρωμής {payment_method_type} "
+                    f"που συνήθως αντιστοιχεί σε MTYPE '{expected['label']}' ({expected['code']}), "
+                    f"αλλά επέλεξες '{selected_mtype}'. Θέλεις να συνεχίσεις;"
+                ),
+                "payment_method_type": payment_method_type,
+                "expected_mtype": expected,
+                "selected_mtype": selected_mtype
+            })
+        
+        # Όλα καλά
+        return jsonify({
+            "ok": True,
+            "warning": None,
+            "payment_method_type": payment_method_type,
+            "expected_mtype": expected,
+            "selected_mtype": selected_mtype
+        })
+        
+    except Exception as e:
+        log.exception("validate_payment_mtype failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/get_vat_name", methods=["POST"])
+def api_get_vat_name():
+    """
+    Λαμβάνει ΑΦΜ και επιστρέφει το όνομα της επιχείρησης από VAT validator (VIES + Business Portal fallback).
+    Χρησιμοποιείται όταν το scraping ή το client_db δεν έχουν το issuer_name.
+    
+    Request JSON: { "vat": "123456789" }
+    Response: { "ok": true, "name": "Company Name", "vat": "123456789" } ή { "ok": false, "error": "..." }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        vat = str(data.get("vat") or "").strip()
+        
+        if not vat:
+            return jsonify({"ok": False, "error": "Missing VAT number"}), 400
+        
+        # Import validator
+        try:
+            from vat_validator import validate_greek_vat
+        except ImportError as e:
+            log.error("vat_validator not available: %s", e)
+            return jsonify({"ok": False, "error": "VAT validator not available"}), 500
+        
+        # Call validator
+        result = validate_greek_vat(vat)
+        
+        if result.get("valid") and result.get("name"):
+            return jsonify({
+                "ok": True,
+                "name": result["name"],
+                "vat": result["vat_number"],
+                "address": result.get("address")
+            })
+        else:
+            error_msg = result.get("error") or "VAT number not found or invalid"
+            log.warning("VAT validation failed for %s: %s", vat, error_msg)
+            return jsonify({
+                "ok": False,
+                "error": error_msg,
+                "vat": vat
+            }), 404
+            
+    except Exception as e:
+        log.exception("api_get_vat_name failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 def _decode_data_url(raw: str) -> Optional[bytes]:
@@ -8257,13 +8438,14 @@ def save_summary():
                         return {
                             "enabled": bool(out.get("enabled")),
                             "mapping": out.get("mapping") or {},
-                            "invoice_mtype": out.get("invoice_mtype") or ""
+                            "invoice_mtype": out.get("invoice_mtype") or "",
+                            "receipt_mtype": out.get("receipt_mtype") or ""
                         }
                 except Exception:
                     continue
         except Exception:
             pass
-        return {"enabled": False, "mapping": {}, "invoice_mtype": ""}
+        return {"enabled": False, "mapping": {}, "invoice_mtype": "", "receipt_mtype": ""}
 
     # ---------------- parse payload ----------------
     try:
@@ -8401,10 +8583,14 @@ def save_summary():
                 if not str(ln.get("category","")).strip():
                     ln["category"] = "αποδειξακια"
         
-        # Προσθήκη invoice-level MTYPE από repeat_entry για αποδείξεις
-        if conf.get("enabled") and conf.get("invoice_mtype") and not summary.get("mtype"):
+        # Προσθήκη MTYPE από repeat_entry για αποδείξεις (χρήση receipt_mtype αντί invoice_mtype)
+        if conf.get("enabled") and conf.get("receipt_mtype") and not summary.get("mtype"):
+            summary["mtype"] = conf["receipt_mtype"]
+            log.info("save_summary (receipt): Applied receipt_mtype='%s' from repeat_entry", conf["receipt_mtype"])
+        elif conf.get("enabled") and conf.get("invoice_mtype") and not summary.get("mtype"):
+            # Fallback σε invoice_mtype αν δεν υπάρχει receipt_mtype (για backward compatibility)
             summary["mtype"] = conf["invoice_mtype"]
-            log.info("save_summary (receipt): Applied invoice_mtype='%s' from repeat_entry", conf["invoice_mtype"])
+            log.info("save_summary (receipt): Applied invoice_mtype='%s' from repeat_entry (fallback)", conf["invoice_mtype"])
 
     # --- GUARD: μπλοκάρουμε άδεια/άκυρα summaries ---
     try:
@@ -9655,9 +9841,14 @@ def export_fastimport_kinitseis():
             if os.path.exists(bkat_path):
                 ect_file = ("b_kat.ect", bkat_path)
         elif is_g_category:
-            gkat_path = os.path.join(BASE_DIR, "Γ.ect")
+            # Προτιμάμε το g_kat.ect αν υπάρχει, αλλιώς το Γ.ect
+            gkat_path = os.path.join(BASE_DIR, "g_kat.ect")
             if os.path.exists(gkat_path):
-                ect_file = ("Γ.ect", gkat_path)
+                ect_file = ("g_kat.ect", gkat_path)
+            else:
+                gkat_path_alt = os.path.join(BASE_DIR, "Γ.ect")
+                if os.path.exists(gkat_path_alt):
+                    ect_file = ("Γ.ect", gkat_path_alt)
         
         if ect_file:
             ect_name, ect_path = ect_file

@@ -68,32 +68,40 @@
     ]
   },
   {
-    "mark": "400011631965629",
-    "issueDate": "10/10/2025",
-    "series": "ΑΛΠ",
-    "aa": "36671",
-    "AA": "36671",
-    "type": "ΑΠΟΔΕΙΞΗ",
+    "mark": "400011627648481",
+    "issueDate": "12/11/2025",
+    "series": "ΤΙΠΕ",
+    "aa": "13241",
+    "AA": "13241",
+    "type": "Τιμολόγιο Πώλησης",
     "vatCategory": "",
-    "totalNetValue": "8,00",
-    "totalVatAmount": "",
-    "totalValue": "8,00",
+    "totalNetValue": "240,32",
+    "totalVatAmount": "57,68",
+    "totalValue": "298,00",
     "classification": "",
-    "category": "αποδειξακια",
-    "χαρακτηρισμός": "αποδειξακια",
-    "characteristic": "αποδειξακια",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
     "mtype": "15",
-    "AFM_issuer": "115333562",
-    "Name_issuer": "ΤΕΡΖΟΠΟΥΛΟΣ ΚΩΝΣΤ",
-    "AFM": "115333562",
+    "AFM_issuer": "997751666",
+    "Name_issuer": "K. & E. ΠΑΥΛΑΤΟΥ O.Ε.",
+    "AFM": "997751666",
     "lines": [
       {
-        "id": "r0",
-        "description": "",
-        "amount": "8,00",
-        "vat": "",
-        "category": "αποδειξακια",
-        "vat_category": ""
+        "id": "400011627648481_inst0",
+        "description": "K. & E. ΠΑΥΛΑΤΟΥ O.Ε.",
+        "amount": "120,16",
+        "vat": "28,84",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011627648481_inst1",
+        "description": "K. & E. ΠΑΥΛΑΤΟΥ O.Ε.",
+        "amount": "120,16",
+        "vat": "28,84",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
       }
     ]
   }

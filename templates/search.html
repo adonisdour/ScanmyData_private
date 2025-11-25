@@ -229,8 +229,16 @@
       
       <!-- MTYPE dropdown (για Γ Κατηγορία) - invoice-level -->
       <div id="repeatMtypeContainer" class="mt-4" style="display:none;">
-        <label class="text-sm font-medium">Είδος Κίνησης (για Γ Κατηγορία)</label>
+        <label class="text-sm font-medium">Είδος Κίνησης για Τιμολόγια (Γ Κατηγορία)</label>
         <select id="repeatMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">
+          <option value="">-- επίλεξε είδος κίνησης --</option>
+        </select>
+      </div>
+      
+      <!-- MTYPE dropdown για Αποδείξεις (για Γ Κατηγορία) -->
+      <div id="repeatReceiptMtypeContainer" class="mt-4" style="display:none;">
+        <label class="text-sm font-medium">Είδος Κίνησης για Αποδείξεις (Γ Κατηγορία)</label>
+        <select id="repeatReceiptMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">
           <option value="">-- επίλεξε είδος κίνησης --</option>
         </select>
       </div>
@@ -808,9 +816,12 @@ function katToPercent(k){
   const profileName = selProfile?.value || "";   // "" = Γενικό
   const vatToUse = window._repeatModalVAT || "{{ vat or '' }}";  // χρησιμοποίησε το ανιχνευθέν VAT
   
-  // Για Γ Κατηγορία: συμπεριλαμβάνουμε το invoice-level MTYPE
+  // Για Γ Κατηγορία: συμπεριλαμβάνουμε το invoice-level MTYPE και receipt MTYPE
   const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
   const invoiceMtype = (repeatMtypeSelect && repeatMtypeSelect.value) || "";
+  
+  const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
+  const receiptMtype = (repeatReceiptMtypeSelect && repeatReceiptMtypeSelect.value) || "";
 
   try {
     const r = await fetch('/api/repeat_entry/save', {
@@ -821,7 +832,8 @@ function katToPercent(k){
         vat: vatToUse,
         enabled: true,
         mapping: out,                  // 0/6/13/17/24
-        invoice_mtype: invoiceMtype,   // MTYPE για όλο το invoice
+        invoice_mtype: invoiceMtype,   // MTYPE για τιμολόγια
+        receipt_mtype: receiptMtype,   // MTYPE για αποδείξεις
         profile_name: profileName      // <-- ΣΗΜΑΝΤΙΚΟ
       })
     });
@@ -859,6 +871,7 @@ function katToPercent(k){
       return {
         defaultMap: (repeat.mapping || {}),
         invoiceMtype: (repeat.invoice_mtype || ""),
+        receiptMtype: (repeat.receipt_mtype || ""),
         savedName: (repeat.profile_name || "")
       };
     }
@@ -872,10 +885,11 @@ function katToPercent(k){
     return {
       defaultMap: (repeat.mapping || {}),
       invoiceMtype: (repeat.invoice_mtype || ""),
+      receiptMtype: (repeat.receipt_mtype || ""),
       savedName: (repeat.profile_name || "")
     };
   }catch(_){}
-  return { defaultMap:{}, invoiceMtype:"", savedName:"" };
+  return { defaultMap:{}, invoiceMtype:"", receiptMtype:"", savedName:"" };
 }
   // Άνοιγμα modal: ΠΑΝΤΑ καθαρό render, χωρίς διπλο-append
   async function openModal(){
@@ -936,6 +950,7 @@ function katToPercent(k){
   const defaultMap = Object.keys(state.defaultMap || {}).length ? state.defaultMap : defaultFromGet;
   const savedName  = state.savedName || "";
   const invoiceMtype = state.invoiceMtype || "";
+  const receiptMtype = state.receiptMtype || "";
 
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
@@ -956,28 +971,48 @@ function katToPercent(k){
       sel.appendChild(o);
     });
     
-    // Populate MTYPE dropdown (μόνο για Γ Κατηγορία)
+    // Populate MTYPE dropdowns (μόνο για Γ Κατηγορία)
     const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
     const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+    const repeatReceiptMtypeContainer = document.getElementById('repeatReceiptMtypeContainer');
+    const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
+    
     if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0) {
-      // Είναι Γ Κατηγορία - δείξε το MTYPE dropdown
+      // Είναι Γ Κατηγορία - δείξε τα MTYPE dropdowns
       if (repeatMtypeContainer) repeatMtypeContainer.style.display = '';
+      if (repeatReceiptMtypeContainer) repeatReceiptMtypeContainer.style.display = '';
+      
+      // Γέμισε το dropdown για τιμολόγια
       if (repeatMtypeSelect) {
         repeatMtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
         window.G_CATEGORY_DATA.movement_types.forEach(mt => {
           const opt = document.createElement('option');
           opt.value = mt.value;
           opt.textContent = mt.label + ' (' + mt.value + ')';
-          // Set selected based on saved invoiceMtype
           if (invoiceMtype && mt.value === invoiceMtype) {
             opt.selected = true;
           }
           repeatMtypeSelect.appendChild(opt);
         });
       }
+      
+      // Γέμισε το dropdown για αποδείξεις
+      if (repeatReceiptMtypeSelect) {
+        repeatReceiptMtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+        window.G_CATEGORY_DATA.movement_types.forEach(mt => {
+          const opt = document.createElement('option');
+          opt.value = mt.value;
+          opt.textContent = mt.label + ' (' + mt.value + ')';
+          if (receiptMtype && mt.value === receiptMtype) {
+            opt.selected = true;
+          }
+          repeatReceiptMtypeSelect.appendChild(opt);
+        });
+      }
     } else {
-      // Όχι Γ Κατηγορία - κρύψε το MTYPE dropdown
+      // Όχι Γ Κατηγορία - κρύψε τα MTYPE dropdowns
       if (repeatMtypeContainer) repeatMtypeContainer.style.display = 'none';
+      if (repeatReceiptMtypeContainer) repeatReceiptMtypeContainer.style.display = 'none';
     }
 
     // 3) αν έχει αποθηκευτεί ενεργό προφίλ, επίλεξέ το και προ-συμπλήρωσε
@@ -1773,10 +1808,10 @@ if (typeof window !== 'undefined') {
     }
     
     // Εμφάνιση dropdown αν:
-    // 1. Είναι Γ Κατηγορία ΚΑΙ
-    // 2. (Η επαναληψιμή είναι ΚΛΕΙΣΤΗ ή ΔΕΝ υπάρχει αποθηκευμένο MTYPE)
+    // 1. Είναι Γ Κατηγορία
+    // Πάντα να φαίνεται το dropdown για επιλογή/επιβεβαίωση MTYPE
     const savedMtype = summary.mtype || '';
-    const shouldShow = isGCategory && (!repeatEnabled || !savedMtype);
+    const shouldShow = isGCategory;
     
     if (shouldShow) {
       // Show container
@@ -1816,6 +1851,9 @@ if (typeof window !== 'undefined') {
     // Check if we're in receipts mode
     const isReceiptsMode = isReceiptsOn();
     
+    // Check if Γ Category
+    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
+    
     // Check if repeat is enabled
     let repeatEnabled = false;
     try {
@@ -1825,25 +1863,25 @@ if (typeof window !== 'undefined') {
     }
     
     // Get saved MTYPE from localStorage or summary
-    const savedMtype = summary.mtype || summary.invoice_mtype || (typeof window._getReceiptMtypeForConfirm === 'function' ? window._getReceiptMtypeForConfirm() : '');
+    const savedMtype = summary.mtype || summary.receipt_mtype || '';
     
     // Show dropdown if:
     // 1. We're in receipts mode AND
-    // 2. (Repeat is OFF OR no saved MTYPE) AND
-    // 3. G_CATEGORY_DATA exists
-    const shouldShow = isReceiptsMode && (!repeatEnabled || !savedMtype) && window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options;
+    // 2. Is Γ Category
+    // Πάντα να φαίνεται το dropdown για επιλογή MTYPE
+    const shouldShow = isReceiptsMode && isGCategory;
     
     if (shouldShow) {
       mtypeContainer.style.display = 'block';
       
       // Clear and populate dropdown
       mtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
-      const mtypeOptions = window.G_CATEGORY_DATA.mtype_options || [];
+      const movementTypes = window.G_CATEGORY_DATA.movement_types || [];
       
-      mtypeOptions.forEach(mt => {
+      movementTypes.forEach(mt => {
         const option = document.createElement('option');
         option.value = mt.value;
-        option.textContent = `${mt.value} - ${mt.label}`;
+        option.textContent = mt.label + ' (' + mt.value + ')';
         if (mt.value === savedMtype) {
           option.selected = true;
         }
@@ -4764,6 +4802,20 @@ evt.preventDefault();
       showFlash('Εισάγετε URL για αποδείξεις.', 'error');
       return;
     }
+    
+    // Έλεγχος: Αν είναι 15ψήφιο MARK αντί για URL, απόρριψη
+    if (/^\d{15}$/.test(url)) {
+      showFlash('Για αποδείξεις, εισάγετε μόνο URL (όχι 15ψήφιο MARK). Το MARK χρησιμοποιείται μόνο για τιμολόγια.', 'error', 7000);
+      if (form) form.dataset.receiptsSubmitting = ''; // reset flag
+      return;
+    }
+    
+    // Έλεγχος: Αν δεν μοιάζει με URL, απόρριψη
+    if (!/^https?:\/\//i.test(url) && !/^www\./i.test(url)) {
+      showFlash('Παρακαλώ εισάγετε έγκυρο URL αποδείξεων (π.χ. https://...)','error', 6000);
+      if (form) form.dataset.receiptsSubmitting = ''; // reset flag
+      return;
+    }
 
     try {
       const res = await fetch('/api/scrape_receipt', {
@@ -4835,6 +4887,31 @@ try {
   category: 'αποδειξακια',
   is_receipt: true,
   number: (j.progressive_aa || '')};
+
+      // Έλεγχος: Αν δεν υπάρχει issuer_name, κάλεσε VAT validator
+      if (!summaryObj.Name && summaryObj.AFM_issuer) {
+        try {
+          console.log('Missing issuer_name, calling VAT validator for:', summaryObj.AFM_issuer);
+          const vatResp = await fetch('/api/get_vat_name', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({ vat: summaryObj.AFM_issuer })
+          });
+          
+          if (vatResp.ok) {
+            const vatData = await vatResp.json();
+            if (vatData.ok && vatData.name) {
+              summaryObj.Name = vatData.name;
+              console.log('VAT validator returned name:', vatData.name);
+              showFlash(`Βρέθηκε επωνυμία από VAT validator: ${vatData.name}`, 'info', 4000);
+            }
+          }
+        } catch (vatErr) {
+          console.warn('VAT validator failed:', vatErr);
+          // Συνέχισε χωρίς όνομα - ο χρήστης μπορεί να το προσθέσει χειροκίνητα
+        }
+      }
 
       if (j.raw && Array.isArray(j.raw.lines) && j.raw.lines.length) {
         j.raw.lines.forEach((l, idx) => {
@@ -4945,7 +5022,62 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
 
 document.getElementById('saveSummaryForm')?.addEventListener('submit', async function(e){
   const scrapeUrl = document.getElementById('scrapeUrlField')?.value || '';
-  if(!scrapeUrl) return; // allow normal server flow for invoice flow
+  if(!scrapeUrl) {
+    // Invoice flow - προσθήκη payment validation (για repeat και non-repeat)
+    e.preventDefault();
+    
+    let summary = {};
+    try {
+      summary = JSON.parse(document.getElementById('summaryJsonInput').value || '{}');
+    } catch(err){
+      console.warn('Failed parsing summaryJsonInput for validation', err);
+      // Άφησε το να προχωρήσει στο server
+      e.target.submit();
+      return;
+    }
+    
+    // Έλεγχος για Γ Κατηγορία και MTYPE
+    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.movement_types && window.G_CATEGORY_DATA.movement_types.length > 0;
+    const isReceipt = summary.is_receipt === true || /αποδει/i.test(`${summary.type_name || ''} ${summary.category || summary.characteristic || ''}`);
+    
+    // Έλεγχος αν έχει επαναληψιμή εισαγωγή ενεργοποιημένη
+    const repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
+    
+    // Αν είναι τιμολόγιο με MTYPE (repeat ή όχι), κάνε validation
+    if (isGCategory && !isReceipt && summary.mtype && summary.mark && summary.AFM_issuer) {
+      try {
+        const validationResp = await fetch('/api/validate_payment_mtype', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            mark: summary.mark,
+            vat: summary.AFM_issuer || summary.AFM,
+            selected_mtype: summary.mtype
+          })
+        });
+        
+        if (validationResp.ok) {
+          const validationData = await validationResp.json();
+          if (validationData.warning) {
+            // Εμφάνιση warning modal
+            const userConfirmed = confirm(validationData.warning);
+            if (!userConfirmed) {
+              return; // Ματαίωση αποθήκευσης
+            }
+          }
+        }
+      } catch (validationErr) {
+        console.warn('Payment validation failed:', validationErr);
+      }
+    }
+    
+    // Προχώρα στην κανονική server αποθήκευση
+    e.target.submit();
+    return;
+  }
+  
+  // Receipt flow
   e.preventDefault();
 
   // parse summary from hidden input
@@ -6897,9 +7029,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveForm      = document.getElementById('saveSummaryForm');
     const auto = !!(useReceipts && useReceipts.checked) && !!(repeatSwitch && repeatSwitch.checked);
     if (auto && summaryInput && saveForm) {
+      // Guard: Μην κάνεις auto-submit αν ήδη έγινε
+      if (saveForm.dataset._receiptAutoHandled === '1') {
+        console.log('Auto-submit already handled, skipping.');
+        return;
+      }
+      saveForm.dataset._receiptAutoHandled = '1';
+      
       const chosen = pickReceiptSummary();
       if (!chosen) {
         console.warn('Auto-submit suppressed: no detailed receipt summary found.');
+        saveForm.dataset._receiptAutoHandled = ''; // reset
         return;
       }
       // Ensure per-line category and flags
@@ -6920,6 +7060,23 @@ document.addEventListener('DOMContentLoaded', () => {
         chosen.is_receipt = true;
         chosen.category = chosen.category || 'αποδειξακια';
         chosen.characteristic = chosen.characteristic || 'αποδειξακια';
+        
+        // Προσθήκη MTYPE για Γ Κατηγορία (από receipt_mtype αν υπάρχει)
+        if (window.G_CATEGORY_DATA && !chosen.mtype) {
+          try {
+            const vat = chosen.AFM_issuer || chosen.AFM || '';
+            if (vat) {
+              fetch('/api/repeat_entry/status2?vat=' + encodeURIComponent(vat), {credentials: 'same-origin'})
+                .then(r => r.json())
+                .then(j => {
+                  if (j && j.repeat_entry && j.repeat_entry.receipt_mtype) {
+                    chosen.mtype = j.repeat_entry.receipt_mtype;
+                  }
+                })
+                .catch(() => {});
+            }
+          } catch(_) {}
+        }
       }catch(_){}
       summaryInput.value = JSON.stringify(chosen);
       setTimeout(function(){

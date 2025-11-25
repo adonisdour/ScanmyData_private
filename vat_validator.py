@@ -168,9 +168,13 @@ class VATValidator:
         return clean
     
     def _clean_text(self, text: Optional[str]) -> Optional[str]:
-        """Clean text from VIES response (remove extra whitespace, etc.)"""
+        """Clean text from VIES response (remove extra whitespace, keep only text before ||)"""
         if not text:
             return None
+        
+        # Keep only text before || separator
+        if '||' in text:
+            text = text.split('||')[0]
         
         # Remove extra whitespace and newlines
         cleaned = ' '.join(text.split())

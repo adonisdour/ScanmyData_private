@@ -416,7 +416,11 @@ async function performBridgeDownload(url, options){
       ? 'Η γέφυρα δημιουργήθηκε και λήφθηκε (με νέους συναλλασσόμενους).'
       : 'Η γέφυρα λήφθηκε με επιτυχία.';
     if (filename.toLowerCase().endsWith('.zip')){
-      showFlash(baseMsg + ' Συμπεριλαμβάνεται το αρχείο b_kat.ect.', 'success', 6000);
+      // Detect category from filename or global data
+      const isGCategory = window.G_CATEGORY_DATA || filename.toLowerCase().includes('g_kat') || filename.toLowerCase().includes('γ');
+      const ectFile = isGCategory ? 'g_kat.ect' : 'b_kat.ect';
+      const categoryLabel = isGCategory ? 'Γ κατηγορίας' : 'Β κατηγορίας';
+      showFlash(baseMsg + ` (${categoryLabel}). Συμπεριλαμβάνεται το αρχείο ${ectFile}.`, 'success', 6000);
     } else {
       showFlash(baseMsg, 'success', 5000);
     }

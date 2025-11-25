@@ -889,10 +889,9 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                     from datetime import timezone, timedelta
                     eet = timezone(timedelta(hours=2))  # EET is UTC+2, EEST is UTC+3
                     dt = dt.astimezone(eet)
-                    # Format without %-I (not supported on Windows)
-                    time_str = dt.strftime('%d/%m/%Y, %I:%M:%S %p').replace('AM','π.μ.').replace('PM','μ.μ.')
-                    # Remove leading zero from hour if present
-                    entry['timestamp_fmt'] = time_str.replace(' 0', ' ')
+                    # Format in 24-hour format for proper sorting
+                    time_str = dt.strftime('%d/%m/%Y, %H:%M:%S')
+                    entry['timestamp_fmt'] = time_str
                 elif ts and 'Invalid' not in ts:
                     entry['timestamp_fmt'] = ts
                 else:
@@ -1131,7 +1130,7 @@ def admin_get_system_stats() -> Dict[str, Any]:
                     # Try formatted datetime with timezone
                     if not dt:
                         try:
-                            # Handle Greek locale AM/PM
+                            # Handle Greek locale AM/PM (legacy support)
                             ts_normalized = ts.replace('π.μ.', 'AM').replace('μ.μ.', 'PM')
                             dt = datetime.strptime(ts_normalized, '%d/%m/%Y, %I:%M:%S %p')
                         except Exception:

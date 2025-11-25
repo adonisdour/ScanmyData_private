@@ -197,8 +197,40 @@ def api_get_activity():
                 group_logs = firebase_config.firebase_get_group_activity_logs(group_name, limit=20)
                 logs.extend(group_logs)
             
-            # Sort by timestamp, most recent first
-            logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            # Sort by timestamp, most recent first (robust datetime parsing)
+            from datetime import datetime
+            def _parse_ts(ts: str):
+                if not ts or ts == '-':
+                    return datetime.min
+                # Try ISO8601 variants
+                for variant in (
+                    lambda s: s.replace('Z','+00:00'),  # handle trailing Z
+                    lambda s: s,
+                ):
+                    try:
+                        return datetime.fromisoformat(variant(ts))
+                    except Exception:
+                        pass
+                # Try numeric epoch
+                try:
+                    return datetime.fromtimestamp(float(ts))
+                except Exception:
+                    pass
+                # Common fallback formats (including 24-hour and AM/PM)
+                for fmt in (
+                    "%Y-%m-%d %H:%M:%S%z",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%d/%m/%Y, %H:%M:%S",  # 24-hour format
+                    "%d/%m/%Y, %I:%M:%S %p",  # 12-hour with AM/PM
+                    "%Y-%m-%d",
+                ):
+                    try:
+                        return datetime.strptime(ts, fmt)
+                    except Exception:
+                        continue
+                return datetime.min
+            
+            logs.sort(key=lambda x: _parse_ts(x.get('timestamp')), reverse=True)
             logs = logs[:limit]
         
         return jsonify({
@@ -916,8 +948,40 @@ def api_get_user_actions(user_id):
             group_logs = firebase_config.firebase_get_group_activity_logs(group.name, limit=limit)
             all_logs.extend(group_logs)
         
-        # Sort by timestamp, most recent first
-        all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        # Sort by timestamp, most recent first (robust datetime parsing)
+        from datetime import datetime
+        def _parse_ts(ts: str):
+            if not ts or ts == '-':
+                return datetime.min
+            # Try ISO8601 variants
+            for variant in (
+                lambda s: s.replace('Z','+00:00'),  # handle trailing Z
+                lambda s: s,
+            ):
+                try:
+                    return datetime.fromisoformat(variant(ts))
+                except Exception:
+                    pass
+            # Try numeric epoch
+            try:
+                return datetime.fromtimestamp(float(ts))
+            except Exception:
+                pass
+            # Common fallback formats (including 24-hour and AM/PM)
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S%z",
+                "%Y-%m-%d %H:%M:%S",
+                "%d/%m/%Y, %H:%M:%S",  # 24-hour format
+                "%d/%m/%Y, %I:%M:%S %p",  # 12-hour with AM/PM
+                "%Y-%m-%d",
+            ):
+                try:
+                    return datetime.strptime(ts, fmt)
+                except Exception:
+                    continue
+            return datetime.min
+        
+        all_logs.sort(key=lambda x: _parse_ts(x.get('timestamp')), reverse=True)
         all_logs = all_logs[:limit]
         
         return jsonify({
@@ -1050,6 +1114,44 @@ def api_activity_logs():
                     filtered_logs.append(log)
             enhanced_logs = filtered_logs
         
+        # Robust sort by timestamp descending (latest first)
+        from datetime import datetime
+        def _parse_ts(ts: str):
+            if not ts or ts == '-':
+                return datetime.min
+            # Try ISO8601 variants
+            for variant in (
+                lambda s: s.replace('Z','+00:00'),  # handle trailing Z
+                lambda s: s,
+            ):
+                try:
+                    return datetime.fromisoformat(variant(ts))
+                except Exception:
+                    pass
+            # Try numeric epoch
+            try:
+                return datetime.fromtimestamp(float(ts))
+            except Exception:
+                pass
+            # Common fallback formats (now including 24-hour format)
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S%z",
+                "%Y-%m-%d %H:%M:%S",
+                "%d/%m/%Y, %H:%M:%S",  # 24-hour format
+                "%d/%m/%Y, %I:%M:%S %p",  # 12-hour with AM/PM
+                "%Y-%m-%d",
+            ):
+                try:
+                    return datetime.strptime(ts, fmt)
+                except Exception:
+                    continue
+            return datetime.min
+
+        enhanced_logs.sort(key=lambda x: _parse_ts(x.get('timestamp') or x.get('timestamp_fmt') or ''), reverse=True)
+
+        # Re-limit after sorting to respect requested limit
+        enhanced_logs = enhanced_logs[:limit]
+
         return jsonify({'success': True, 'logs': enhanced_logs, 'count': len(enhanced_logs)})
     except Exception as e:
         logger.error(f"Error getting activity logs: {e}")

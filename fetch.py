@@ -123,6 +123,19 @@ def request_docs(
 
             vatissuer, Name_issuer = extract_issuer_info(invoice, ns)
 
+            # Extract paymentMethodDetails type (for Γ category MTYPE validation)
+            payment_method_type = ""
+            payment_methods = invoice.findall(".//ns:paymentMethods/ns:paymentMethodDetails", ns)
+            if not payment_methods:
+                payment_methods = invoice.findall(".//paymentMethods/paymentMethodDetails")
+            if payment_methods:
+                # Παίρνουμε το type από το πρώτο paymentMethodDetails
+                first_payment = payment_methods[0]
+                payment_method_type = _safe_strip(
+                    first_payment.findtext("ns:type", default="", namespaces=ns) or
+                    first_payment.findtext("type", default="") or ""
+                )
+
             vat_groups = defaultdict(lambda: {"netValue": 0.0, "vatAmount": 0.0})
             details_nodes = invoice.findall(".//ns:invoiceDetails", ns) or invoice.findall(".//ns:invoiceDetail", ns) or invoice.findall(".//invoiceDetails") or invoice.findall(".//invoiceDetail")
             for detail in details_nodes:
@@ -155,7 +168,8 @@ def request_docs(
                     "totalValue": total_value,
                     "classification": "αχαρακτηριστο",
                     "AFM_issuer": vatissuer,
-                    "Name_issuer": Name_issuer
+                    "Name_issuer": Name_issuer,
+                    "paymentMethodType": payment_method_type
                 }
                 all_rows.append(row)
 
