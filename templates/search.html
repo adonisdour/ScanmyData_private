@@ -226,19 +226,11 @@
 
       <!-- Εδώ αποδίδονται ΜΟΝΟ τα 5 dropdowns με JS -->
       <div id="repeatMappingList" class="space-y-2"></div>
-      
-      <!-- MTYPE dropdown (για Γ Κατηγορία) - invoice-level -->
+
+      <!-- MTYPE dropdown (για Γ Κατηγορία) - invoice-level REQUIRED -->
       <div id="repeatMtypeContainer" class="mt-4" style="display:none;">
-        <label class="text-sm font-medium">Είδος Κίνησης για Τιμολόγια (Γ Κατηγορία)</label>
-        <select id="repeatMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">
-          <option value="">-- επίλεξε είδος κίνησης --</option>
-        </select>
-      </div>
-      
-      <!-- MTYPE dropdown για Αποδείξεις (για Γ Κατηγορία) -->
-      <div id="repeatReceiptMtypeContainer" class="mt-4" style="display:none;">
-        <label class="text-sm font-medium">Είδος Κίνησης για Αποδείξεις (Γ Κατηγορία)</label>
-        <select id="repeatReceiptMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">
+        <label class="text-sm font-medium">Είδος Κίνησης για Τιμολόγια (Γ Κατηγορία) <span class="text-red-600">*</span></label>
+        <select id="repeatMtypeSelect" class="border rounded px-2 py-1 w-full mt-1" required>
           <option value="">-- επίλεξε είδος κίνησης --</option>
         </select>
       </div>
@@ -815,13 +807,31 @@ function katToPercent(k){
 
   const profileName = selProfile?.value || "";   // "" = Γενικό
   const vatToUse = window._repeatModalVAT || "{{ vat or '' }}";  // χρησιμοποίησε το ανιχνευθέν VAT
-  
-  // Για Γ Κατηγορία: συμπεριλαμβάνουμε το invoice-level MTYPE και receipt MTYPE
+
+  // Για Γ Κατηγορία: έλεγχος ΑΠΑΡΑΙΤΗΤΟΥ invoice MTYPE
   const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
   const invoiceMtype = (repeatMtypeSelect && repeatMtypeSelect.value) || "";
-  
-  const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
-  const receiptMtype = (repeatReceiptMtypeSelect && repeatReceiptMtypeSelect.value) || "";
+
+  // Αν το container είναι ορατό, το MTYPE είναι ΑΠΑΡΑΙΤΗΤΟ
+  const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
+  if (repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none' && !invoiceMtype) {
+    setHint('Επίλεξε Είδος Κίνησης για Τιμολόγια.');
+    return;
+  }
+
+  // Διατήρηση υπάρχοντος receipt_mtype
+  let existingReceiptMtype = '';
+  try {
+    const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vatToUse), {
+      credentials: 'same-origin'
+    });
+    const getData = await getResp.json();
+    if (getData.ok && getData.repeat_entry && getData.repeat_entry.receipt_mtype) {
+      existingReceiptMtype = getData.repeat_entry.receipt_mtype;
+    }
+  } catch(e) {
+    console.warn('Failed to fetch existing receipt_mtype', e);
+  }
 
   try {
     const r = await fetch('/api/repeat_entry/save', {
@@ -832,8 +842,8 @@ function katToPercent(k){
         vat: vatToUse,
         enabled: true,
         mapping: out,                  // 0/6/13/17/24
-        invoice_mtype: invoiceMtype,   // MTYPE για τιμολόγια
-        receipt_mtype: receiptMtype,   // MTYPE για αποδείξεις
+        invoice_mtype: invoiceMtype,   // MTYPE για τιμολόγια (ΑΠΑΡΑΙΤΗΤΟ)
+        receipt_mtype: existingReceiptMtype,   // Διατήρηση υπάρχοντος receipt MTYPE
         profile_name: profileName      // <-- ΣΗΜΑΝΤΙΚΟ
       })
     });
@@ -1304,39 +1314,68 @@ try {
     const isReceipts = isReceiptsOn();
     const isRepeat = isRepeatEntryEnabled();
     
-    // Load current MTYPE from backend
-    const backendMtype = await loadReceiptMtypeFromBackend();
-    const currentMtype = backendMtype || loadReceiptMtype();
-    
-    if(isReceipts && isRepeat && !currentMtype && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
-      console.log('Auto-opening receipt MTYPE modal (receipts + repeat enabled, no MTYPE set)');
+    // Άνοιγμα modal ΠΑΝΤΑ όταν receipts + repeat ενεργοποιημένα (ανεξάρτητα από αποθηκευμένη τιμή)
+    if(isReceipts && isRepeat && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
+      console.log('Auto-opening receipt MTYPE modal (receipts + repeat enabled)');
       openReceiptMtypeModal();
     }
   }
 
+  // Track initial state to avoid opening on page load
+  let initialRepeatState = null;
+  let initialReceiptsState = null;
+  let pageJustLoaded = true;
+  
+  // Disable auto-opening for the first 2 seconds after page load
+  setTimeout(() => { pageJustLoaded = false; }, 2000);
+  
   // Listen to repeat toggle changes
   const repeatSwitch = document.getElementById('repeatEntrySwitch');
   if(repeatSwitch){
+    // Capture initial state
+    initialRepeatState = repeatSwitch.checked;
+    
     repeatSwitch.addEventListener('change', function(){
-      if(this.checked){
+      // Ignore events during initial page load period
+      if(pageJustLoaded) {
+        initialRepeatState = this.checked;
+        return;
+      }
+      
+      // Only open modal if switching FROM false TO true (user action, not page load)
+      if(this.checked && initialRepeatState === false){
         // Delay to allow other handlers to complete
         setTimeout(checkAndOpenReceiptMtypeModal, 300);
       }
+      // Update state
+      initialRepeatState = this.checked;
     });
   }
 
   // Listen to receipts toggle changes
   const receiptsSwitch = document.getElementById('useReceiptsSwitch');
   if(receiptsSwitch){
+    // Capture initial state
+    initialReceiptsState = receiptsSwitch.checked;
+    
     receiptsSwitch.addEventListener('change', function(){
-      if(this.checked){
+      // Ignore events during initial page load period
+      if(pageJustLoaded) {
+        initialReceiptsState = this.checked;
+        return;
+      }
+      
+      // Only open modal if switching FROM false TO true (user action, not page load)
+      if(this.checked && initialReceiptsState === false){
         setTimeout(checkAndOpenReceiptMtypeModal, 300);
       }
+      // Update state
+      initialReceiptsState = this.checked;
     });
   }
 
-  // Check on page load
-  setTimeout(checkAndOpenReceiptMtypeModal, 500);
+  // ΔΕΝ ανοίγουμε το modal on page load - μόνο όταν ο χρήστης ενεργοποιεί τα switches
+  // setTimeout(checkAndOpenReceiptMtypeModal, 500);
 
   // Expose for manual access
   window.openReceiptMtypeModal = openReceiptMtypeModal;
@@ -3933,11 +3972,39 @@ async function apiGetRepeatEntry(vat){
 async function apiSaveRepeatEntry(enabled, mapping, vat){
   try {
     const vatToUse = vat || VAT || (window._repeatModalVAT || "");  // χρησιμοποίησε το ανιχνευθέν VAT
+
+    // Πάρε τις ήδη αποθηκευμένες τιμές ώστε να ΜΗΝ σβήσουν όταν κάνουμε disable
+    let existingInvoiceMtype = '';
+    let existingReceiptMtype = '';
+    let existingProfileName = '';
+    try {
+      const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vatToUse), { credentials: 'same-origin' });
+      const getData = await getResp.json();
+      if (getData && getData.ok && getData.repeat_entry) {
+        existingInvoiceMtype = getData.repeat_entry.invoice_mtype || '';
+        existingReceiptMtype = getData.repeat_entry.receipt_mtype || '';
+        existingProfileName = getData.repeat_entry.profile_name || '';
+        // Αν δεν μας δίνεται mapping, κράτα το υπάρχον
+        if (!mapping || !Object.keys(mapping).length) {
+          mapping = getData.repeat_entry.mapping || {};
+        }
+      }
+    } catch(fetchErr) {
+      console.warn('apiSaveRepeatEntry: failed to get existing repeat_entry', fetchErr);
+    }
+
     const res = await fetch('/api/repeat_entry/save', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       credentials: 'same-origin',
-      body: JSON.stringify({ enabled: !!enabled, mapping: mapping || {}, vat: vatToUse })
+      body: JSON.stringify({
+        enabled: !!enabled,
+        mapping: mapping || {},
+        vat: vatToUse,
+        invoice_mtype: existingInvoiceMtype,
+        receipt_mtype: existingReceiptMtype,
+        profile_name: existingProfileName
+      })
     });
     if(!res.ok) {
       const txt = await res.text().catch(()=>null);

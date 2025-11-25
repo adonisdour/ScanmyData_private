@@ -1035,5 +1035,39 @@
     "created_at": "2025-11-25T17:36:24",
     "series": "ΑΛΠ",
     "mtype": "16"
+  },
+  {
+    "mark": "400011758960647",
+    "AA": "61010",
+    "AFM_issuer": "801466788",
+    "Name": "ROX COFFEE COMPANY ΕΤΕΡΟΡΡΥΘΜΗ ΕΤΑΙΡΕΙΑ",
+    "issueDate": "15/09/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "14,9",
+    "totalNetValue": "14,9",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,9",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "61010",
+    "characteristic": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "MARK": "400011758960647",
+    "aa": "61010",
+    "progressive_aa": "61010",
+    "AFM": "801466788",
+    "created_at": "2025-11-25T20:10:55",
+    "series": "ΑΛΠ",
+    "mtype": "16"
   }
 ]

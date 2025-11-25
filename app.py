@@ -6083,6 +6083,198 @@ def _get_chart_of_accounts_status_impl(category='G'):
         return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
 
 
+# -------- Chart of Accounts search API (suggestions for account inputs) --------
+# Simple in-memory cache per category to avoid reading Excel on every request
+_COA_CACHE = {
+    'G': {'mtime': None, 'rows': None, 'path': None},
+    'B': {'mtime': None, 'rows': None, 'path': None},
+}
+
+def _get_coa_file_path(category: str):
+    dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
+    try:
+        from auth import get_active_group
+        grp = get_active_group()
+        base = os.path.join(BASE_DIR, 'data', (grp.data_folder or '') if grp else '')
+    except Exception:
+        base = get_group_base_dir() if 'get_group_base_dir' in globals() else os.path.join(BASE_DIR, 'data')
+    return os.path.join(base, dest_name)
+
+def _load_coa_rows(category: str):
+    """
+    Return list of dicts {code, name} for chart of accounts of given category.
+    Applies basic format filtering per category.
+    Caches by file mtime.
+    """
+    category = 'G' if str(category).upper().startswith('G') else 'B'
+    cache = _COA_CACHE[category]
+    path = _get_coa_file_path(category)
+    cache['path'] = path
+    if not os.path.exists(path):
+        cache['mtime'] = None
+        cache['rows'] = []
+        return []
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        mtime = None
+    if cache['rows'] is not None and cache['mtime'] == mtime:
+        return cache['rows'] or []
+    # (Re)load
+    rows = []
+    try:
+        df = pd.read_excel(path, dtype=str)
+        df.fillna('', inplace=True)
+        # Columns may be named in Greek; tolerate variants
+        code_col = None
+        name_col = None
+        vat_col = None
+        for c in df.columns:
+            s = str(c).strip().lower()
+            if not code_col and ('κωδ' in s or s == 'code' or 'λογαριασμ' in s):
+                code_col = c
+            if not name_col and ('περιγραφ' in s or s == 'name' or s == 'description'):
+                name_col = c
+            if not vat_col and ('ποσοστό φπα' in s or 'ποσοστο φπα' in s or 'vat' == s or 'vat rate' in s):
+                vat_col = c
+        if not code_col:
+            # fallback to first column
+            code_col = df.columns[0]
+        # Build rows
+        for _, r in df.iterrows():
+            code = str(r.get(code_col, '')).strip()
+            name = str(r.get(name_col, '')).strip() if name_col else ''
+            # Parse VAT rate if available
+            vat_rate = None
+            if vat_col:
+                raw = str(r.get(vat_col, '')).strip()
+                raw = raw.replace('%','').replace(',','.')
+                try:
+                    # keep integer buckets commonly used
+                    v = float(raw) if raw else None
+                    if v is not None:
+                        if abs(v - round(v)) < 1e-9:
+                            vat_rate = int(round(v))
+                        else:
+                            vat_rate = v
+                except Exception:
+                    vat_rate = None
+            if not code:
+                continue
+            # normalize code format (ensure dashes exist if digits provided)
+            digits = ''.join(ch for ch in code if ch.isdigit())
+            if category == 'G':
+                # Expect 10 digits -> xx-xx-xx-xxxx
+                if len(digits) != 10:
+                    # Skip non-standard codes for suggestions
+                    continue
+                code_fmt = f"{digits[0:2]}-{digits[2:4]}-{digits[4:6]}-{digits[6:10]}"
+            else:
+                # B expects 6 digits -> xx-xxxx
+                if len(digits) != 6:
+                    continue
+                code_fmt = f"{digits[0:2]}-{digits[2:6]}"
+            rows.append({'code': code_fmt, 'name': name, 'vat_rate': vat_rate})
+    except Exception:
+        try:
+            app.logger.exception("Failed to read CoA file for category %s", category)
+        except Exception:
+            pass
+        rows = []
+    cache['rows'] = rows
+    cache['mtime'] = mtime
+    return rows
+
+@app.get('/api/coa/search')
+def api_coa_search():
+    """
+    Query chart of accounts for suggestions.
+    Query params: category=B|G (default G), q=search string, limit=int (default 20)
+    Returns: { ok: bool, exists: bool, results: [ { code, name } ], total: int }
+    """
+    try:
+        from auth import get_active_group
+        from flask_login import current_user
+        grp = get_active_group()
+        if not grp:
+            return jsonify({'ok': False, 'error': 'no_group'}), 403
+        if not getattr(current_user, 'is_authenticated', False):
+            return jsonify({'ok': False, 'error': 'unauthorized'}), 403
+    except Exception:
+        return jsonify({'ok': False, 'error': 'auth_failed'}), 403
+
+    category = (request.args.get('category') or 'G').strip().upper()
+    category = 'G' if category.startswith('G') or category == 'Γ' else 'B'
+    q = (request.args.get('q') or '').strip()
+    vat_q_raw = (request.args.get('vat') or '').strip()
+    vat_filter = None
+    try:
+        if vat_q_raw:
+            # accept numbers like 24 or strings '24%'
+            vat_filter = float(vat_q_raw.replace('%','').replace(',','.'))
+            if abs(vat_filter - round(vat_filter)) < 1e-9:
+                vat_filter = int(round(vat_filter))
+    except Exception:
+        vat_filter = None
+    try:
+        limit = int(request.args.get('limit') or 20)
+        if limit <= 0:
+            limit = 20
+        if limit > 100:
+            limit = 100
+    except Exception:
+        limit = 20
+
+    # Load rows (cached)
+    rows = _load_coa_rows(category)
+    path = _COA_CACHE[category]['path']
+    if not path or not os.path.exists(path):
+        return jsonify({'ok': True, 'exists': False, 'results': [], 'total': 0})
+
+    if not q:
+        # Return first N sorted by code, optionally filter by VAT
+        base = rows
+        if vat_filter is not None:
+            base = [it for it in base if it.get('vat_rate') == vat_filter]
+        results = sorted(base, key=lambda x: x.get('code',''))[:limit]
+        return jsonify({'ok': True, 'exists': True, 'results': results, 'total': len(base)})
+
+    q_low = q.lower()
+    q_digits = ''.join(ch for ch in q if ch.isdigit())
+
+    def match(item):
+        code = item.get('code','')
+        name = item.get('name','')
+        if q_digits:
+            code_digits = ''.join(ch for ch in code if ch.isdigit())
+            if q_digits in code_digits:
+                return True
+        if q_low in code.lower():
+            return True
+        if name and q_low in name.lower():
+            return True
+        return False
+
+    # Pre-filter by VAT rate when provided
+    base_rows = rows
+    if vat_filter is not None:
+        base_rows = [it for it in base_rows if it.get('vat_rate') == vat_filter]
+    filtered = [it for it in base_rows if match(it)]
+    # Prioritize startswith on code, then name contains
+    def sort_key(it):
+        code = it.get('code','')
+        name = it.get('name','')
+        starts = 0
+        if code.lower().startswith(q_low):
+            starts = -2
+        elif name.lower().startswith(q_low):
+            starts = -1
+        return (starts, code, name)
+    filtered.sort(key=sort_key)
+    results = filtered[:limit]
+    return jsonify({'ok': True, 'exists': True, 'results': results, 'total': len(filtered)})
+
+
 @app.route("/api/profiles", methods=["GET"])
 def api_profiles_list():
     profs, options = _profiles_get_for_active()
