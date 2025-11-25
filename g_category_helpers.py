@@ -198,5 +198,5 @@ def enrich_categories_with_mtype(
     
     return {
         "categories": categories_data,
-        "movement_types": movement_types
+        "mtype_options": movement_types
     }

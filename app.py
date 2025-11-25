@@ -4583,7 +4583,7 @@ def api_repeat_entry_save():
         "profile_name": profile_name,
         # Αποθηκεύουμε τα MTYPE ξεχωριστά για τιμολόγια και αποδείξεις
         "invoice_mtype": invoice_mtype,
-        "receipt_mtype": receipt_mtype,
+        "receipt_mtype": receipt_mtype,  # Αποθηκεύουμε για τις αποδείξεις
     })
     client["repeat_entry"] = repeat
     creds[idx] = client
@@ -4673,6 +4673,22 @@ def api_validate_payment_mtype():
                 "payment_method_type": payment_method_type,
                 "expected_mtype": expected,
                 "selected_mtype": selected_mtype
+            })
+        
+        # Ειδικός έλεγχος για paymentMethodType 3 με MTYPE 15
+        if payment_method_type == "3" and selected_mtype == "15":
+            return jsonify({
+                "ok": True,
+                "warning": (
+                    f"Προσοχή: Το παραστατικό έχει τύπο πληρωμής {payment_method_type} "
+                    f"(μετρητά) και επέλεξες MTYPE '{selected_mtype}' (μετρητά). "
+                    f"Συνιστάται να χρησιμοποιήσεις MTYPE '3.4.2' (δαπάνη με μετρητά) "
+                    f"για σωστή ταξινόμηση. Θέλεις να αλλάξεις σε '3.4.2' ή να συνεχίσεις με '{selected_mtype}'?"
+                ),
+                "payment_method_type": payment_method_type,
+                "expected_mtype": {"code": "3.4.2", "label": "Δαπάνη με μετρητά"},
+                "selected_mtype": selected_mtype,
+                "special_case": True  # σηματοδοτεί ειδική περίπτωση
             })
         
         # Όλα καλά

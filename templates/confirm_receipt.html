@@ -15,12 +15,12 @@
     <input type="hidden" name="category" value="{{ category }}">
     
     <!-- MTYPE dropdown (μόνο για Γ Κατηγορία) -->
-    {% if g_category_data and g_category_data.movement_types %}
+    {% if g_category_data and g_category_data.mtype_options %}
     <div class="mb-4">
       <label class="block text-sm font-medium mb-2">Είδος Κίνησης (Γ Κατηγορία)</label>
       <select name="mtype" class="border rounded px-2 py-1 w-full" required>
         <option value="">-- επίλεξε είδος κίνησης --</option>
-        {% for mt in g_category_data.movement_types %}
+        {% for mt in g_category_data.mtype_options %}
           <option value="{{ mt.value }}">{{ mt.label }} ({{ mt.value }})</option>
         {% endfor %}
       </select>
