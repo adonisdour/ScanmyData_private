@@ -968,7 +968,10 @@ function katToPercent(k){
           const opt = document.createElement('option');
           opt.value = mt.value;
           opt.textContent = mt.label + ' (' + mt.value + ')';
-          if (mt.value === invoiceMtype) opt.selected = true;
+          // Set selected based on saved invoiceMtype
+          if (invoiceMtype && mt.value === invoiceMtype) {
+            opt.selected = true;
+          }
           repeatMtypeSelect.appendChild(opt);
         });
       }

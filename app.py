@@ -5631,29 +5631,47 @@ def upload_chart_of_accounts():
     Upload λογιστικού σχεδίου για Γ Κατηγορία.
     Αναμένει αρχείο Excel με στήλες: Κωδικός, Περιγραφή, Ποσοστό ΦΠΑ, Λογαριασμός ΦΠΑ
     """
+    return _upload_chart_of_accounts_impl('G')
+
+@app.route('/upload_chart_of_accounts_b', methods=['POST'])
+def upload_chart_of_accounts_b():
+    """
+    Upload λογιστικού σχεδίου για Β Κατηγορία.
+    Αναμένει αρχείο Excel με στήλες: Κωδικός, Περιγραφή, Ποσοστό ΦΠΑ, Λογαριασμός ΦΠΑ
+    """
+    return _upload_chart_of_accounts_impl('B')
+
+def _upload_chart_of_accounts_impl(category='G'):
+    """
+    Κοινή λογική upload λογιστικού σχεδίου.
+    category: 'B' ή 'G'
+    """
+    category_label = 'Γ Κατηγορία' if category == 'G' else 'Β Κατηγορία'
+    dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
+    
     try:
         from auth import get_active_group
         from flask_login import current_user
         grp = get_active_group()
         if not grp:
-            log.warning("[CoA Upload] No active group selected")
+            log.warning("[CoA Upload %s] No active group selected", category)
             return jsonify(ok=False, error='Δεν επιλέχθηκε ενεργή ομάδα.'), 403
         if not getattr(current_user, 'is_authenticated', False):
-            log.warning("[CoA Upload] User not authenticated")
+            log.warning("[CoA Upload %s] User not authenticated", category)
             return jsonify(ok=False, error='Απαιτείται σύνδεση.'), 403
-        log.info("[CoA Upload] User: %s, Group: %s", current_user.username, grp.name)
+        log.info("[CoA Upload %s] User: %s, Group: %s", category, current_user.username, grp.name)
     except Exception as e:
-        log.exception("[CoA Upload] Permission check failed")
+        log.exception("[CoA Upload %s] Permission check failed", category)
         return jsonify(ok=False, error='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
 
     try:
         if 'coa_file' not in request.files:
-            log.warning("[CoA Upload] No file in request")
+            log.warning("[CoA Upload %s] No file in request", category)
             return jsonify(ok=False, error='Δεν βρέθηκε το αρχείο.'), 400
 
         f = request.files['coa_file']
         vat = request.form.get('vat', '').strip()
-        log.info("[CoA Upload] VAT: %s, File: %s", vat, f.filename if f else 'None')
+        log.info("[CoA Upload %s] VAT: %s, File: %s", category, vat, f.filename if f else 'None')
         
         if not f or not getattr(f, 'filename', '').strip():
             log.warning("[CoA Upload] Empty file or filename")
@@ -5700,20 +5718,20 @@ def upload_chart_of_accounts():
         # ΣΗΜΑΝΤΙΚΟ: Το CoA είναι GROUP-WIDE, όχι per-VAT!
         target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
         os.makedirs(target_base, exist_ok=True)
-        log.info("[CoA Upload] Target directory (GROUP-WIDE): %s", target_base)
+        log.info("[CoA Upload %s] Target directory (GROUP-WIDE): %s", category, target_base)
         
-        # Ένα αρχείο για όλη την ομάδα
-        dest_name = 'chart_of_accounts.xlsx'
+        # Ένα αρχείο ανά κατηγορία (Β/Γ) για όλη την ομάδα
         dest_path = os.path.join(target_base, dest_name)
 
-        # 1) Διαγραφή παλιών backups
+        # 1) Διαγραφή παλιών backups (μόνο για αυτή την κατηγορία)
+        backup_prefix = dest_name.replace('.xlsx', '')
         for existing in os.listdir(target_base):
-            if existing.startswith('chart_of_accounts') and ('.bak.' in existing or existing.endswith('.bak')):
+            if existing.startswith(backup_prefix) and ('.bak.' in existing or existing.endswith('.bak')):
                 try:
                     os.remove(os.path.join(target_base, existing))
-                    log.info("Removed old CoA backup: %s", existing)
+                    log.info("Removed old CoA %s backup: %s", category, existing)
                 except Exception:
-                    log.exception("Failed to remove old CoA backup %s", existing)
+                    log.exception("Failed to remove old CoA %s backup %s", category, existing)
 
         # 2) Backup του υπάρχοντος αρχείου (αν υπάρχει)
         if os.path.exists(dest_path):
@@ -5722,17 +5740,17 @@ def upload_chart_of_accounts():
             backup_path = os.path.join(target_base, backup_name)
             try:
                 os.rename(dest_path, backup_path)
-                log.info("Backed up previous CoA: %s -> %s", dest_name, backup_name)
+                log.info("Backed up previous CoA %s: %s -> %s", category, dest_name, backup_name)
             except Exception:
-                log.exception("Failed to backup previous CoA %s", dest_name)
+                log.exception("Failed to backup previous CoA %s %s", category, dest_name)
 
         # 3) Αποθήκευση νέου αρχείου
         try:
             f.stream.seek(0)
             f.save(dest_path)
-            log.info("Saved new CoA to: %s", dest_path)
+            log.info("Saved new CoA %s to: %s", category, dest_path)
         except Exception as e:
-            log.exception("Failed to save CoA file")
+            log.exception("Failed to save CoA %s file", category)
             return jsonify(ok=False, error=f'Σφάλμα κατά την αποθήκευση: {e}'), 500
         
         uploaded_at = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
@@ -5743,6 +5761,7 @@ def upload_chart_of_accounts():
             'filename': filename,
             'uploaded_at': uploaded_at,
             'account_count': account_count,
+            'category': category,
             'scope': 'group-wide',  # Κοινόχρηστο για όλη την ομάδα
             'columns': sorted(list(headers_set))
         }
@@ -5754,21 +5773,33 @@ def upload_chart_of_accounts():
 
         return jsonify(
             ok=True,
-            message='Το λογιστικό σχέδιο αποθηκεύτηκε επιτυχώς (κοινόχρηστο για όλη την ομάδα)',
+            message=f'Το λογιστικό σχέδιο {category_label} αποθηκεύτηκε επιτυχώς (κοινόχρηστο για όλη την ομάδα)',
             filename=filename,
             uploaded_at=uploaded_at,
             account_count=account_count,
+            category=category,
             detected_columns=sorted(list(headers_set))
         ), 200
 
     except Exception:
-        log.exception("Unhandled exception in upload_chart_of_accounts")
+        log.exception("Unhandled exception in upload_chart_of_accounts %s", category)
         return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
 
 
 @app.route('/remove_chart_of_accounts', methods=['POST'])
 def remove_chart_of_accounts():
-    """Αφαίρεση λογιστικού σχεδίου"""
+    """Αφαίρεση λογιστικού σχεδίου Γ Κατηγορίας"""
+    return _remove_chart_of_accounts_impl('G')
+
+@app.route('/remove_chart_of_accounts_b', methods=['POST'])
+def remove_chart_of_accounts_b():
+    """Αφαίρεση λογιστικού σχεδίου Β Κατηγορίας"""
+    return _remove_chart_of_accounts_impl('B')
+
+def _remove_chart_of_accounts_impl(category='G'):
+    """Κοινή λογική αφαίρεσης λογιστικού σχεδίου"""
+    dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
+    
     try:
         from auth import get_active_group
         from flask_login import current_user
@@ -5782,8 +5813,7 @@ def remove_chart_of_accounts():
 
     try:
         target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
-        # GROUP-WIDE: Ένα αρχείο για όλη την ομάδα
-        dest_name = 'chart_of_accounts.xlsx'
+        # Category-specific file
         dest_path = os.path.join(target_base, dest_name)
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
         
@@ -5795,13 +5825,24 @@ def remove_chart_of_accounts():
         return jsonify(ok=True), 200
 
     except Exception:
-        log.exception("Unhandled exception in remove_chart_of_accounts")
+        log.exception("Unhandled exception in remove_chart_of_accounts %s", category)
         return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
 
 
 @app.route('/get_chart_of_accounts_status', methods=['GET'])
 def get_chart_of_accounts_status():
-    """Επιστρέφει το status του λογιστικού σχεδίου"""
+    """Επιστρέφει το status του λογιστικού σχεδίου Γ Κατηγορίας"""
+    return _get_chart_of_accounts_status_impl('G')
+
+@app.route('/get_chart_of_accounts_status_b', methods=['GET'])
+def get_chart_of_accounts_status_b():
+    """Επιστρέφει το status του λογιστικού σχεδίου Β Κατηγορίας"""
+    return _get_chart_of_accounts_status_impl('B')
+
+def _get_chart_of_accounts_status_impl(category='G'):
+    """Κοινή λογική status λογιστικού σχεδίου"""
+    dest_name = 'chart_of_accounts_g.xlsx' if category == 'G' else 'chart_of_accounts_b.xlsx'
+    
     try:
         from auth import get_active_group
         from flask_login import current_user
@@ -5815,13 +5856,12 @@ def get_chart_of_accounts_status():
 
     try:
         target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
-        # GROUP-WIDE: Ένα αρχείο για όλη την ομάδα
-        dest_name = 'chart_of_accounts.xlsx'
+        # Category-specific file
         dest_path = os.path.join(target_base, dest_name)
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
         
         if not os.path.exists(dest_path):
-            return jsonify(ok=True, exists=False), 200
+            return jsonify(ok=True, exists=False, category=category), 200
         
         # Load metadata
         meta = {}
@@ -5835,13 +5875,14 @@ def get_chart_of_accounts_status():
         return jsonify(
             ok=True,
             exists=True,
+            category=category,
             filename=meta.get('filename', dest_name),
             uploaded_at=meta.get('uploaded_at', ''),
             account_count=meta.get('account_count', 0)
         ), 200
 
     except Exception:
-        log.exception("Unhandled exception in get_chart_of_accounts_status")
+        log.exception("Unhandled exception in get_chart_of_accounts_status %s", category)
         return jsonify(ok=False, error='Εσωτερικό σφάλμα server.'), 500
 
 
@@ -7465,6 +7506,7 @@ def custom_categories_page():
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
     client_name = str((client or {}).get("name") or "").strip()
+    book_category = str((client or {}).get("book_category") or "Β").strip()
     return_name = (request.args.get("return_name") or client_name).strip()
     return_args: Dict[str, str] = {}
     if vat:
@@ -7483,6 +7525,7 @@ def custom_categories_page():
         vat_rates=VAT_RATE_NUMERIC,
         vat_constraints=constraints,
         credential_name=client_name,
+        book_category=book_category,
         return_url=return_url,
         active_page="custom_categories",
     )
@@ -7528,9 +7571,65 @@ def custom_categories_save():
     if label:
         target["label"] = label
     target["enabled"] = bool(enabled)
+    
+    # Get book_category for validation
+    book_category = str(client.get("book_category") or "Β").strip().upper()
+    
+    # Collect and validate accounts
     accounts = {}
+    validation_errors = []
     for rate in VAT_RATE_NUMERIC:
-        accounts[rate] = str(request.form.get(f"account_{rate}") or "").strip()
+        account_code = str(request.form.get(f"account_{rate}") or "").strip()
+        
+        # Validate format if not empty
+        if account_code:
+            # Remove all non-digit and non-dash characters for validation
+            cleaned = ''.join(c for c in account_code if c.isdigit() or c == '-')
+            digits_only = ''.join(c for c in account_code if c.isdigit())
+            
+            if book_category in ('Γ', 'G'):
+                # Γ Category: xx-xx-xx-xxxx (10 digits total)
+                if not re.match(r'^\d{2}-\d{2}-\d{2}-\d{4}$', cleaned) or len(digits_only) != 10:
+                    validation_errors.append(f"ΦΠΑ {rate}%: Μη έγκυρη μορφή (αναμένεται xx-xx-xx-xxxx με 10 ψηφία)")
+            else:
+                # Β Category: xx-xxxx (6 digits total)
+                if not re.match(r'^\d{2}-\d{4}$', cleaned) or len(digits_only) != 6:
+                    validation_errors.append(f"ΦΠΑ {rate}%: Μη έγκυρη μορφή (αναμένεται xx-xxxx με 6 ψηφία)")
+        
+        accounts[rate] = account_code
+    
+    # If validation errors, flash and redirect back
+    if validation_errors:
+        for error in validation_errors:
+            flash(error, "error")
+        expected_format = "xx-xx-xx-xxxx (10 ψηφία)" if book_category in ('Γ', 'G') else "xx-xxxx (6 ψηφία)"
+        flash(f"Αναμενόμενη μορφή λογαριασμών για {book_category} κατηγορία: {expected_format}", "info")
+        return redirect(url_for("custom_categories_page", vat=vat, return_name=client_name))
+    
+    # Validate account codes exist in chart_of_accounts.xlsx (Β ή Γ ανάλογα με κατηγορία)
+    chart_filename = 'chart_of_accounts_g.xlsx' if book_category in ('Γ', 'G') else 'chart_of_accounts_b.xlsx'
+    chart_path = os.path.join(get_group_base_dir(), chart_filename)
+    if os.path.exists(chart_path):
+        try:
+            df = pd.read_excel(chart_path, dtype=str)
+            # Get valid account codes from 'Κωδικός' column
+            valid_codes = set(df['Κωδικός'].dropna().astype(str).str.strip())
+            
+            # Check each non-empty account
+            invalid_accounts = []
+            for rate, account_code in accounts.items():
+                if account_code and account_code not in valid_codes:
+                    invalid_accounts.append(f"ΦΠΑ {rate}%: Ο λογαριασμός '{account_code}' δεν υπάρχει στο Λογιστικό Σχέδιο")
+            
+            if invalid_accounts:
+                for error in invalid_accounts:
+                    flash(error, "error")
+                flash(f"Οι λογαριασμοί πρέπει να υπάρχουν στο {chart_filename}", "warning")
+                return redirect(url_for("custom_categories_page", vat=vat, return_name=client_name))
+        except Exception as e:
+            current_app.logger.warning(f"Failed to validate against {chart_filename}: {e}")
+            # Continue with save - chart validation is optional if file has issues
+    
     target["accounts"] = accounts
 
     save_credentials(creds)

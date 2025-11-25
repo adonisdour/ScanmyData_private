@@ -2,6 +2,9 @@
 {% block title %}Custom Κατηγορίες{% endblock %}
 
 {% block content %}
+<!-- Hidden data attribute for JS to read book_category -->
+<div id="credentialData" data-credential-book-category="{{ book_category }}" style="display:none;"></div>
+
 <div class="max-w-6xl mx-auto mt-6 space-y-6">
   <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
     <div>
@@ -316,6 +319,198 @@
   }
 
   setModeNew();
+})();
+
+// ===== Auto-formatting για λογαριασμούς Custom Categories (Β & Γ κατηγορίες) =====
+(function(){
+  const form = document.getElementById('categoryForm');
+  if(!form) return;
+
+  // Ανάκτηση book_category από server (πρέπει να είναι διαθέσιμο)
+  const BOOK_CATEGORY = (function(){
+    try {
+      // Διάβασμα από το hidden div που προσθέσαμε
+      const credData = document.getElementById('credentialData');
+      if(credData && credData.dataset.credentialBookCategory) {
+        return credData.dataset.credentialBookCategory.trim().toUpperCase();
+      }
+      
+      // Fallback: check window object
+      if(window.CREDENTIAL_BOOK_CATEGORY) return window.CREDENTIAL_BOOK_CATEGORY;
+      
+      // Default: Β κατηγορία
+      return 'Β';
+    } catch(e) {
+      console.warn('Failed to read book_category, defaulting to Β', e);
+      return 'Β';
+    }
+  })();
+
+  console.log('Custom Categories: Book Category =', BOOK_CATEGORY);
+
+  /**
+   * Format account code based on book category
+   * Β: xx-xxxx (2 digits, dash, 4 digits)
+   * Γ: xx-xx-xx-xxxx (2 digits, dash, 2 digits, dash, 2 digits, dash, 4 digits)
+   */
+  function formatAccountCode(value, bookCategory){
+    // Remove all non-digit characters
+    const digits = value.replace(/\D/g, '');
+    
+    if(bookCategory === 'Γ' || bookCategory === 'G'){
+      // Γ Category: xx-xx-xx-xxxx (max 10 digits)
+      const maxLen = 10;
+      const limited = digits.slice(0, maxLen);
+      
+      if(limited.length === 0) return '';
+      if(limited.length <= 2) return limited;
+      if(limited.length <= 4) return limited.slice(0,2) + '-' + limited.slice(2);
+      if(limited.length <= 6) return limited.slice(0,2) + '-' + limited.slice(2,4) + '-' + limited.slice(4);
+      return limited.slice(0,2) + '-' + limited.slice(2,4) + '-' + limited.slice(4,6) + '-' + limited.slice(6);
+    } else {
+      // Β Category: xx-xxxx (max 6 digits)
+      const maxLen = 6;
+      const limited = digits.slice(0, maxLen);
+      
+      if(limited.length === 0) return '';
+      if(limited.length <= 2) return limited;
+      return limited.slice(0,2) + '-' + limited.slice(2);
+    }
+  }
+
+  /**
+   * Validate account code format
+   */
+  function isValidAccountFormat(value, bookCategory){
+    if(!value || value.trim() === '') return true; // Empty is valid
+    
+    const cleaned = value.replace(/\D/g, '');
+    
+    if(bookCategory === 'Γ' || bookCategory === 'G'){
+      // Γ: Must be xx-xx-xx-xxxx (10 digits total)
+      return /^\d{2}-\d{2}-\d{2}-\d{4}$/.test(value) && cleaned.length === 10;
+    } else {
+      // Β: Must be xx-xxxx (6 digits total)
+      return /^\d{2}-\d{4}$/.test(value) && cleaned.length === 6;
+    }
+  }
+
+  /**
+   * Apply formatting to all account inputs
+   */
+  function attachFormatting(){
+    const accountInputs = form.querySelectorAll('[data-account-rate]');
+    
+    accountInputs.forEach(input => {
+      // Auto-format on input
+      input.addEventListener('input', function(e){
+        const cursorPos = this.selectionStart;
+        const oldValue = this.value;
+        const oldDigits = oldValue.replace(/\D/g, '');
+        const formatted = formatAccountCode(oldValue, BOOK_CATEGORY);
+        const newDigits = formatted.replace(/\D/g, '');
+        
+        if(formatted !== oldValue){
+          this.value = formatted;
+          
+          // Smart cursor positioning
+          let newCursorPos = cursorPos;
+          
+          // If we just typed the 2nd digit, auto-add dash and move cursor after it
+          if(oldDigits.length === 2 && newDigits.length === 2 && formatted.length === 3 && formatted[2] === '-'){
+            newCursorPos = 3; // Move cursor after the dash
+          }
+          // For Γ category: auto-position after 4th and 6th digit dashes
+          else if(BOOK_CATEGORY === 'Γ' || BOOK_CATEGORY === 'G'){
+            if(oldDigits.length === 4 && newDigits.length === 4 && formatted.length === 6 && formatted[5] === '-'){
+              newCursorPos = 6;
+            }
+            else if(oldDigits.length === 6 && newDigits.length === 6 && formatted.length === 9 && formatted[8] === '-'){
+              newCursorPos = 9;
+            }
+            else if(formatted.length > oldValue.length && formatted[cursorPos] === '-'){
+              newCursorPos = cursorPos + 1;
+            }
+          }
+          // For Β category: just after 2nd digit
+          else {
+            if(formatted.length > oldValue.length && formatted[cursorPos] === '-'){
+              newCursorPos = cursorPos + 1;
+            }
+          }
+          
+          this.setSelectionRange(newCursorPos, newCursorPos);
+        }
+      });
+
+      // Validate on blur
+      input.addEventListener('blur', function(){
+        const val = this.value.trim();
+        if(val === '') {
+          this.classList.remove('border-red-500', 'border-green-500');
+          return;
+        }
+
+        if(isValidAccountFormat(val, BOOK_CATEGORY)){
+          this.classList.remove('border-red-500');
+          this.classList.add('border-green-500');
+        } else {
+          this.classList.remove('border-green-500');
+          this.classList.add('border-red-500');
+          
+          // Show tooltip with expected format
+          const expectedFormat = BOOK_CATEGORY === 'Γ' || BOOK_CATEGORY === 'G' 
+            ? 'xx-xx-xx-xxxx (10 ψηφία)' 
+            : 'xx-xxxx (6 ψηφία)';
+          this.title = `Μη έγκυρος κωδικός. Αναμενόμενη μορφή: ${expectedFormat}`;
+        }
+      });
+
+      // Remove validation styling on focus
+      input.addEventListener('focus', function(){
+        this.classList.remove('border-red-500', 'border-green-500');
+        this.title = '';
+      });
+    });
+  }
+
+  // Form validation before submit
+  form.addEventListener('submit', function(e){
+    const accountInputs = form.querySelectorAll('[data-account-rate]');
+    let hasInvalid = false;
+
+    accountInputs.forEach(input => {
+      const val = input.value.trim();
+      if(val !== '' && !isValidAccountFormat(val, BOOK_CATEGORY)){
+        hasInvalid = true;
+        input.classList.add('border-red-500');
+        const expectedFormat = BOOK_CATEGORY === 'Γ' || BOOK_CATEGORY === 'G' 
+          ? 'xx-xx-xx-xxxx' 
+          : 'xx-xxxx';
+        input.title = `Μη έγκυρος κωδικός. Αναμενόμενη μορφή: ${expectedFormat}`;
+      }
+    });
+
+    if(hasInvalid){
+      e.preventDefault();
+      alert(`Παρακαλώ διόρθωσε τους μη έγκυρους κωδικούς λογαριασμών.\n\nΑναμενόμενη μορφή για ${BOOK_CATEGORY} κατηγορία: ${BOOK_CATEGORY === 'Γ' ? 'xx-xx-xx-xxxx (10 ψηφία)' : 'xx-xxxx (6 ψηφία)'}`);
+    }
+  });
+
+  // Initialize formatting
+  attachFormatting();
+
+  // Re-attach when form mode changes (edit/new)
+  const observer = new MutationObserver(function(mutations){
+    mutations.forEach(function(mutation){
+      if(mutation.type === 'attributes' && mutation.attributeName === 'data-current-cat'){
+        // Form mode changed, re-attach formatting
+        attachFormatting();
+      }
+    });
+  });
+
+  observer.observe(form, { attributes: true });
 })();
 </script>
 {% endblock %}
