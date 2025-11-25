@@ -22,7 +22,7 @@
       Δεν έχει επιλεγεί ενεργός πελάτης. Ενεργοποίησε κάποιο credential και δοκίμασε ξανά.
     </div>
   {% else %}
-    <div class="bg-slate-50 border border-slate-200 rounded p-4 text-sm text-slate-700">
+    <div class="bg-slate-50 border border-slate-200 rounded p-4 text-sm text-slate-700 custom-intro">
       <p><strong>Πελάτης:</strong> {{ credential_name or vat }}</p>
       <p class="mt-2">Οι παρακάτω κατηγορίες είναι διαθέσιμες επιπλέον των γενικών:<br>
         <span class="italic">{{ default_labels.values() | list | join(', ') }}</span>
@@ -33,7 +33,7 @@
     <div class="grid gap-6 md:grid-cols-2">
       <!-- CRUD form -->
       <div class="space-y-4">
-        <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-5">
+        <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-5 dark-card">
           <div class="flex items-center justify-between mb-4">
             <div>
               <h2 id="formTitle" class="text-lg font-semibold">Νέα κατηγορία</h2>
@@ -60,7 +60,7 @@
               <div class="text-sm font-medium text-gray-700">Λογαριασμοί ανά ΦΠΑ</div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {% for rate in vat_rates %}
-                  <div class="border rounded-md p-3 bg-slate-50">
+                  <div class="border rounded-md p-3 bg-slate-50 vat-input-card">
                     <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1">ΦΠΑ {{ rate }}%</label>
                     <input type="text" name="account_{{ rate }}" data-account-rate="{{ rate }}" class="w-full border rounded px-2 py-1 focus:outline-none focus:ring focus:ring-sky-100" placeholder="Λογαριασμός">
                   </div>
@@ -79,7 +79,7 @@
 
       <!-- Saved categories -->
       <div>
-        <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-5 h-full flex flex-col">
+        <div class="border border-gray-200 rounded-lg bg-white shadow-sm p-5 h-full flex flex-col dark-card">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-lg font-semibold">Αποθηκευμένες κατηγορίες</h2>
             <span class="text-xs text-gray-500">Κάνε κλικ για επεξεργασία</span>
@@ -531,6 +531,40 @@
 .coa-suggest-search { width:100%; box-sizing:border-box; border:1px solid #e5e7eb; border-radius:4px; padding:6px 8px; font-size:12px; outline:none; }
 [data-theme="dark"] .coa-suggest-header { background:#0f172a; border-bottom-color:#374151; }
 [data-theme="dark"] .coa-suggest-search { background:#111827; color:#e5e7eb; border-color:#374151; }
+</style>
+
+<style>
+/* Dark mode overrides for Custom Categories page */
+[data-theme="dark"] .dark-card {
+  background: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+}
+[data-theme="dark"] .custom-intro {
+  background: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+[data-theme="dark"] .custom-intro .text-slate-700,
+[data-theme="dark"] .custom-intro .text-gray-700 { color: var(--text-primary) !important; }
+[data-theme="dark"] .custom-intro .text-slate-500,
+[data-theme="dark"] .custom-intro .text-gray-500 { color: var(--text-secondary) !important; }
+
+[data-theme="dark"] #categoryForm label { color: var(--text-primary) !important; }
+[data-theme="dark"] .vat-input-card { background: var(--bg-secondary) !important; border-color: var(--border-color) !important; }
+[data-theme="dark"] #categoryForm input[type="text"] {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Saved categories panel */
+[data-theme="dark"] #savedCategories .saved-category {
+  background: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+}
+[data-theme="dark"] #savedCategories .saved-category .text-gray-800,
+[data-theme="dark"] #savedCategories .saved-category .text-gray-600 { color: var(--text-primary) !important; }
+[data-theme="dark"] #savedCategories .saved-category .text-gray-500 { color: var(--text-secondary) !important; }
 </style>
 
 <script>
