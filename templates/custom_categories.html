@@ -225,9 +225,10 @@
     savedList.querySelectorAll('.saved-category').forEach(btn => {
       const data = btn.dataset.cat ? JSON.parse(btn.dataset.cat) : null;
       if(data && data.id === id){
-        btn.classList.add('border-sky-400','ring-2','ring-sky-100','bg-sky-50');
+        btn.classList.add('selected');
+        btn.classList.remove('ring-2','ring-sky-100','bg-sky-50','border-sky-400');
       }else{
-        btn.classList.remove('border-sky-400','ring-2','ring-sky-100','bg-sky-50');
+        btn.classList.remove('selected','ring-2','ring-sky-100','bg-sky-50','border-sky-400');
       }
     });
   }
@@ -623,4 +624,17 @@
   form.querySelectorAll('[data-account-rate]').forEach(inp => attachCoaSuggest(inp));
 })();
 </script>
+<style>
+/* Unified selection highlight for saved categories */
+.saved-category.selected {
+  background-color: #e6f7ff !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 0 0 2px rgba(14,165,233,0.18);
+}
+[data-theme="dark"] .saved-category.selected {
+  background-color: rgba(14,165,233,0.14) !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 0 0 2px rgba(14,165,233,0.28) !important;
+}
+</style>
 {% endblock %}

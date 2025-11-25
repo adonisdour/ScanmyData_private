@@ -11,6 +11,32 @@
 .flash-close { margin-left:auto; background:transparent; border:none; cursor:pointer; font-weight:700; font-size:16px; line-height:1; color:inherit; padding:0 6px; }
 </style>
 
+<style>
+/* Highlight selected profile rows (light & dark) */
+.profile-row.selected {
+  background-color: #e6f7ff !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 0 0 2px rgba(14,165,233,0.18);
+}
+
+[data-theme="dark"] .profile-row.selected {
+  background-color: rgba(14,165,233,0.14) !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 0 0 2px rgba(14,165,233,0.28) !important;
+}
+
+/* Ensure profile title is readable in dark mode */
+[data-theme="dark"] #profList .profile-row .text-gray-800 {
+  color: #ffffff !important;
+}
+
+/* Subtext visibility in dark mode */
+[data-theme="dark"] #profList .profile-row .text-gray-600,
+[data-theme="dark"] #profList .profile-row .text-gray-700 {
+  color: var(--text-secondary) !important;
+}
+</style>
+
 <div class="bg-white rounded shadow p-6">
   <h2 class="text-lg font-semibold mb-4">Προφίλ Χαρακτηρισμών (Τιμολόγια)</h2>
 
@@ -54,7 +80,7 @@
         <div id="profMsg" class="text-sm"></div>
 
         <div class="flex gap-2">
-          <button id="btnSaveProf" class="bg-sky-600 text-white px-3 py-2 rounded" type="button">Αποθήκευση</button>
+          <button id="btnSaveProf" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 rounded" type="button">Αποθήκευση</button>
           <!-- (Μεταφέρθηκε το Επιστροφή πάνω-δεξιά στη λίστα) -->
         </div>
       </div>
@@ -211,7 +237,9 @@
     if(!btn) return;
     if(currentSelectedId){
       btn.textContent = 'Ενημέρωση';
-      btn.classList.remove('bg-sky-600'); btn.classList.add('bg-green-600');
+      // Match active group header button color (sky)
+      btn.classList.remove('bg-green-600');
+      btn.classList.add('bg-sky-600');
     }else{
       btn.textContent = 'Αποθήκευση';
       btn.classList.remove('bg-green-600'); btn.classList.add('bg-sky-600');
@@ -226,9 +254,9 @@
         const isSel = (row.dataset && row.dataset.name === currentSelected);
         row.setAttribute('aria-selected', isSel ? 'true' : 'false');
         if (isSel){
-          row.classList.add('border-sky-400','ring-2','ring-sky-100','bg-sky-50');
+          row.classList.add('border-sky-400','ring-2','ring-sky-100','bg-sky-50','selected');
         } else {
-          row.classList.remove('border-sky-400','ring-2','ring-sky-100','bg-sky-50');
+          row.classList.remove('border-sky-400','ring-2','ring-sky-100','bg-sky-50','selected');
         }
       });
       updateSaveButton();
