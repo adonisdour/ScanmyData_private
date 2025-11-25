@@ -6235,7 +6235,8 @@ def api_coa_search():
         # Return first N sorted by code, optionally filter by VAT
         base = rows
         if vat_filter is not None:
-            base = [it for it in base if it.get('vat_rate') == vat_filter]
+            # Include rows with matching VAT or empty VAT
+            base = [it for it in base if (it.get('vat_rate') == vat_filter) or (it.get('vat_rate') in (None, ''))]
         results = sorted(base, key=lambda x: x.get('code',''))[:limit]
         return jsonify({'ok': True, 'exists': True, 'results': results, 'total': len(base)})
 
@@ -6258,7 +6259,8 @@ def api_coa_search():
     # Pre-filter by VAT rate when provided
     base_rows = rows
     if vat_filter is not None:
-        base_rows = [it for it in base_rows if it.get('vat_rate') == vat_filter]
+        # Include rows with matching VAT or empty VAT
+        base_rows = [it for it in base_rows if (it.get('vat_rate') == vat_filter) or (it.get('vat_rate') in (None, ''))]
     filtered = [it for it in base_rows if match(it)]
     # Prioritize startswith on code, then name contains
     def sort_key(it):
