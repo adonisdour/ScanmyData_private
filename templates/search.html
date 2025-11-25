@@ -168,6 +168,14 @@
             </select>
         </div>
 
+        <!-- MTYPE για Αποδείξεις (receipt-level) -->
+        <div id="receiptMtypeContainerSummary" class="mt-4" style="display:none;">
+            <label class="font-medium text-sm">Είδος Κίνησης (για Αποδείξεις)</label>
+            <select id="receiptMtypeSelectSummary" class="mt-1 p-2 border rounded w-full max-w-md">
+                <option value="">-- επίλεξε είδος κίνησης --</option>
+            </select>
+        </div>
+
         <!-- FOOTER -->
         <div class="mt-4 flex justify-between items-center">
             <div class="text-sm text-gray-600">
@@ -231,6 +239,35 @@
     <div class="mt-4 flex justify-end gap-2">
       <button id="repeatModalCancel" class="px-3 py-2 border rounded">Άκυρο</button>
       <button id="repeatModalSave" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- RECEIPT MTYPE MODAL (για επαναληπτική εισαγωγή αποδείξεων) -->
+<div id="receiptMtypeModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 p-4" style="display:none;">
+  <div class="bg-white rounded-lg shadow-lg w-full max-w-md p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-semibold">Κωδικός Κίνησης Αποδείξεων</h3>
+      <button id="receiptMtypeCloseX" class="text-gray-500 text-xl font-bold">✕</button>
+    </div>
+
+    <div class="space-y-4">
+      <div class="text-sm text-gray-600">
+        Επίλεξε τον κωδικό κίνησης που θα χρησιμοποιείται για τις αποδείξεις σε επαναληπτική εισαγωγή.
+      </div>
+
+      <div>
+        <label class="text-sm font-medium">Είδος Κίνησης</label>
+        <select id="receiptMtypeSelect" class="border rounded px-3 py-2 w-full mt-1">
+          <option value="">-- επίλεξε είδος κίνησης --</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mt-6 flex justify-end gap-2">
+      <button id="receiptMtypeCancel" class="px-4 py-2 border rounded">Άκυρο</button>
+      <button id="receiptMtypeSave" class="bg-sky-600 text-white px-4 py-2 rounded">Αποθήκευση</button>
     </div>
   </div>
 </div>
@@ -1082,6 +1119,131 @@ try {
 
 
 <script>
+// ============ RECEIPT MTYPE MODAL LOGIC ============
+(function(){
+  const G_CATEGORY_DATA = (function(){
+    try { return {{ g_category_data | tojson | safe }} || null; }
+    catch(e){ return null; }
+  })();
+
+  const RECEIPT_MTYPE_STORAGE_KEY = 'receipt_mtype';
+
+  function loadReceiptMtype(){
+    try { return localStorage.getItem(RECEIPT_MTYPE_STORAGE_KEY) || ''; }
+    catch(e){ return ''; }
+  }
+
+  function saveReceiptMtype(mtype){
+    try { localStorage.setItem(RECEIPT_MTYPE_STORAGE_KEY, mtype || ''); }
+    catch(e){ console.warn('Failed to save receipt MTYPE', e); }
+  }
+
+  function populateMtypeDropdown(selectEl, currentValue){
+    if(!selectEl || !G_CATEGORY_DATA || !Array.isArray(G_CATEGORY_DATA.mtype_options)) return;
+    selectEl.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+    G_CATEGORY_DATA.mtype_options.forEach(mt => {
+      const opt = document.createElement('option');
+      opt.value = mt.value;
+      opt.innerText = `${mt.value} - ${mt.label}`;
+      if(mt.value === currentValue) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  function isRepeatEntryEnabled(){
+    try {
+      const toggle = document.getElementById('repeatEntrySwitch');
+      return !!(toggle && toggle.checked);
+    } catch(e){ return false; }
+  }
+
+  function openReceiptMtypeModal(){
+    const modal = document.getElementById('receiptMtypeModal');
+    const select = document.getElementById('receiptMtypeSelect');
+    if(!modal || !select) return;
+
+    const currentMtype = loadReceiptMtype();
+    populateMtypeDropdown(select, currentMtype);
+    
+    modal.style.display = 'flex';
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeReceiptMtypeModal(){
+    const modal = document.getElementById('receiptMtypeModal');
+    if(!modal) return;
+    modal.style.display = 'none';
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+  }
+
+  // Wire up modal buttons
+  document.getElementById('receiptMtypeCloseX')?.addEventListener('click', closeReceiptMtypeModal);
+  document.getElementById('receiptMtypeCancel')?.addEventListener('click', closeReceiptMtypeModal);
+  
+  document.getElementById('receiptMtypeSave')?.addEventListener('click', function(){
+    const select = document.getElementById('receiptMtypeSelect');
+    if(!select) return;
+    const mtype = select.value || '';
+    saveReceiptMtype(mtype);
+    
+    // Show flash message (if available)
+    if(typeof showFlash === 'function'){
+      showFlash('Αποθηκεύτηκε ο κωδικός κίνησης για αποδείξεις: ' + (mtype || '(κενό)'), 'success', 3000);
+    }
+    
+    closeReceiptMtypeModal();
+  });
+
+  // Monitor receipt toggle + repeat toggle changes
+  function checkAndOpenReceiptMtypeModal(){
+    const isReceipts = isReceiptsOn();
+    const isRepeat = isRepeatEntryEnabled();
+    const currentMtype = loadReceiptMtype();
+    
+    if(isReceipts && isRepeat && !currentMtype && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
+      console.log('Auto-opening receipt MTYPE modal (receipts + repeat enabled, no MTYPE set)');
+      openReceiptMtypeModal();
+    }
+  }
+
+  // Listen to repeat toggle changes
+  const repeatSwitch = document.getElementById('repeatEntrySwitch');
+  if(repeatSwitch){
+    repeatSwitch.addEventListener('change', function(){
+      if(this.checked){
+        // Delay to allow other handlers to complete
+        setTimeout(checkAndOpenReceiptMtypeModal, 300);
+      }
+    });
+  }
+
+  // Listen to receipts toggle changes
+  const receiptsSwitch = document.getElementById('useReceiptsSwitch');
+  if(receiptsSwitch){
+    receiptsSwitch.addEventListener('change', function(){
+      if(this.checked){
+        setTimeout(checkAndOpenReceiptMtypeModal, 300);
+      }
+    });
+  }
+
+  // Check on page load
+  setTimeout(checkAndOpenReceiptMtypeModal, 500);
+
+  // Expose for manual access
+  window.openReceiptMtypeModal = openReceiptMtypeModal;
+  window.getReceiptMtype = loadReceiptMtype;
+
+  // Hook into receipt confirmation to include MTYPE
+  // This will be used when confirming receipts
+  window._getReceiptMtypeForConfirm = loadReceiptMtype;
+})();
+</script>
+
+
+<script>
 
   (function () {
   const KEY = 'UI:useReceipts'; // '1' = Αποδείξεις, '0' = Τιμολόγια
@@ -1641,6 +1803,59 @@ if (typeof window !== 'undefined') {
     }
   }
 
+  // Setup receipt-level MTYPE dropdown (for receipts mode)
+  function setupReceiptMtype(summary) {
+    const mtypeContainer = document.getElementById('receiptMtypeContainerSummary');
+    const mtypeSelect = document.getElementById('receiptMtypeSelectSummary');
+    
+    if (!mtypeContainer || !mtypeSelect) return;
+    
+    // Check if we're in receipts mode
+    const isReceiptsMode = isReceiptsOn();
+    
+    // Check if repeat is enabled
+    let repeatEnabled = false;
+    try {
+      repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
+    } catch (e) {
+      repeatEnabled = false;
+    }
+    
+    // Get saved MTYPE from localStorage or summary
+    const savedMtype = summary.mtype || summary.invoice_mtype || (typeof window._getReceiptMtypeForConfirm === 'function' ? window._getReceiptMtypeForConfirm() : '');
+    
+    // Show dropdown if:
+    // 1. We're in receipts mode AND
+    // 2. (Repeat is OFF OR no saved MTYPE) AND
+    // 3. G_CATEGORY_DATA exists
+    const shouldShow = isReceiptsMode && (!repeatEnabled || !savedMtype) && window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options;
+    
+    if (shouldShow) {
+      mtypeContainer.style.display = 'block';
+      
+      // Clear and populate dropdown
+      mtypeSelect.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+      const mtypeOptions = window.G_CATEGORY_DATA.mtype_options || [];
+      
+      mtypeOptions.forEach(mt => {
+        const option = document.createElement('option');
+        option.value = mt.value;
+        option.textContent = `${mt.value} - ${mt.label}`;
+        if (mt.value === savedMtype) {
+          option.selected = true;
+        }
+        mtypeSelect.appendChild(option);
+      });
+      
+      // Add change listener
+      mtypeSelect.addEventListener('change', function() {
+        updateSummaryFromDom();
+      });
+    } else {
+      mtypeContainer.style.display = 'none';
+    }
+  }
+
   // render everything into the container
   function renderSummaryLines(){
     if(!container) return;
@@ -1676,6 +1891,9 @@ if (typeof window !== 'undefined') {
     
     // Setup invoice-level MTYPE dropdown (για Γ Category)
     setupInvoiceMtype(summary);
+    
+    // Setup receipt-level MTYPE dropdown (για Αποδείξεις)
+    setupReceiptMtype(summary);
   }
 
   // update hidden input from current DOM selections/buttons
@@ -3749,6 +3967,15 @@ function prefillSummaryModal(){
       if (isGCategory && invoiceMtypeSelect) {
         // Μπαίνει πάντα αν είναι Γ Category και υπάρχει το dropdown, ακόμα και αν είναι κενό
         data.mtype = invoiceMtypeSelect.value || '';
+      }
+
+      // Συλλογή receipt-level MTYPE (για Αποδείξεις)
+      const isReceiptsMode = isReceiptsOn();
+      const receiptMtypeSelect = document.getElementById('receiptMtypeSelectSummary');
+      if (isReceiptsMode && receiptMtypeSelect) {
+        // Include MTYPE for receipts mode
+        data.mtype = receiptMtypeSelect.value || data.mtype || '';
+        data.invoice_mtype = data.mtype; // also set invoice_mtype for consistency
       }
 
       input.value = JSON.stringify(data);
@@ -6285,6 +6512,16 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
       year: String(yearVal),
       mark: String(summaryObj.mark||'')
     };
+
+    // Add MTYPE if available (for receipts in repeat mode)
+    const isRepeat = !!document.getElementById('repeatEntrySwitch')?.checked;
+    if(isRepeat && typeof window._getReceiptMtypeForConfirm === 'function'){
+      const mtype = window._getReceiptMtypeForConfirm();
+      if(mtype){
+        payload.mtype = mtype;
+        payload.invoice_mtype = mtype;
+      }
+    }
 
     const res = await fetch('/api/confirm_receipt', {
       method: 'POST',
