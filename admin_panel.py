@@ -1141,6 +1141,16 @@ def admin_get_system_stats() -> Dict[str, Any]:
                             dt = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
                         except Exception:
                             pass
+                    # Try 24-hour Greek formatted timestamp (current display format)
+                    if not dt:
+                        try:
+                            dt = datetime.strptime(ts, '%d/%m/%Y, %H:%M:%S')
+                            # This string is in local Greek time (EET/EEST). Assume EET (UTC+2) for parsing, then convert to UTC.
+                            from datetime import timedelta
+                            eet = timezone(timedelta(hours=2))
+                            dt = dt.replace(tzinfo=eet).astimezone(timezone.utc)
+                        except Exception:
+                            pass
                 if dt:
                     # Make timezone-aware if naive
                     if dt.tzinfo is None:
