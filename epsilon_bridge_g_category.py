@@ -67,7 +67,7 @@ def _load_chart_of_accounts(base_dir: str = "data") -> Optional[pd.DataFrame]:
     logger = logging.getLogger(__name__)
     
     # Ένα αρχείο για όλη την ομάδα
-    coa_path = os.path.join(base_dir, 'chart_of_accounts.xlsx')
+    coa_path = os.path.join(base_dir, 'chart_of_accounts_g.xlsx')
     
     if not os.path.exists(coa_path):
         logger.debug(f"[Chart of Accounts] No chart of accounts file found in {base_dir}")
@@ -455,7 +455,10 @@ def build_preview_rows_for_ui_g(
         sum_vat = 0.0
         
         # MTYPE είναι invoice-level (όχι line-level)
-        invoice_mtype = rec.get("mtype", "")
+        # Ελέγχουμε και τα δύο πεδία: mtype και invoice_mtype
+        invoice_mtype = rec.get("mtype") or rec.get("invoice_mtype") or ""
+        # Μετατροπή σε string (μπορεί να είναι int)
+        invoice_mtype = str(invoice_mtype).strip() if invoice_mtype else ""
         logger.debug(f"[Γ Category] MARK={mark}, invoice_mtype from JSON: '{invoice_mtype}'")
 
         for ln in lines:
@@ -560,6 +563,7 @@ def build_preview_rows_for_ui_g(
                     "category": canon,
                     "vat_rate": vr,
                     "CRDB": 0,  # Χρέωση
+                    "ISAGRYP": "",  # Κενό για κύρια γραμμή
                 })
                 
                 # Προσθήκη ξεχωριστής εγγραφής για τον λογαριασμό ΦΠΑ
@@ -571,6 +575,7 @@ def build_preview_rows_for_ui_g(
                     "category": f"{canon}_fpa",
                     "vat_rate": 0,
                     "CRDB": 0,  # Χρέωση
+                    "ISAGRYP": 0,  # 0 για γραμμή ΦΠΑ
                 })
             else:
                 # Αν ΔΕΝ υπάρχει λογαριασμός ΦΠΑ, χρέωσε NET + VAT όπως πριν
@@ -582,6 +587,7 @@ def build_preview_rows_for_ui_g(
                     "category": canon,
                     "vat_rate": vr,
                     "CRDB": 0,  # Χρέωση
+                    "ISAGRYP": "",  # Κενό
                 })
             
             # Line για preview - ΧΡΕΩΣΗ (Debit)
@@ -622,11 +628,12 @@ def build_preview_rows_for_ui_g(
         detail_rows.append({
             "MTYPE": detail_rows[0]["MTYPE"] if detail_rows else "",  # Χρήση του πρώτου MTYPE
             "LCODE": account_p,
-            "NETAMT": sum_net,
-            "VATAMT": sum_vat,
+            "NETAMT": sum_net + sum_vat,  # Σύνολο (NET + VAT) στο NETAMT
+            "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
             "category": "προμηθευτής",
             "vat_rate": 0,  # 0 για πίστωση προμηθευτή
             "CRDB": 1,  # Πίστωση
+            "ISAGRYP": "",  # Κενό για προμηθευτή
         })
         
         # Line για preview - ΠΙΣΤΩΣΗ προμηθευτή
@@ -680,8 +687,8 @@ def build_preview_rows_for_ui_g(
             # Export fields (για export_g_category)
             "MDATE": date_str,
             "INVOICE": invoice_val,
-            "ISKEPYO": 1,  # 1 = ΚΕΠΥΟ Υπόχρεος
-            "ISAGRYP": 0,
+            "ISKEPYO": 2,  # 2 = Αγορές (ΚΕΠΥΟ)
+            "ISAGRYP": "",  # Κενό (θα συμπληρωθεί 0 μόνο στις γραμμές ΦΠΑ)
             "SUMKEPYOYP": round(sum_net, 2),
             "SUMKEPYONOTYP": 0,
             "SUMKEPYOFPA": round(sum_vat, 2),
@@ -820,7 +827,7 @@ def export_g_category(
                 "OTHEREXPEND": int(rec.get("OTHEREXPEND", 0) or 0),
                 # ARTICLE_DETAIL
                 "LCODE_DETAIL": detail["LCODE"],
-                "ISAGRYP_DETAIL": rec["ISAGRYP"],
+                "ISAGRYP_DETAIL": detail.get("ISAGRYP", ""),  # Από detail (κενό ή 0)
                 "KEPYOPARTY": "",
                 "CRDB": 0,  # 0 = Χρέωση (Debit)
                 "NETAMT": round(detail["NETAMT"], 2),  # Καθαρή αξία
@@ -851,11 +858,11 @@ def export_g_category(
             
             # ARTICLE_DETAIL
             "LCODE_DETAIL": rec["LCODE_HEADER"],
-            "ISAGRYP_DETAIL": rec["ISAGRYP"],
+            "ISAGRYP_DETAIL": "",  # Κενό για προμηθευτή
             "KEPYOPARTY": "",
             "CRDB": 1,  # 1 = Πίστωση (Credit)
-            "NETAMT": round(rec["SUMKEPYOYP"], 2),  # Καθαρή αξία συνόλου
-            "VATAMT": round(rec["SUMKEPYOFPA"], 2),  # ΦΠΑ συνόλου
+            "NETAMT": round(rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"], 2),  # Σύνολο (NET + VAT)
+            "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
             "AMOUNT": round(total_amount, 2),  # Σύνολο
             "INVOICE_DETAIL": rec["INVOICE"],
             "REASON_DETAIL": rec["REASON"],

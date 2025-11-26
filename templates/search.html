@@ -4164,20 +4164,20 @@ function prefillSummaryModal(){
       });
       
       // Συλλογή invoice-level MTYPE (για Γ Category)
-      const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
+      // Διαβάζουμε το MTYPE αν υπάρχει το dropdown, ανεξάρτητα από το G_CATEGORY_DATA
       const invoiceMtypeSelect = document.getElementById('invoiceMtypeSelect');
-      if (isGCategory && invoiceMtypeSelect) {
-        // Μπαίνει πάντα αν είναι Γ Category και υπάρχει το dropdown, ακόμα και αν είναι κενό
-        data.mtype = invoiceMtypeSelect.value || '';
+      if (invoiceMtypeSelect && invoiceMtypeSelect.value) {
+        data.mtype = invoiceMtypeSelect.value;
+        data.invoice_mtype = invoiceMtypeSelect.value; // for consistency
       }
 
       // Συλλογή receipt-level MTYPE (για Αποδείξεις)
       const isReceiptsMode = isReceiptsOn();
       const receiptMtypeSelect = document.getElementById('receiptMtypeSelectSummary');
-      if (isReceiptsMode && receiptMtypeSelect) {
+      if (isReceiptsMode && receiptMtypeSelect && receiptMtypeSelect.value) {
         // Include MTYPE for receipts mode
-        data.mtype = receiptMtypeSelect.value || data.mtype || '';
-        data.invoice_mtype = data.mtype; // also set invoice_mtype for consistency
+        data.mtype = receiptMtypeSelect.value;
+        data.invoice_mtype = receiptMtypeSelect.value; // also set invoice_mtype for consistency
       }
 
       input.value = JSON.stringify(data);
