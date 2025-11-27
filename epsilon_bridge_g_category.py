@@ -814,7 +814,7 @@ def export_g_category(
                 "ARTID": artid,
                 "MTYPE": detail["MTYPE"],  # Χρήση του MTYPE από το detail (π.χ. "15")
                 "ISKEPYO": rec["ISKEPYO"],
-                "ISAGRYP": rec["ISAGRYP"],
+                "ISAGRYP": 0,
                 "CUSTID": rec["CUSTID"],
                 "MDATE": rec["MDATE"],
                 "REASON": rec["REASON"],
@@ -845,7 +845,7 @@ def export_g_category(
             "ARTID": artid,
             "MTYPE": first_mtype,  # Χρήση του MTYPE από το invoice
             "ISKEPYO": rec["ISKEPYO"],
-            "ISAGRYP": rec["ISAGRYP"],
+            "ISAGRYP": 0,
             "CUSTID": rec["CUSTID"],
             "MDATE": rec["MDATE"],
             "REASON": rec["REASON"],
