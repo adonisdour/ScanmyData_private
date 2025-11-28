@@ -1379,8 +1379,8 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     for div in soup.find_all("div", class_="fontSize8pt"):
         div_text = div.get_text(" ", strip=True)
         if re.search(r"Αρ\.\s*Παραστατικού", div_text, re.I):
-            # Το pattern είναι: "Αρ. Παραστατικού: ΤΔΑ-01208"
-            m = re.search(r"Αρ\.\s*Παραστατικού:\s*(.+?)(?:\s|$)", div_text, re.I)
+            # Παίρνει ΟΛΟ το κείμενο μετά το "Αρ. Παραστατικού:"
+            m = re.search(r"Αρ\.\s*Παραστατικού:\s*(.*)", div_text, re.I)
             if m:
                 out["progressive_aa"] = m.group(1).strip()
                 break

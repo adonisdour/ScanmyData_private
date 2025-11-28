@@ -1,61 +1,85 @@
 [
   {
-    "mark": "400011741279590",
-    "issueDate": "24/11/2025",
-    "series": "11Μ0ΤΔΑ",
-    "aa": "9953",
-    "AA": "9953",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "45,68",
-    "totalVatAmount": "10,96",
-    "totalValue": "56,64",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "12",
-    "AFM_issuer": "094439854",
-    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
-    "AFM": "094439854",
-    "lines": [
-      {
-        "id": "400011741279590_inst0",
-        "description": "ΤΡΑΚΑΔΑΣ Α.Ε.",
-        "amount": "45,68",
-        "vat": "10,96",
-        "category": "αγορες_εμπορευματων",
-        "vat_category": "ΦΠΑ 24%"
-      }
-    ]
-  },
-  {
-    "mark": "400011758960646",
-    "issueDate": "15/09/2025",
+    "mark": "400011789414446",
+    "issueDate": "06/11/2025",
     "series": "ΑΛΠ",
-    "aa": "61010",
-    "AA": "61010",
+    "aa": "02 78351",
+    "AA": "02 78351",
     "type": "ΑΠΟΔΕΙΞΗ",
     "vatCategory": "",
-    "totalNetValue": "14,9",
+    "totalNetValue": "12,78",
     "totalVatAmount": "",
-    "totalValue": "14,9",
+    "totalValue": "12,78",
     "classification": "",
     "category": "αποδειξακια",
     "χαρακτηρισμός": "αποδειξακια",
     "characteristic": "αποδειξακια",
     "mtype": "16",
-    "AFM_issuer": "801466788",
-    "Name_issuer": "ROX COFFEE COMPANY ΕΤΕΡΟΡΡΥΘΜΗ ΕΤΑΙΡΕΙΑ",
-    "AFM": "801466788",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
     "lines": [
       {
         "id": "r0",
         "description": "",
-        "amount": "14,9",
+        "amount": "12,78",
         "vat": "",
         "category": "αποδειξακια",
         "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "400011615024455",
+    "issueDate": "11/11/2025",
+    "series": "TΔA",
+    "aa": "60984",
+    "AA": "60984",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "209,98",
+    "totalVatAmount": "47,82",
+    "totalValue": "257,80",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "15",
+    "AFM_issuer": "800916954",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+    "AFM": "800916954",
+    "lines": [
+      {
+        "id": "400011615024455_inst0",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "97,83",
+        "vat": "23,48",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011615024455_inst1",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "7,16",
+        "vat": "0,43",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 6%"
+      },
+      {
+        "id": "400011615024455_inst2",
+        "description": "Instance #3",
+        "amount": "97,83",
+        "vat": "23,48",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011615024455_inst3",
+        "description": "Instance #4",
+        "amount": "7,16",
+        "vat": "0,43",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 6%"
       }
     ]
   }

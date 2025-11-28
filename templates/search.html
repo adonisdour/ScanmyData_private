@@ -378,6 +378,15 @@
 {# Flash container (JS will inject messages here) #}
 <div id="clientFlashContainer" class="fixed top-4 right-4 z-60"></div>
 
+{# Loading overlay used by various async operations (scrape / fetch) #}
+<div id="loadingOverlay" class="fixed inset-0 bg-black/60 z-[100] hidden items-center justify-center" style="display:none;">
+  <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 flex flex-col items-center gap-4 max-w-sm mx-4">
+    <div class="w-14 h-14 border-4 border-sky-200 border-t-sky-600 rounded-full animate-spin" aria-hidden="true"></div>
+    <div id="loadingOverlayTitle" class="text-lg font-semibold text-gray-800 dark:text-gray-100">Παρακαλώ περιμένετε...</div>
+    <div id="loadingOverlayMessage" class="text-sm text-gray-600 dark:text-gray-300 text-center">Επεξεργασία δεδομένων</div>
+  </div>
+</div>
+
 {% include 'list_inner.html' %}
 
 
@@ -388,6 +397,64 @@
 <script src="/static/loop_hard_guard.js"></script>
 <script src="{{ url_for('static', filename='repeat_flow_guard.js') }}"></script>
 <script>
+// Loading overlay helpers
+function showLoadingOverlay(title, message){
+  try{
+    const overlay = document.getElementById('loadingOverlay');
+    const t = document.getElementById('loadingOverlayTitle');
+    const m = document.getElementById('loadingOverlayMessage');
+    if(t) t.textContent = title || 'Παρακαλώ περιμένετε...';
+    if(m) m.textContent = message || 'Επεξεργασία δεδομένων';
+    if(overlay){ overlay.style.display = 'flex'; overlay.classList.remove('hidden'); }
+  }catch(e){ /* ignore */ }
+}
+
+function hideLoadingOverlay(){
+  try{
+    const overlay = document.getElementById('loadingOverlay');
+    if(overlay){ overlay.style.display = 'none'; overlay.classList.add('hidden'); }
+  }catch(e){}
+}
+
+// Convenience wrapper for long fetches that should show the overlay
+async function fetchWithOverlay(url, opts, title, message){
+  showLoadingOverlay(title || 'Παρακαλώ περιμένετε...', message || 'Επικοινωνία με τον διακομιστή...');
+  try{
+    const res = await fetch(url, opts);
+    hideLoadingOverlay();
+    return res;
+  }catch(err){
+    hideLoadingOverlay();
+    throw err;
+  }
+}
+
+// Enhance flash banners: add close button and auto-dismiss with fade
+function enhanceFlashBanners(root=document){
+  try{
+    (root.querySelectorAll || Array.prototype) && root.querySelectorAll('.flash-banner').forEach(el => {
+      if (el.dataset.enhanced) return; el.dataset.enhanced = '1';
+      // add close button
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ml-3 close-btn text-sm text-gray-600';
+      btn.innerText = '✕';
+      btn.style.background = 'transparent';
+      btn.style.border = 'none';
+      btn.style.cursor = 'pointer';
+      btn.addEventListener('click', () => { el.style.transition = 'opacity 0.35s'; el.style.opacity = '0'; setTimeout(()=>el.remove(), 360); });
+      el.appendChild(btn);
+      // auto-dismiss unless data-ttl="0"
+      const ttl = parseInt(el.getAttribute('data-ttl') || '5000', 10);
+      if (ttl > 0) {
+        setTimeout(()=>{ try{ el.style.transition='opacity 0.5s'; el.style.opacity='0'; setTimeout(()=>el.remove(),520); }catch(_){}} , ttl);
+      }
+    });
+  }catch(e){console.warn('enhanceFlashBanners failed', e);} 
+}
+
+document.addEventListener('DOMContentLoaded', function(){ enhanceFlashBanners(document); }, { once: true });
+
 function normalizeScanValue(raw){
   try {
     const text = (raw == null) ? '' : String(raw).trim();
@@ -1990,9 +2057,10 @@ if (typeof window !== 'undefined') {
     const savedMtype = summary.mtype || summary.receipt_mtype || localStorage.getItem('saved_receipt_mtype') || '';
     
     // Show dropdown if:
-    // 1. (We're in receipts mode OR repeat is enabled) AND
+    // 1. The summary represents a receipt OR we're in receipts mode OR repeat is enabled
     // 2. Is Γ Category
-    const shouldShow = (isReceiptsMode || repeatEnabled) && isGCategory;
+    const isSummaryReceipt = summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || '')));
+    const shouldShow = (isSummaryReceipt || isReceiptsMode || repeatEnabled) && isGCategory;
     
     if (shouldShow) {
       mtypeContainer.style.display = 'block';
@@ -4119,6 +4187,21 @@ function prefillSummaryModal(){
         }
       }
     });
+
+    // Ensure scrapeUrlField is set only for receipts; clear for invoices to avoid mis-classification
+    try {
+      const scrapeEl = document.getElementById('scrapeUrlField');
+      if (scrapeEl) {
+        const isReceipt = data && (data.is_receipt === true || /αποδει/i.test(String(data.type_name || '') + ' ' + String(data.category || '')));
+        if (!isReceipt) {
+          scrapeEl.value = '';
+          try { scrapeEl.removeAttribute('data-mark'); } catch(e){}
+        } else {
+          // preserve any provided scrape_url
+          if (data.scrape_url) scrapeEl.value = data.scrape_url;
+        }
+      }
+    } catch(e) { /* ignore */ }
   } catch(err){
     console.warn('prefillSummaryModal error', err);
   }
@@ -4979,12 +5062,12 @@ evt.preventDefault();
     }
 
     try {
-      const res = await fetch('/api/scrape_receipt', {
+      const res = await fetchWithOverlay('/api/scrape_receipt', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify({ url: url })
-      });
+      }, 'Λήψη Απόδειξης', 'Παρακαλώ περιμένετε - ανάκτηση δεδομένων από το URL...');
 
       const j = await res.json().catch(() => null);
       if (!res.ok || !j || j.ok === false) {
@@ -5162,12 +5245,12 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
   }));
 
   try {
-    const res = await fetch('/save_summary', {
+    const res = await fetchWithOverlay('/save_summary', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       body: JSON.stringify(summary)
-    });
+    }, 'Αποθήκευση Παραστατικού', 'Παρακαλώ περιμένετε - αποθήκευση δεδομένων...');
     if (!res.ok) {
       const t = await res.text().catch(()=>'');
       await showModalAlert('Σφάλμα', 'Αποτυχία αποθήκευσης (HTTP ' + res.status + '): ' + t);
@@ -5193,6 +5276,7 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     } catch(err){
       console.warn('Failed parsing summaryJsonInput for validation', err);
       // Άφησε το να προχωρήσει στο server
+      try{ showLoadingOverlay('Αποθήκευση', 'Παρακαλώ περιμένετε - αποστολή στο server...'); }catch(e){}
       e.target.submit();
       return;
     }
@@ -5279,6 +5363,7 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     }
     
     // Προχώρα στην κανονική server αποθήκευση
+    try{ showLoadingOverlay('Αποθήκευση', 'Παρακαλώ περιμένετε - αποστολή στο server...'); }catch(e){}
     e.target.submit();
     return;
   }
