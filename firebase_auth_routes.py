@@ -376,6 +376,11 @@ def firebase_login():
                     flash('Δεν έχεις ακόμη αντιστοιχιστεί σε ομάδα.', 'warning')
                 return redirect(url_for('auth.list_groups'))
         
+        # After successful login, if an active group exists, start a lazy-pull
+        # via a small sync page that shows a progress modal to the user.
+        if session.get('active_group'):
+            return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
+
         flash(f'Καλώς ήρθατε!', 'success')
         return redirect(url_for('home'))
     
@@ -427,19 +432,18 @@ def firebase_logout():
         {'email': email}
     )
     
-    # try to sync user's active group before logout
+    # Instead of doing a blocking sync here, redirect to a small page that
+    # performs the push with a progress modal and then completes logout.
     try:
         active_group_name = session.get('active_group')
         if active_group_name:
-            grp = Group.query.filter_by(name=active_group_name).first()
-            if grp:
-                firebase_config.firebase_cancel_idle_sync_for_user(current_user.id)
-                firebase_config.firebase_sync_group_folder(grp.data_folder)
+            # redirect to the sync page which will call the push API and then logout
+            return redirect(url_for('firebase_auth.sync_start_push', group=active_group_name))
     except Exception:
-        logger.exception('Failed to sync data on firebase logout')
+        logger.exception('Failed to initiate sync-on-logout')
 
+    # Fallback: if no active group, proceed to immediate logout
     logout_user()
-    # clear session-level active group to avoid showing previous user's state
     try:
         session.pop('active_group', None)
     except Exception:
@@ -578,6 +582,71 @@ def firebase_leave_group(group_name: str):
         flash(f'Αποτυχία εξόδου από την ομάδα: {error}', 'danger')
     
     return redirect(url_for('index'))
+
+
+@firebase_auth_bp.route('/sync/start_pull')
+@login_required
+def sync_start_pull():
+    """Render a small page that opens a modal and triggers the pull via AJAX."""
+    group = request.args.get('group') or session.get('active_group')
+    if not group:
+        flash('Δεν υπάρχει ενεργή ομάδα για συγχρονισμό.', 'warning')
+        return redirect(url_for('home'))
+    return render_template('sync_progress.html', action='pull', group=group)
+
+
+@firebase_auth_bp.route('/sync/start_push')
+@login_required
+def sync_start_push():
+    """Render a small page that opens a modal and triggers the push via AJAX (used on logout)."""
+    group = request.args.get('group') or session.get('active_group')
+    if not group:
+        # proceed to logout immediately
+        logout_user()
+        try:
+            session.pop('active_group', None)
+        except Exception:
+            pass
+        flash('Έχετε αποσυνδεθεί.', 'info')
+        return redirect(url_for('firebase_auth.firebase_login'))
+    return render_template('sync_progress.html', action='push', group=group)
+
+
+@firebase_auth_bp.route('/api/sync/pull', methods=['POST'])
+@login_required
+def api_sync_pull():
+    payload = request.get_json() or {}
+    group = payload.get('group') or session.get('active_group')
+    if not group:
+        return jsonify({'success': False, 'error': 'no_group_provided'}), 400
+    try:
+        ok = firebase_config.firebase_pull_group_to_local(group)
+        return jsonify({'success': bool(ok)})
+    except Exception as e:
+        logger.exception('api_sync_pull failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@firebase_auth_bp.route('/api/sync/push', methods=['POST'])
+@login_required
+def api_sync_push():
+    payload = request.get_json() or {}
+    group = payload.get('group') or session.get('active_group')
+    if not group:
+        return jsonify({'success': False, 'error': 'no_group_provided'}), 400
+    try:
+        ok = firebase_config.firebase_push_group_files(group)
+        # If this push was invoked as part of logout, finish logout on success
+        if payload.get('logout_after') and ok:
+            try:
+                logout_user()
+                session.pop('active_group', None)
+            except Exception:
+                pass
+        return jsonify({'success': bool(ok)})
+    except Exception as e:
+        logger.exception('api_sync_push failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @firebase_auth_bp.route('/api/user/groups')

@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}Syncing...{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="content-wrap text-center">
+    <h2 id="syncTitle">Συγχρονισμός δεδομένων</h2>
+    <p id="syncDesc">Παρακαλώ περιμένετε — γίνεται συγχρονισμός με το cloud. Μη κλείσετε το παράθυρο.</p>
+
+    <div class="progress" style="height: 24px; margin: 18px 0;">
+      <div id="syncBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%">0%</div>
+    </div>
+
+    <div id="syncStatus" style="margin-top:12px; color:#555">Αρχικοποίηση...</div>
+
+    <div style="margin-top:18px">
+      <button id="syncCancel" class="btn btn-secondary">Ακύρωση</button>
+    </div>
+  </div>
+</div>
+
+<script>
+$(function(){
+  const action = '{{ action }}';
+  const group = '{{ group }}';
+  const csrf = '';
+  let aborted = false;
+
+  function setProgress(p, text){
+    $('#syncBar').css('width', p+'%').text(p+'%');
+    if(text) $('#syncStatus').text(text);
+  }
+
+  $('#syncCancel').on('click', function(){
+    aborted = true;
+    $('#syncStatus').text('Ακύρωση...');
+    setProgress(0,'Ακύρωση από χρήστη');
+    setTimeout(function(){ window.location = '/'; }, 800);
+  });
+
+  function finish(success){
+    if(success){
+      setProgress(100, 'Ο συγχρονισμός ολοκληρώθηκε. Ανακατεύθυνση...');
+      setTimeout(function(){ window.location = '/'; }, 900);
+    } else {
+      setProgress(0, 'Σφάλμα κατά το συγχρονισμό. Δοκιμάστε ξανά.');
+    }
+  }
+
+  if(action === 'pull'){
+    setProgress(5, 'Επικοινωνία με cloud...');
+    $.ajax({
+      url: '{{ url_for("firebase_auth.api_sync_pull") }}',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({group: group}),
+      success: function(resp){
+        if(resp && resp.success){
+          setProgress(90, 'Αποθήκευση αρχείων τοπικά...');
+          // small delay for UX
+          setTimeout(function(){ finish(true); }, 600);
+        } else {
+          finish(false);
+        }
+      },
+      error: function(){ finish(false); }
+    });
+  }
+  else if(action === 'push'){
+    setProgress(5, 'Συλλογή αρχείων...');
+    $.ajax({
+      url: '{{ url_for("firebase_auth.api_sync_push") }}',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({group: group, logout_after: true}),
+      success: function(resp){
+        if(resp && resp.success){
+          setProgress(90, 'Αποστολή στο cloud...');
+          setTimeout(function(){ finish(true); }, 600);
+        } else {
+          finish(false);
+        }
+      },
+      error: function(){ finish(false); }
+    });
+  }
+});
+</script>
+
+{% endblock %}

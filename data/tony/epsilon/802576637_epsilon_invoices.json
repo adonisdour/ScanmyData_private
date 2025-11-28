@@ -1,50 +1,18 @@
 [
   {
-    "mark": "400011789414446",
-    "issueDate": "06/11/2025",
-    "series": "ΑΛΠ",
-    "aa": "02 78351",
-    "AA": "02 78351",
-    "type": "ΑΠΟΔΕΙΞΗ",
-    "vatCategory": "",
-    "totalNetValue": "12,78",
-    "totalVatAmount": "",
-    "totalValue": "12,78",
-    "classification": "",
-    "category": "αποδειξακια",
-    "χαρακτηρισμός": "αποδειξακια",
-    "characteristic": "αποδειξακια",
-    "mtype": "16",
-    "AFM_issuer": "800764388",
-    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
-    "AFM": "800764388",
-    "lines": [
-      {
-        "id": "r0",
-        "description": "",
-        "amount": "12,78",
-        "vat": "",
-        "category": "αποδειξακια",
-        "vat_category": ""
-      }
-    ]
-  },
-  {
     "mark": "400011615024455",
     "issueDate": "11/11/2025",
     "series": "TΔA",
     "aa": "60984",
     "AA": "60984",
-    "type": "Τιμολόγιο Πώλησης",
+    "type": "1.1",
     "vatCategory": "",
-    "totalNetValue": "209,98",
-    "totalVatAmount": "47,82",
-    "totalValue": "257,80",
+    "totalNetValue": "104,99",
+    "totalVatAmount": "23,91",
+    "totalValue": "128,90",
     "classification": "",
-    "category": "",
     "χαρακτηρισμός": "",
     "characteristic": "",
-    "mtype": "15",
     "AFM_issuer": "800916954",
     "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
     "AFM": "800916954",
@@ -64,22 +32,68 @@
         "vat": "0,43",
         "category": "αγορες_εμπορευματων",
         "vat_category": "ΦΠΑ 6%"
-      },
+      }
+    ],
+    "mtype": "15",
+    "_updated_at": "2025-11-28T13:24:48.079573+00:00"
+  },
+  {
+    "mark": "400011622878368",
+    "issueDate": "12/11/2025",
+    "series": "11Μ0ΤΔΑ",
+    "aa": "9480",
+    "AA": "9480",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "69,29",
+    "totalVatAmount": "16,63",
+    "totalValue": "85,92",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "15",
+    "AFM_issuer": "094439854",
+    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+    "AFM": "094439854",
+    "lines": [
       {
-        "id": "400011615024455_inst2",
-        "description": "Instance #3",
-        "amount": "97,83",
-        "vat": "23,48",
+        "id": "400011622878368_inst0",
+        "description": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+        "amount": "69,29",
+        "vat": "16,63",
         "category": "αγορες_εμπορευματων",
         "vat_category": "ΦΠΑ 24%"
-      },
+      }
+    ]
+  },
+  {
+    "mark": "400011776481010",
+    "issueDate": "26/11/2025",
+    "series": "301Τ0101",
+    "aa": "000248052",
+    "AA": "000248052",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "70,81",
+    "totalVatAmount": "16,99",
+    "totalValue": "87,80",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "15",
+    "AFM_issuer": "094317955",
+    "Name_issuer": "PRAKTIKER HELLAS ΕΜΠΟΡΙΚΗ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094317955",
+    "lines": [
       {
-        "id": "400011615024455_inst3",
-        "description": "Instance #4",
-        "amount": "7,16",
-        "vat": "0,43",
-        "category": "αγορες_εμπορευματων",
-        "vat_category": "ΦΠΑ 6%"
+        "id": "400011776481010_inst0",
+        "description": "Instance #1",
+        "amount": "70,81",
+        "vat": "16,99",
+        "category": "δαπανες_χωρις_φπα",
+        "vat_category": "ΦΠΑ 24%"
       }
     ]
   }

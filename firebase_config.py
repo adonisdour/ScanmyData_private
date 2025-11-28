@@ -210,6 +210,16 @@ def firebase_write_data(path: str, data: Dict[str, Any]) -> bool:
 
         safe_path = _sanitize_path(path)
         ref = db.reference(safe_path)
+        # If caller passed None, treat as a delete request
+        if data is None:
+            try:
+                ref.delete()
+                logger.debug(f"Data deleted from Firebase: {path}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete data from Firebase at {path}: {e}")
+                return False
+
         ref.set(data)
         logger.debug(f"Data written to Firebase: {path}")
         return True
@@ -467,7 +477,10 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
             for fname in files:
                 try:
                     # Skip certain files
-                    if fname.startswith('.') or fname in ['files_json', 'activity_log', 'error_log', 'fiscal_meta_json']:
+                    # Allow uploading log files (activity.log / error.log) so
+                    # the server copy can be the source of truth in Firebase.
+                    # Keep skipping hidden files and internal state files.
+                    if fname.startswith('.') or fname in ['files_json', 'fiscal_meta_json']:
                         continue
                     
                     file_path = os.path.join(root, fname)
@@ -649,6 +662,7 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                 '_csv': '.csv',
                 '_txt': '.txt',
                 '_xml': '.xml',
+                '_log': '.log',
             }
             
             # Check for known extensions at the end
@@ -661,7 +675,7 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
             # If no extension found, return as-is
             return key_str
         
-        def _recursive_process(obj):
+        def _recursive_process(obj, current_path=""):
             """Recursively find all files (flattened) and materialize them"""
             nonlocal files_created, files_failed
             
@@ -671,13 +685,15 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
             for key, val in obj.items():
                 try:
                     # Check if this is a binary file (has content + _meta)
+                    # compute the full key path for routing decisions
+                    full_key = (current_path + '/' + key).lstrip('/').rstrip('/') if current_path else key
                     if isinstance(val, dict) and 'content' in val and '_meta' in val:
                         # This is a file - materialize it directly in target_dir
                         try:
                             # Get proper file name with extension
                             file_name = _get_file_name_with_extension(key)
                             content_b64 = val.get('content')
-                            logger.debug('[PULL] Processing file: %s (original key: %s)', file_name, key)
+                            logger.debug('[PULL] Processing file: %s (original key: %s, full_key: %s)', file_name, key, full_key)
                             
                             # Base64 decode
                             blob = base64.urlsafe_b64decode(content_b64.encode('utf-8'))
@@ -700,13 +716,21 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                             
                             # Determine target subdirectory based on file type
                             file_dir = target_dir
-                            
-                            # Route .xlsx files to excel/ subdirectory
-                            if file_name.endswith('.xlsx'):
+
+                            # If the file was stored under 'imports/' in Firebase, materialize it directly in group root
+                            if full_key.startswith('imports/'):
+                                file_dir = target_dir
+                                logger.debug('[PULL] Routing imports file to group root: %s', file_name)
+                            # Special-case Chart of Accounts files: always materialize in group root
+                            elif any(name_part in file_name for name_part in ('chart_of_accounts_b', 'chart_of_accounts_g')):
+                                file_dir = target_dir
+                                logger.debug('[PULL] Routing chart_of_accounts file to group root: %s', file_name)
+                            # Otherwise, route .xlsx files to excel/ subdirectory
+                            elif file_name.endswith('.xlsx'):
                                 file_dir = os.path.join(target_dir, 'excel')
                                 os.makedirs(file_dir, exist_ok=True)
                                 logger.debug('[PULL] Routing .xlsx file to excel/ subdirectory: %s', file_name)
-                            
+
                             # Route epsilon_invoices files to epsilon/ subdirectory
                             elif 'epsilon_invoices' in file_name:
                                 file_dir = os.path.join(target_dir, 'epsilon')
@@ -715,10 +739,22 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                             
                             # Write file to appropriate directory
                             target_file_path = os.path.join(file_dir, file_name)
-                            with open(target_file_path, 'wb') as fh:
-                                fh.write(blob)
-                            logger.info('[PULL] Wrote file %s to %s (size: %d bytes, decrypted: %s)', 
-                                       file_name, file_dir, len(blob), decrypted)
+                            # If this is a log file, append the content to the existing
+                            # server log (paste behavior). For other files, overwrite.
+                            if file_name.endswith('.log'):
+                                # Ensure directory exists
+                                os.makedirs(file_dir, exist_ok=True)
+                                # Append binary content so we preserve original bytes
+                                with open(target_file_path, 'ab') as fh:
+                                    fh.write(blob)
+                                logger.info('[PULL] Appended log %s to %s (size: %d bytes, decrypted: %s)',
+                                            file_name, file_dir, len(blob), decrypted)
+                            else:
+                                os.makedirs(file_dir, exist_ok=True)
+                                with open(target_file_path, 'wb') as fh:
+                                    fh.write(blob)
+                                logger.info('[PULL] Wrote file %s to %s (size: %d bytes, decrypted: %s)', 
+                                           file_name, file_dir, len(blob), decrypted)
                             
                             # Set mtime if available
                             try:
@@ -736,7 +772,8 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                     elif isinstance(val, dict):
                         # This is a nested dict - recurse into it to find files
                         logger.debug('[PULL] Recursing into nested dict at key: %s', key)
-                        _recursive_process(val)
+                        # Recurse with accumulated path
+                        _recursive_process(val, current_path=(current_path + '/' + key).lstrip('/'))
                     
                     else:
                         # Other types - skip
@@ -747,7 +784,52 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                     logger.error('[PULL] Error processing key %s: %s', key, e)
         
         # Start recursive processing
-        _recursive_process(exported)
+        _recursive_process(exported, "")
+
+        # After materializing files locally, prune remote duplicated activity/error logs
+        try:
+            if is_firebase_enabled():
+                remote_files = firebase_read_data_compressed(path) or {}
+                # Collect candidates for pruning: map filename -> list of (full_key, mtime)
+                candidates = {'activity.log': [], 'error.log': []}
+
+                def _collect_log_candidates(obj, current_path=''):
+                    if not isinstance(obj, dict):
+                        return
+                    for key, val in obj.items():
+                        full_key = (current_path + '/' + key).lstrip('/').rstrip('/') if current_path else key
+                        if isinstance(val, dict) and 'content' in val and '_meta' in val:
+                            # Determine the materialized filename
+                            fname = _get_file_name_with_extension(key)
+                            if fname in candidates:
+                                try:
+                                    mtime = float(val.get('_meta', {}).get('mtime', 0)) or 0
+                                except Exception:
+                                    mtime = 0
+                                candidates[fname].append((full_key, mtime))
+                        elif isinstance(val, dict):
+                            _collect_log_candidates(val, current_path=(current_path + '/' + key).lstrip('/'))
+
+                _collect_log_candidates(remote_files, '')
+
+                # For each log type, keep the newest and delete the rest
+                for fname, items in candidates.items():
+                    if len(items) <= 1:
+                        continue
+                    # Sort by mtime desc; keep first
+                    items.sort(key=lambda x: x[1], reverse=True)
+                    to_delete = items[1:]
+                    for full_key, _ in to_delete:
+                        try:
+                            delete_path = f'/groups/{group_name}/files/{full_key}'
+                            if firebase_write_data(delete_path, None):
+                                logger.info('[PULL] Pruned remote %s (deleted %s)', fname, full_key)
+                            else:
+                                logger.warning('[PULL] Failed to prune remote %s (keep %s)', fname, full_key)
+                        except Exception as e:
+                            logger.error('[PULL] Error pruning remote log %s: %s', full_key, e)
+        except Exception as e:
+            logger.warning('[PULL] Could not prune remote log variants: %s', e)
 
         # Log summary
         logger.info('[PULL] Pulled files for group %s: created %d files, %d failed. Stored in: %s', 
@@ -951,7 +1033,18 @@ def _scan_and_sync_data_dir(data_dir: str, group_names: List[str] = None) -> Non
             try:
                 with open(full, 'rb') as f:
                     fb = f.read()
-                rel_path = key.replace('..', '').replace('\\', '/')
+                # Build rel_path relative to the group folder (do not include the group name twice)
+                # key is like 'group_name/...' or maybe other; strip the leading group segment if present
+                parts = key.split(os.sep)
+                rel_parts = parts[1:] if len(parts) > 1 and parts[0] == group else parts
+                # If file is directly under group root and is an .xls/.xlsx, place it under 'imports/' in Firebase
+                fname = parts[-1]
+                _, fext = os.path.splitext(fname)
+                if len(parts) == 2 and fext.lower() in ('.xls', '.xlsx'):
+                    rel_parts = ['imports', fname]
+
+                rel_path = '/'.join([p for p in rel_parts if p not in ('', '.')])
+                rel_path = rel_path.replace('..', '')
                 ok = firebase_upload_encrypted_file(group, rel_path, fb, mtime)
                 if ok:
                     logger.info(f'Uploaded file to Firebase: {rel_path} (group={group})')

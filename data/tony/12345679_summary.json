@@ -194,5 +194,101 @@
     "χαρακτηρισμός": "αποδειξακια",
     "created_at": "2025-11-23T11:57:35",
     "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400000000000006",
+    "AA": "61010",
+    "AFM_issuer": "801466788",
+    "Name": "ROX COFFEE COMPANY ΕΤΕΡΟΡΡΥΘΜΗ ΕΤΑΙΡΕΙΑ",
+    "issueDate": "15/09/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "14,9",
+    "totalNetValue": "14,9",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,9",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "61010",
+    "MARK": "400000000000006",
+    "aa": "61010",
+    "progressive_aa": "61010",
+    "AFM": "801466788",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2025-11-28T14:17:05",
+    "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400000000000007",
+    "AA": "02 78351",
+    "AFM_issuer": "800764388",
+    "Name": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "issueDate": "06/11/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "12,78",
+    "totalNetValue": "12,78",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,78",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "02 78351",
+    "MARK": "400000000000007",
+    "aa": "02 78351",
+    "progressive_aa": "02 78351",
+    "AFM": "800764388",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2025-11-28T14:19:43",
+    "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400000000000008",
+    "AA": "02 78351",
+    "AFM_issuer": "800764388",
+    "Name": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "issueDate": "06/11/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "12,78",
+    "totalNetValue": "12,78",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,78",
+        "vat": "",
+        "category": "αγορες_εμπορευματων",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "02 78351",
+    "MARK": "400000000000008",
+    "aa": "02 78351",
+    "progressive_aa": "02 78351",
+    "AFM": "800764388",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2025-11-28T14:19:59",
+    "series": "ΑΛΠ"
   }
 ]
