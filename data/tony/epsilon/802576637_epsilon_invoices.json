@@ -66,35 +66,5 @@
         "vat_category": "ΦΠΑ 24%"
       }
     ]
-  },
-  {
-    "mark": "400011776481010",
-    "issueDate": "26/11/2025",
-    "series": "301Τ0101",
-    "aa": "000248052",
-    "AA": "000248052",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "70,81",
-    "totalVatAmount": "16,99",
-    "totalValue": "87,80",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "15",
-    "AFM_issuer": "094317955",
-    "Name_issuer": "PRAKTIKER HELLAS ΕΜΠΟΡΙΚΗ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
-    "AFM": "094317955",
-    "lines": [
-      {
-        "id": "400011776481010_inst0",
-        "description": "Instance #1",
-        "amount": "70,81",
-        "vat": "16,99",
-        "category": "δαπανες_χωρις_φπα",
-        "vat_category": "ΦΠΑ 24%"
-      }
-    ]
   }
 ]

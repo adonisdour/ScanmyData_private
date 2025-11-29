@@ -1153,10 +1153,9 @@
     "totalValue": "87,80",
     "classification": "αχαρακτηριστο",
     "AFM_issuer": "094317955",
-    "Name_issuer": "PRAKTIKER HELLAS ΕΜΠΟΡΙΚΗ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "Name_issuer": "",
     "paymentMethodType": "3",
-    "AFM_counterpart": "802576637",
-    "Name": "PRAKTIKER HELLAS ΕΜΠΟΡΙΚΗ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ"
+    "AFM_counterpart": "802576637"
   },
   {
     "mark": "400011778127484",

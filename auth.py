@@ -178,7 +178,11 @@ def login():
             if len(user_groups) == 1:
                 session['active_group'] = user_groups[0].name
                 flash('Συνδεθήκατε επιτυχώς', 'success')
-                return redirect(url_for('home'))
+                # Start a pull sync with progress modal
+                try:
+                    return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
+                except Exception:
+                    return redirect(url_for('home'))
             else:
                 if user_groups:
                     flash('Επίλεξε ενεργή ομάδα για να συνεχίσεις.', 'info')
@@ -187,6 +191,12 @@ def login():
                 return redirect(url_for('auth.list_groups'))
 
         flash('Συνδεθήκατε επιτυχώς', 'success')
+        # If there's an active group, start pull sync page to show progress
+        if session.get('active_group'):
+            try:
+                return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
+            except Exception:
+                pass
         return redirect(request.args.get('next') or url_for('home'))
 
     # GET -> render login form
@@ -196,29 +206,13 @@ def login():
 @auth_bp.route('/logout')
 @login_required
 def logout():
-    # if user has an active group, sync it to Firebase before clearing session
+    # Instead of blocking logout by syncing here, redirect to a push-sync page
     try:
         active_group_name = session.get('active_group')
         if active_group_name:
-            grp = Group.query.filter_by(name=active_group_name).first()
-            if grp:
-                # Cancel any idle timers for this user and run an immediate sync
-                try:
-                    firebase_config.firebase_cancel_idle_sync_for_user(current_user.id)
-                except Exception:
-                    pass
-                try:
-                    # First, push any local file changes back to Firebase
-                    firebase_config.firebase_push_group_files(grp.data_folder)
-                except Exception:
-                    current_app.logger.exception('Failed to push files on logout')
-                try:
-                    firebase_config.firebase_sync_group_folder(grp.data_folder)
-                except Exception:
-                    current_app.logger.exception('Failed to sync data on logout')
+            return redirect(url_for('firebase_auth.sync_start_push', group=active_group_name))
     except Exception:
-        # continue with logout even if sync fails
-        pass
+        current_app.logger.exception('Failed to initiate sync-on-logout')
 
     # Log logout activity
     try:

@@ -509,14 +509,27 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
                             '.xml': '_xml',
                         }
                         
-                        suffix = ext_map.get(ext.lower(), f'_{ext.lower().lstrip(".")}')
-                        firebase_key = f"{name_no_ext}{suffix}"
+                        # Special-case: for root-level Excel files, store them under 'imports/'
+                        if ext.lower() in ('.xls', '.xlsx'):
+                            firebase_key = '/'.join(['imports', fname])
+                        else:
+                            suffix = ext_map.get(ext.lower(), f'_{ext.lower().lstrip(".")}')
+                            firebase_key = f"{name_no_ext}{suffix}"
                     else:
                         # File is in a subdirectory (excel/, epsilon/)
                         # Keep the path as-is
                         firebase_key = rel_path
                     
-                    local_file_keys.add(firebase_key)
+                    # Normalize/sanitize the firebase key the same way firebase_write_data does
+                    # so that local_file_keys matches the actual remote keys stored.
+                    safe_parts = []
+                    for seg in firebase_key.lstrip('/').split('/'):
+                        seg_safe = seg
+                        for ch in ['.', '#', '$', '[', ']']:
+                            seg_safe = seg_safe.replace(ch, '_')
+                        safe_parts.append(seg_safe)
+                    safe_firebase_key = '/'.join(safe_parts)
+                    local_file_keys.add(safe_firebase_key)
                     
                     # Read file
                     with open(file_path, 'rb') as f:
@@ -543,6 +556,7 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
                     
                     # Upload to Firebase
                     firebase_path = f'/groups/{group_name}/files/{firebase_key}'
+                    logger.debug('[PUSH] Preparing upload: local=%s -> firebase=%s', file_path, firebase_path)
                     if firebase_write_data(firebase_path, file_payload):
                         logger.info('[PUSH] Uploaded file to Firebase: %s', firebase_key)
                         files_uploaded += 1
@@ -688,39 +702,44 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                     # compute the full key path for routing decisions
                     full_key = (current_path + '/' + key).lstrip('/').rstrip('/') if current_path else key
                     if isinstance(val, dict) and 'content' in val and '_meta' in val:
-                        # This is a file - materialize it directly in target_dir
+                        # This is a file - materialize it according to the remote key structure
                         try:
-                            # Get proper file name with extension
+                            # File name is derived from the current key segment
                             file_name = _get_file_name_with_extension(key)
                             content_b64 = val.get('content')
                             logger.debug('[PULL] Processing file: %s (original key: %s, full_key: %s)', file_name, key, full_key)
-                            
+
                             # Base64 decode
                             blob = base64.urlsafe_b64decode(content_b64.encode('utf-8'))
                             logger.debug('[PULL] Decoded %d bytes for %s', len(blob), file_name)
-                            
+
                             # Try to decrypt if key is available
                             decrypted = False
                             if fernet_key:
                                 from cryptography.fernet import Fernet
                                 try:
                                     cipher = Fernet(fernet_key)
-
                                     blob = cipher.decrypt(blob)
                                     decrypted = True
                                     logger.info('[PULL] Decrypted file: %s (size: %d bytes)', file_name, len(blob))
                                 except Exception as de:
                                     logger.warning('[PULL] Decrypt failed for %s: %s (using as-is)', file_name, de)
                             else:
-                                logger.warning('[PULL] No key available; skipping decrypt for %s', file_name)
-                            
-                            # Determine target subdirectory based on file type
-                            file_dir = target_dir
+                                logger.debug('[PULL] No key available; using raw blob for %s', file_name)
 
+                            # Determine where to write the file.
+                            # Prefer preserving remote subdirectory structure (except imports/)
+                            file_dir = target_dir
                             # If the file was stored under 'imports/' in Firebase, materialize it directly in group root
                             if full_key.startswith('imports/'):
                                 file_dir = target_dir
                                 logger.debug('[PULL] Routing imports file to group root: %s', file_name)
+                            # If the remote key contains subdirectories, use them as local subdirs
+                            elif '/' in full_key:
+                                subdir = os.path.dirname(full_key)
+                                file_dir = os.path.join(target_dir, subdir)
+                                os.makedirs(file_dir, exist_ok=True)
+                                logger.debug('[PULL] Preserving remote subdir %s for file %s', subdir, file_name)
                             # Special-case Chart of Accounts files: always materialize in group root
                             elif any(name_part in file_name for name_part in ('chart_of_accounts_b', 'chart_of_accounts_g')):
                                 file_dir = target_dir
@@ -730,21 +749,19 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                                 file_dir = os.path.join(target_dir, 'excel')
                                 os.makedirs(file_dir, exist_ok=True)
                                 logger.debug('[PULL] Routing .xlsx file to excel/ subdirectory: %s', file_name)
-
                             # Route epsilon_invoices files to epsilon/ subdirectory
                             elif 'epsilon_invoices' in file_name:
                                 file_dir = os.path.join(target_dir, 'epsilon')
                                 os.makedirs(file_dir, exist_ok=True)
                                 logger.debug('[PULL] Routing epsilon_invoices file to epsilon/ subdirectory: %s', file_name)
-                            
+
                             # Write file to appropriate directory
                             target_file_path = os.path.join(file_dir, file_name)
-                            # If this is a log file, append the content to the existing
-                            # server log (paste behavior). For other files, overwrite.
+                            # If this is a log file, append the content to the existing server log (paste behavior).
+                            # For other files, overwrite with the Firebase copy (login-triggered pull should replace locals).
                             if file_name.endswith('.log'):
                                 # Ensure directory exists
                                 os.makedirs(file_dir, exist_ok=True)
-                                # Append binary content so we preserve original bytes
                                 with open(target_file_path, 'ab') as fh:
                                     fh.write(blob)
                                 logger.info('[PULL] Appended log %s to %s (size: %d bytes, decrypted: %s)',
@@ -753,7 +770,7 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                                 os.makedirs(file_dir, exist_ok=True)
                                 with open(target_file_path, 'wb') as fh:
                                     fh.write(blob)
-                                logger.info('[PULL] Wrote file %s to %s (size: %d bytes, decrypted: %s)', 
+                                logger.info('[PULL] Wrote (overwrite) file %s to %s (size: %d bytes, decrypted: %s)', 
                                            file_name, file_dir, len(blob), decrypted)
                             
                             # Set mtime if available
