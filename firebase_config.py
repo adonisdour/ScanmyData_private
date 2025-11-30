@@ -434,7 +434,7 @@ def firebase_write_compressed(path: str, data: Dict[str, Any], compress_threshol
         return False
 
 
-def firebase_push_group_files(group_name: str, local_data_root: str = None) -> bool:
+def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_run: bool = False, verbose: bool = False):
     """Upload group files from local data/ folder to Firebase /groups/{group_name}/files.
     
     Also detects and removes files from Firebase that have been deleted locally.
@@ -468,6 +468,9 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
         files_uploaded = 0
         files_failed = 0
         files_deleted = 0
+        # When dry_run is requested, collect candidate lists instead of performing writes
+        upload_candidates = []
+        delete_candidates = []
         
         # Build set of local file keys (what should exist in Firebase)
         local_file_keys = set()
@@ -554,15 +557,23 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
                         }
                     }
                     
-                    # Upload to Firebase
+                    # Upload to Firebase (or simulate if dry_run)
                     firebase_path = f'/groups/{group_name}/files/{firebase_key}'
-                    logger.debug('[PUSH] Preparing upload: local=%s -> firebase=%s', file_path, firebase_path)
-                    if firebase_write_data(firebase_path, file_payload):
-                        logger.info('[PUSH] Uploaded file to Firebase: %s', firebase_key)
-                        files_uploaded += 1
+                    if verbose:
+                        logger.info('[PUSH] Preparing upload: local=%s -> firebase=%s', file_path, firebase_path)
                     else:
-                        files_failed += 1
-                        logger.error('[PUSH] Failed to upload file to Firebase: %s', firebase_key)
+                        logger.debug('[PUSH] Preparing upload: local=%s -> firebase=%s', file_path, firebase_path)
+
+                    if dry_run:
+                        upload_candidates.append(firebase_key)
+                        files_uploaded += 0
+                    else:
+                        if firebase_write_data(firebase_path, file_payload):
+                            logger.info('[PUSH] Uploaded file to Firebase: %s', firebase_key)
+                            files_uploaded += 1
+                        else:
+                            files_failed += 1
+                            logger.error('[PUSH] Failed to upload file to Firebase: %s', firebase_key)
                 
                 except Exception as e:
                     files_failed += 1
@@ -596,11 +607,14 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
                 for deleted_key in deleted_keys:
                     try:
                         delete_path = f'/groups/{group_name}/files/{deleted_key}'
-                        if firebase_write_data(delete_path, None):  # Writing None deletes the key
-                            logger.info('[PUSH] Deleted file from Firebase: %s', deleted_key)
-                            files_deleted += 1
+                        if dry_run:
+                            delete_candidates.append(deleted_key)
                         else:
-                            logger.warning('[PUSH] Failed to delete file from Firebase: %s', deleted_key)
+                            if firebase_write_data(delete_path, None):  # Writing None deletes the key
+                                logger.info('[PUSH] Deleted file from Firebase: %s', deleted_key)
+                                files_deleted += 1
+                            else:
+                                logger.warning('[PUSH] Failed to delete file from Firebase: %s', deleted_key)
                     except Exception as e:
                         logger.error('[PUSH] Error deleting file from Firebase %s: %s', deleted_key, e)
         
@@ -610,7 +624,17 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None) -> b
         # Log summary
         logger.info('[PUSH] Pushed files for group %s: uploaded %d files, deleted %d files, %d failed', 
                     group_name, files_uploaded, files_deleted, files_failed)
-        
+
+        if dry_run:
+            return {
+                'success': True,
+                'upload_candidates': upload_candidates,
+                'delete_candidates': delete_candidates,
+                'uploaded_count': len(upload_candidates),
+                'deleted_count': len(delete_candidates),
+                'failed_count': files_failed
+            }
+
         return True
     
     except Exception as e:

@@ -635,7 +635,9 @@ def api_sync_push():
     if not group:
         return jsonify({'success': False, 'error': 'no_group_provided'}), 400
     try:
-        ok = firebase_config.firebase_push_group_files(group)
+        dry_run = bool(payload.get('dry_run'))
+        verbose = bool(payload.get('verbose'))
+        ok = firebase_config.firebase_push_group_files(group, dry_run=dry_run, verbose=verbose)
         # If this push was invoked as part of logout, finish logout on success
         if payload.get('logout_after') and ok:
             try:
@@ -643,6 +645,9 @@ def api_sync_push():
                 session.pop('active_group', None)
             except Exception:
                 pass
+        # If dry_run requested, firebase_push_group_files returns a dict with candidates
+        if isinstance(ok, dict):
+            return jsonify(ok)
         return jsonify({'success': bool(ok)})
     except Exception as e:
         logger.exception('api_sync_push failed')

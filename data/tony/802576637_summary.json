@@ -1153,5 +1153,21 @@
     "χαρακτηρισμός": "αποδειξακια",
     "created_at": "2025-11-28T14:18:11",
     "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400011803109512",
+    "issueDate": "29/11/2025",
+    "series": "11Μ0ΤΔΑ",
+    "aa": "10175",
+    "AA": "10175",
+    "type": "1.1",
+    "vatCategory": "1",
+    "totalNetValue": "36,05",
+    "totalVatAmount": "8,65",
+    "totalValue": "44,70",
+    "classification": "αχαρακτηριστο",
+    "AFM_issuer": "094439854",
+    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+    "paymentMethodType": "7"
   }
 ]

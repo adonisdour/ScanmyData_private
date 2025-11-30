@@ -725,6 +725,16 @@ def _create_detailed_description(action: str, details: Dict[str, Any]) -> str:
             
             return f"Διαγραφή {count} γραμμών από αρχείο: {excel_path}"
         
+        elif action in ['fetch_data', 'ληψη παραστατικων']:
+            # details may be nested under 'details' or present directly
+            actual = details.get('details', details) if isinstance(details, dict) else details
+            date_from = actual.get('date_from') or actual.get('από') or ''
+            date_to = actual.get('date_to') or actual.get('έως') or ''
+            vat = actual.get('client_vat') or actual.get('vat') or actual.get('πελατης') or ''
+            added_docs = actual.get('added_docs') or 0
+            added_summaries = actual.get('added_summaries') or actual.get('summaries') or 0
+            return f"Λήψη παραστατικών για πελάτη {vat} από {date_from} έως {date_to}. Προστέθηκαν {added_docs} έγγραφα, {added_summaries} συνοψίσεις."
+
         elif action in ['user_logged_in', 'login']:
             ip_address = details.get('ip_address', 'Άγνωστο')
             return f"Σύνδεση από IP: {ip_address}"
@@ -803,7 +813,119 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
     """Get activity logs from Firebase"""
     try:
         if group_name:
-            logs = firebase_config.firebase_get_group_activity_logs(group_name, limit)
+            logs = firebase_config.firebase_get_group_activity_logs(group_name, limit) or []
+
+            # If Firebase returned no logs (or fewer than requested), try the local
+            # per-group activity.log fallback so admin panel still shows recent activity
+            try:
+                import os, json
+                data_dir = os.path.join(os.getcwd(), 'data')
+                group_dir = os.path.join(data_dir, str(group_name))
+                activity_path = os.path.join(group_dir, 'activity.log')
+                if os.path.exists(activity_path):
+                    local_lines = []
+                    with open(activity_path, 'r', encoding='utf-8') as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            # Try to parse JSON line first
+                            parsed = None
+                            try:
+                                parsed = json.loads(line)
+                            except Exception:
+                                parsed = None
+
+                            if parsed and isinstance(parsed, dict):
+                                local_lines.append(parsed)
+                                continue
+
+                            # Fallback: try to parse 'TIMESTAMP - message' plain lines
+                            # e.g. '2025-11-22T22:37:50.740089+00:00 - Bulk fetch performed: ...'
+                            try:
+                                if ' - ' in line:
+                                    ts_part, msg_part = line.split(' - ', 1)
+                                    ts = ts_part.strip()
+                                    msg = msg_part.strip()
+                                    # Detect bulk fetch pattern and convert to structured entry
+                                    # Pattern: Bulk fetch performed: <d1> to <d2>, VAT <vat>, <docs> docs + <summaries> summaries by <email>
+                                    import re
+                                    m = re.search(r'Bulk fetch performed:\s*(?P<d1>\d{2}/\d{2}/\d{4})\s*to\s*(?P<d2>\d{2}/\d{2}/\d{4}),\s*VAT\s*(?P<vat>\d+),\s*(?P<docs>\d+)\s*docs\s*\+\s*(?P<summaries>\d+)\s*summaries\s*by\s*(?P<by>.+)$', msg)
+                                    if m:
+                                        try:
+                                            d1 = m.group('d1')
+                                            d2 = m.group('d2')
+                                            vat = m.group('vat')
+                                            docs = int(m.group('docs') or 0)
+                                            summaries = int(m.group('summaries') or 0)
+                                            by = m.group('by').strip()
+                                        except Exception:
+                                            d1 = d2 = vat = by = ''
+                                            docs = summaries = 0
+
+                                        entry = {
+                                            'timestamp': ts,
+                                            'group': str(group_name),
+                                            'action': 'ληψη παραστατικων',
+                                            'details': {
+                                                'date_from': d1,
+                                                'date_to': d2,
+                                                'client_vat': vat,
+                                                'client_label': vat,
+                                                'added_docs': docs,
+                                                'added_summaries': summaries,
+                                                'by': by
+                                            }
+                                        }
+                                        local_lines.append(entry)
+                                        continue
+
+                                    # If not bulk fetch, store as generic log_message
+                                    entry = {
+                                        'timestamp': ts,
+                                        'group': str(group_name),
+                                        'action': 'log_message',
+                                        'details': {
+                                            'message': msg
+                                        }
+                                    }
+                                    local_lines.append(entry)
+                                    continue
+                            except Exception:
+                                pass
+
+                            # Last resort: store raw line as a message with no timestamp
+                            try:
+                                entry = {
+                                    'timestamp': '',
+                                    'group': str(group_name),
+                                    'action': 'log_message',
+                                    'details': {
+                                        'message': line
+                                    }
+                                }
+                                local_lines.append(entry)
+                            except Exception:
+                                continue
+                    # Prepend local logs (most recent at file bottom) - convert to newest-first
+                    if local_lines:
+                        # Keep only up to 'limit' entries and avoid duplicates by timestamp+user+action
+                        existing_keys = set()
+                        for e in logs:
+                            k = (str(e.get('timestamp','')) + '|' + str(e.get('user_id','')) + '|' + str(e.get('action','')))
+                            existing_keys.add(k)
+                        # Add local entries reversed (newest first) and only if not present
+                        for entry in reversed(local_lines):
+                            k = (str(entry.get('timestamp','')) + '|' + str(entry.get('user_id','')) + '|' + str(entry.get('action','')))
+                            if k in existing_keys:
+                                continue
+                            logs.append(entry)
+                            existing_keys.add(k)
+                            if len(logs) >= limit:
+                                break
+            except Exception:
+                # Non-fatal fallback; continue with whatever logs we have
+                pass
         else:
             # Get all activity logs from all groups
             all_logs = []
@@ -942,7 +1064,9 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 'backup_deleted': 'Διαγραφή backup',
                 'group_restored': 'Επαναφορά ομάδας',
                 'export_bridge': 'Λήψη γέφυρας',
+                'fetch_data': 'Λήψη Παραστατικών',
                 'export_expenses': 'Λήψη εξοδολογίου',
+                'ληψη παραστατικων': 'Λήψη Παραστατικών',
                 'user_deleted': 'Διαγραφή χρήστη',
                 'delete_rows': 'Διαγραφή γραμμών',
             }

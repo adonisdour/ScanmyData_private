@@ -8,6 +8,16 @@
   }
 </style>
 <div class="max-w-14xl mx-auto p-4">
+  <!-- Wait overlay (hidden by default) -->
+  <div id="waitOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center" style="display:none;">
+    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 flex items-center gap-4 shadow-lg" style="min-width:320px;">
+      <div class="spinner" aria-hidden="true" style="width:36px;height:36px;border:4px solid #e5e7eb;border-top-color:#3b82f6;border-radius:50%;animation:spin 1s linear infinite"></div>
+      <div>
+        <div id="waitOverlayTitle" class="text-lg font-semibold text-gray-800">Λήψη παραστατικών...</div>
+        <div id="waitOverlayMsg" class="text-sm text-gray-600">Παρακαλώ περιμένετε — η διαδικασία μπορεί να διαρκέσει.</div>
+      </div>
+    </div>
+  </div>
   <div class="flex items-center justify-between mb-4">
     <div>
       <h1 class="text-2xl font-semibold text-gray-800">Λήψη Παραστατικών MYDATA</h1>
@@ -117,6 +127,59 @@
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/el.js"></script>
 
+<!-- Dark-mode overrides for overlay and flatpickr -->
+<style>
+  /* Wait overlay in dark mode: make panel darker and texts light */
+  [data-theme="dark"] #waitOverlay {
+    background-color: rgba(2,6,23,0.7) !important; /* darker backdrop */
+  }
+  [data-theme="dark"] #waitOverlay > div {
+    background-color: #0b1220 !important;
+    border: 1px solid rgba(255,255,255,0.04) !important;
+    box-shadow: 0 8px 30px rgba(2,6,23,0.6) !important;
+  }
+  [data-theme="dark"] #waitOverlayTitle { color: #f3f4f6 !important; }
+  [data-theme="dark"] #waitOverlayMsg { color: #cbd5e1 !important; }
+
+  /* Spinner colors in dark mode */
+  [data-theme="dark"] #waitOverlay .spinner {
+    border-color: #374151 !important; /* base */
+    border-top-color: #60a5fa !important; /* accent */
+  }
+
+  /* Flatpickr dark adjustments to avoid washed-out look */
+  [data-theme="dark"] .flatpickr-input,
+  [data-theme="dark"] input.flatpickr-input {
+    background: transparent !important;
+    color: #e5e7eb !important;
+    border-color: #4b5563 !important;
+  }
+  [data-theme="dark"] .flatpickr-calendar {
+    background: #0b1220 !important;
+    color: #d1d5db !important;
+    border: 1px solid #374151 !important;
+    box-shadow: 0 6px 20px rgba(2,6,23,0.6) !important;
+  }
+  [data-theme="dark"] .flatpickr-months .flatpickr-month {
+    color: #e5e7eb !important;
+  }
+  [data-theme="dark"] .flatpickr-weekday {
+    color: #9ca3af !important;
+  }
+  [data-theme="dark"] .flatpickr-day {
+    color: #d1d5db !important;
+  }
+  [data-theme="dark"] .flatpickr-day.today {
+    background: rgba(96,165,250,0.12) !important;
+    color: #60a5fa !important;
+  }
+  [data-theme="dark"] .flatpickr-day.selected,
+  [data-theme="dark"] .flatpickr-day.selected:hover {
+    background: #1f3a55 !important;
+    color: #cfe8ff !important;
+  }
+</style>
+
 <script>
 document.addEventListener("DOMContentLoaded", function() {
   // Initialize Flatpickr with Greek locale
@@ -215,6 +278,26 @@ document.addEventListener("DOMContentLoaded", function() {
       setTimeout(()=>b.remove(), 800);
     }, 5000);
   });
+
+  // Show wait overlay when the fetch form is submitted
+  const fetchForm = document.querySelector('form[method="POST"]');
+  const waitOverlay = document.getElementById('waitOverlay');
+  if (fetchForm && waitOverlay) {
+    fetchForm.addEventListener('submit', function(e){
+      // show overlay immediately
+      try {
+        waitOverlay.style.display = 'flex';
+        // ensure focus on overlay for screen readers
+        waitOverlay.setAttribute('aria-hidden', 'false');
+      } catch(err){}
+      // leave normal form submit to proceed; overlay will hide when response renders
+    });
+  }
 });
+
+// spinner keyframes
+const s = document.createElement('style');
+s.innerHTML = '@keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }';
+document.head.appendChild(s);
 </script>
 {% endblock %}

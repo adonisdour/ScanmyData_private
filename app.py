@@ -6779,12 +6779,33 @@ def fetch():
             if selected:
                 set_last_fetch_date(selected)
             
-            # Log fetch operation
+            # Log fetch operation as structured activity (so admin UI shows details)
             try:
-                from auth import _append_group_log, get_active_group
+                from auth import get_active_group
+                from utils import log_user_activity
                 grp = get_active_group()
                 if grp:
-                    _append_group_log(grp, f"Bulk fetch performed: {d1} to {d2}, VAT {vat}, {added_docs} docs + {added_summaries} summaries by {current_user.username if getattr(current_user, 'is_authenticated', False) else 'anonymous'}")
+                    uid = getattr(current_user, 'id', 'anonymous') if getattr(current_user, 'is_authenticated', False) else 'anonymous'
+                    u_email = getattr(current_user, 'email', None) if getattr(current_user, 'is_authenticated', False) else None
+                    u_name = getattr(current_user, 'username', None) if getattr(current_user, 'is_authenticated', False) else None
+                    details = {
+                        'date_from': str(d1),
+                        'date_to': str(d2),
+                        'vat': vat,
+                        'added_docs': added_docs,
+                        'added_summaries': added_summaries,
+                        'fetched_count': len(all_rows)
+                    }
+                    # action 'fetch_data' used elsewhere; include descriptive details
+                    try:
+                        log_user_activity(uid, grp.name if getattr(grp, 'name', None) else grp.data_folder, 'fetch_data', details=details, user_email=u_email, user_username=u_name)
+                    except Exception:
+                        # best-effort: fall back to appending a plain-text log if structured logging fails
+                        try:
+                            from auth import _append_group_log
+                            _append_group_log(grp, f"Bulk fetch performed: {d1} to {d2}, VAT {vat}, {added_docs} docs + {added_summaries} summaries by {u_name or 'anonymous'}")
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
