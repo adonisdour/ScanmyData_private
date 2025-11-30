@@ -268,9 +268,12 @@ def logout():
         )
         print(f"DEBUG: Logout logging result: {result}")
     except Exception as e:
-        logger.exception(f"Failed to log logout activity: {e}")
+        try:
+            current_app.logger.exception(f"Failed to log logout activity: {e}")
+        except Exception:
+            pass
+        # Don't abort logout on logging failure; continue to clear session
         print(f"DEBUG: Exception in logout logging: {e}")
-        raise  # Re-raise to see the error
 
     # Clear session lock when user logs out
     try:
@@ -285,7 +288,10 @@ def logout():
             except Exception:
                 pass
     except Exception:
-        pass
+        try:
+            current_app.logger.exception('Failed to clear session during logout')
+        except Exception:
+            pass
 
     logout_user()
     flash('Έχετε αποσυνδεθεί.', 'info')
@@ -293,6 +299,8 @@ def logout():
     session.pop('active_credential', None)
     session.pop('_remote_qr_owner', None)
     session.pop('active_group', None)
+    # clear stored session id from flask session
+    session.pop('session_id', None)
     return redirect(url_for('auth.login'))
 
 
@@ -740,11 +748,38 @@ def api_login():
     session.pop('_remote_qr_owner', None)
 
     login_user(user)
+    # create and store session id to prevent concurrent logins (DB-backed)
+    try:
+        session_id = secrets.token_urlsafe(32)
+        user.start_session(session_id)
+        db.session.commit()
+        session['session_id'] = session_id
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
     return jsonify({'ok': True, 'username': user.username})
 
 
 @auth_bp.route('/api/logout', methods=['POST'])
 def api_logout():
+    # Attempt to end DB-backed session if present
+    try:
+        from models import db as _db
+        sid = session.get('session_id') or getattr(current_user, 'current_session_id', None)
+        try:
+            if getattr(current_user, 'is_authenticated', False):
+                current_user.end_session(sid)
+                _db.session.commit()
+        except Exception:
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     try:
         logout_user()
     except Exception:
@@ -752,6 +787,8 @@ def api_logout():
     # clear session state related to active credential
     session.pop('active_credential', None)
     session.pop('_remote_qr_owner', None)
+    # also clear session_id from flask session
+    session.pop('session_id', None)
     return jsonify({'ok': True})
 
 

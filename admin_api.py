@@ -177,6 +177,21 @@ def api_delete_group_by_id(group_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@admin_api_bp.route('/users/<int:user_id>/force_unlock', methods=['POST'])
+@login_required
+@_require_admin
+def api_force_unlock_user(user_id: int):
+    """Admin API: force-clear a user's session claim."""
+    try:
+        res = admin_panel.admin_force_unlock(user_id, current_user)
+        if res.get('ok'):
+            return jsonify({'success': True, 'cleared_previous_session': res.get('cleared_previous', False)})
+        return jsonify({'success': False, 'error': res.get('error', 'unknown')}), 400
+    except Exception as e:
+        logger.error(f"Error force-unlocking user {user_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @admin_api_bp.route('/activity', methods=['GET'])
 @login_required
 @_require_admin

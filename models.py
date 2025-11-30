@@ -117,8 +117,17 @@ class User(UserMixin, db.Model):
     def end_session(self, session_id: str) -> int:
         """End the session if session_id matches. Returns duration seconds added (0 if none)."""
         try:
-            if not session_id or self.current_session_id != session_id:
+            # If a session_id is provided, require it to match the current claim.
+            # If no session_id is provided (e.g. flask session cookie missing),
+            # allow force-clearing the current user's session claim here because
+            # this method is typically invoked during an authenticated logout.
+            if session_id:
+                if self.current_session_id != session_id:
+                    return 0
+            # If there's no claimed session to end, nothing to do
+            if not self.current_session_id:
                 return 0
+
             now = datetime.datetime.utcnow()
             started = self.session_started_at or now
             duration = int((now - started).total_seconds())

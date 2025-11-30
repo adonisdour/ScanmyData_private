@@ -213,6 +213,42 @@ def admin_delete_user(user_id: int, current_admin: User) -> Dict[str, Any]:
         return {'ok': False, 'error': str(e)}
 
 
+def admin_force_unlock(user_id: int, current_admin: User) -> Dict[str, Any]:
+    """Force-clear the DB session claim for a user (support/admin tool).
+    Returns dict {'ok': bool, 'cleared_previous': bool, 'error': str}
+    """
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return {'ok': False, 'error': 'user_not_found'}
+
+        prev_sid = getattr(user, 'current_session_id', None)
+        user.current_session_id = None
+        user.session_started_at = None
+        user.last_active_at = None
+        db.session.commit()
+
+        try:
+            firebase_log_activity(
+                getattr(current_admin, 'pw_hash', current_admin.id),
+                'admin',
+                'force_unlock',
+                {'target_user_id': user.id, 'previous_session_id': prev_sid}
+            )
+        except Exception:
+            logger.debug('Failed to write firebase_log_activity for force_unlock')
+
+        logger.info(f"Admin {getattr(current_admin, 'username', current_admin.id)} force-unlocked user {user.username} (cleared_previous={bool(prev_sid)})")
+        return {'ok': True, 'cleared_previous': bool(prev_sid)}
+    except Exception as e:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        logger.error(f"Failed to force-unlock user {user_id}: {e}")
+        return {'ok': False, 'error': str(e)}
+
+
 # ============================================================================
 # Group Management
 # ============================================================================

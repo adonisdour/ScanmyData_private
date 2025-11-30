@@ -1,0 +1,13 @@
+import sqlite3, os
+DB = os.path.join(r'C:\Users\Antonis\Documents\firebed\Firebed_private', 'firebed.db')
+print('DB file:', DB)
+conn = sqlite3.connect(DB)
+cur = conn.cursor()
+cur.execute('SELECT id, username, current_session_id FROM user WHERE id=?',(5,))
+print('Before:', cur.fetchone())
+cur.execute('UPDATE user SET current_session_id=NULL, session_started_at=NULL, last_active_at=NULL WHERE id=?',(5,))
+conn.commit()
+cur.execute('SELECT id, username, current_session_id FROM user WHERE id=?',(5,))
+print('After:', cur.fetchone())
+conn.close()
+print('Done')

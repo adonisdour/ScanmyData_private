@@ -661,11 +661,28 @@ def sync_start_push():
     group = request.args.get('group') or session.get('active_group')
     if not group:
         # proceed to logout immediately
-        logout_user()
+        # End DB-backed session before logging out to avoid leaving stale locks
+        try:
+            sid = session.get('session_id')
+            try:
+                dur = current_user.end_session(sid)
+                db.session.commit()
+            except Exception:
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            session.pop('session_id', None)
+        except Exception:
+            pass
         try:
             session.pop('active_group', None)
         except Exception:
             pass
+        logout_user()
         flash('Έχετε αποσυνδεθεί.', 'info')
         return redirect(url_for('firebase_auth.firebase_login'))
     return render_template('sync_progress.html', action='push', group=group)
@@ -700,8 +717,29 @@ def api_sync_push():
         # If this push was invoked as part of logout, finish logout on success
         if payload.get('logout_after') and ok:
             try:
+                # End DB-backed session before logging out to avoid leaving stale locks
+                try:
+                    sid = session.get('session_id')
+                    try:
+                        dur = current_user.end_session(sid)
+                        db.session.commit()
+                    except Exception:
+                        try:
+                            db.session.rollback()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # clear flask session id and active group, then logout
+                try:
+                    session.pop('session_id', None)
+                except Exception:
+                    pass
+                try:
+                    session.pop('active_group', None)
+                except Exception:
+                    pass
                 logout_user()
-                session.pop('active_group', None)
             except Exception:
                 pass
         # If dry_run requested, firebase_push_group_files returns a dict with candidates
