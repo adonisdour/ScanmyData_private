@@ -7,6 +7,8 @@ from models import db, User, Group
 import datetime
 from firebase_auth_handlers import FirebaseAuthHandler
 import email_utils
+import secrets
+import utils
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -165,7 +167,42 @@ def login():
         session.pop('active_credential', None)
         session.pop('_remote_qr_owner', None)
 
+        # Prevent concurrent login: if a session lock exists for this user, deny login
+        try:
+            # If the user already has a live session (recent heartbeat), block login.
+            # Allow takeover if the existing session appears stale (> timeout).
+            from models import db as _db
+            SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 300))
+            existing_sid = getattr(user, 'current_session_id', None)
+            last_active = getattr(user, 'last_active_at', None)
+            if existing_sid and last_active:
+                try:
+                    now = datetime.datetime.utcnow()
+                    delta = now - last_active
+                    if delta.total_seconds() <= SESSION_TIMEOUT:
+                        current_app.logger.info(f"Blocked local auth login; live session exists for user id={user.id}")
+                        flash('Ο λογαριασμός είναι ήδη ενεργός σε άλλη συσκευή/σύνδεση.', 'warning')
+                        return redirect(url_for('auth.login'))
+                    else:
+                        # stale session -> allow takeover (fall through)
+                        current_app.logger.info(f"Stale session for user id={user.id}, allowing takeover")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         login_user(user)
+        # create and store session id to prevent concurrent logins (DB-backed)
+        try:
+            session_id = secrets.token_urlsafe(32)
+            user.start_session(session_id)
+            db.session.commit()
+            session['session_id'] = session_id
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
         # record last login
         try:
             user.last_login = datetime.datetime.utcnow()
@@ -234,6 +271,21 @@ def logout():
         logger.exception(f"Failed to log logout activity: {e}")
         print(f"DEBUG: Exception in logout logging: {e}")
         raise  # Re-raise to see the error
+
+    # Clear session lock when user logs out
+    try:
+        sid = session.get('session_id')
+        # end session and accumulate duration
+        try:
+            dur = current_user.end_session(sid)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     logout_user()
     flash('Έχετε αποσυνδεθεί.', 'info')

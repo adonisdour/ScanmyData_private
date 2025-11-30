@@ -51,6 +51,12 @@ def admin_list_all_users(include_deleted: bool = False) -> List[Dict[str, Any]]:
         result = []
         
         for user in users:
+            try:
+                active = bool(user.is_online())
+            except Exception:
+                active = False
+            started_at = getattr(user, 'session_started_at', None)
+
             result.append({
                 'id': user.id,
                 'username': user.username,
@@ -60,7 +66,10 @@ def admin_list_all_users(include_deleted: bool = False) -> List[Dict[str, Any]]:
                 'groups': [{'id': g.id, 'name': g.name} for g in user.groups],
                 'group_count': len(user.groups),
                 'is_admin': getattr(user, 'is_admin', False),
-                'is_admin_of': [g.name for g in user.groups if user.role_for_group(g) == 'admin']
+                'is_admin_of': [g.name for g in user.groups if user.role_for_group(g) == 'admin'],
+                'active': active,
+                'session_started_at': str(started_at) if started_at else None,
+                'total_active_minutes': int((getattr(user, 'total_active_seconds', 0) or 0) / 60)
             })
         
         return result
@@ -114,6 +123,26 @@ def admin_get_user_details(user_id: int) -> Optional[Dict[str, Any]]:
         except Exception:
             recent = []
 
+        # compute total active time from recorded sessions + current live session
+        try:
+            total_active_seconds = int(getattr(user, 'total_active_seconds', 0) or 0)
+        except Exception:
+            total_active_seconds = 0
+
+        try:
+            current_minutes = None
+            if getattr(user, 'current_session_id', None) and getattr(user, 'session_started_at', None):
+                now = datetime.utcnow()
+                started = user.session_started_at
+                elapsed = now - started
+                current_minutes = int(elapsed.total_seconds() / 60)
+        except Exception:
+            current_minutes = None
+
+        total_active_minutes = int(total_active_seconds / 60)
+        if current_minutes:
+            total_active_minutes += current_minutes
+
         return {
             'id': user.id,
             'username': user.username,
@@ -123,6 +152,8 @@ def admin_get_user_details(user_id: int) -> Optional[Dict[str, Any]]:
             'last_login': str(getattr(user, 'last_login', None)),
             'total_size_mb': round(total_size / (1024 * 1024), 2),
             'recent_activity': recent,
+            'total_active_minutes': total_active_minutes,
+            'current_session_minutes': current_minutes,
         }
     
     except Exception as e:

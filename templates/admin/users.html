@@ -20,7 +20,9 @@
                     <th>Username</th>
                     <th>Email</th>
                     <th>Groups</th>
+                    <th>Online</th>
                     <th>Admin</th>
+                    <th>Active Time</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -40,10 +42,27 @@
                         {% endif %}
                     </td>
                     <td>
+                        {% if user.active %}
+                            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#28a745;margin-right:6px;vertical-align:middle;"></span>
+                        {% else %}
+                            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#dc3545;margin-right:6px;vertical-align:middle;"></span>
+                        {% endif %}
+                        {% if user.session_started_at %}
+                            <small class="text-muted">{{ user.session_started_at }}</small>
+                        {% endif %}
+                    </td>
+                    <td>
                         {% if user.is_admin %}
                             <span class="badge badge-warning">Yes</span>
                         {% else %}
                             <span class="badge badge-light">No</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if user.total_active_minutes is defined %}
+                            <small>{{ user.total_active_minutes }} min</small>
+                        {% else %}
+                            <small class="text-muted">-</small>
                         {% endif %}
                     </td>
                     <td>

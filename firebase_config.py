@@ -22,6 +22,7 @@ import time
 import threading
 from typing import List, Dict
 import encryption
+import math
 
 # ============================================================================
 # Firebase Initialization
@@ -677,6 +678,32 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
 
         files_created = 0
         files_failed = 0
+        # Progress tracking helpers
+        def _progress_path():
+            try:
+                grp_dir = os.path.join(os.getcwd(), 'data', group_name)
+                os.makedirs(grp_dir, exist_ok=True)
+                return os.path.join(grp_dir, '.sync_progress.json')
+            except Exception:
+                return os.path.join(os.getcwd(), 'data', f'.sync_progress_{group_name}.json')
+
+        def _set_progress(status: str, percent: int = 0, message: str = ''):
+            try:
+                p = _progress_path()
+                with open(p, 'w', encoding='utf-8') as fh:
+                    json.dump({'status': status, 'percent': int(percent or 0), 'message': message}, fh)
+            except Exception:
+                pass
+
+        def _clear_progress():
+            try:
+                p = _progress_path()
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+        _set_progress('running', 0, 'Starting pull')
         
         # Get encryption key once
         fernet_key = encryption._ensure_key()
@@ -713,6 +740,21 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
             # If no extension found, return as-is
             return key_str
         
+        # compute total files to process for progress estimation
+        def _count_files(obj):
+            if not isinstance(obj, dict):
+                return 0
+            c = 0
+            for key, val in obj.items():
+                if isinstance(val, dict) and 'content' in val and '_meta' in val:
+                    c += 1
+                elif isinstance(val, dict):
+                    c += _count_files(val)
+            return c
+
+        total_files = _count_files(exported) or 0
+        processed_files = 0
+
         def _recursive_process(obj, current_path=""):
             """Recursively find all files (flattened) and materialize them"""
             nonlocal files_created, files_failed
@@ -806,6 +848,13 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                                 pass
                             
                             files_created += 1
+                            # update progress after materializing a file
+                            try:
+                                processed_files_local = files_created
+                                pct = 100 if total_files == 0 else int(min(100, math.floor((processed_files_local / float(total_files)) * 100)))
+                                _set_progress('running', pct, f'Pulled {processed_files_local}/{total_files} files')
+                            except Exception:
+                                pass
                         except Exception as e:
                             files_failed += 1
                             logger.error('[PULL] Failed to materialize file %s: %s', key, e)
@@ -875,7 +924,11 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
         # Log summary
         logger.info('[PULL] Pulled files for group %s: created %d files, %d failed. Stored in: %s', 
                     group_name, files_created, files_failed, target_dir)
-        
+        # mark progress as complete
+        try:
+            _set_progress('done', 100, f'Completed: {files_created} files')
+        except Exception:
+            pass
         return True
     
     except Exception as e:
@@ -903,6 +956,22 @@ def ensure_group_data_local(group_folder: str, create_empty_dirs: bool = True) -
         True if folder now exists and is accessible (or will be created)
         False only if there's a critical error
     """
+    def _start_background_pull(folder):
+        try:
+            # mark running
+            try:
+                grp_dir = os.path.join(os.getcwd(), 'data', folder)
+                os.makedirs(grp_dir, exist_ok=True)
+                prog_file = os.path.join(grp_dir, '.sync_progress.json')
+                with open(prog_file, 'w', encoding='utf-8') as fh:
+                    json.dump({'status': 'running', 'percent': 0, 'message': 'background pull started'}, fh)
+            except Exception:
+                pass
+            # run pull worker
+            firebase_pull_group_to_local(folder, os.path.join(os.getcwd(), 'data'))
+        except Exception as e:
+            logger.error('Background pull failed for %s: %s', folder, e)
+
     try:
         if not group_folder:
             logger.warning('ensure_group_data_local: No group_folder provided')
@@ -916,8 +985,16 @@ def ensure_group_data_local(group_folder: str, create_empty_dirs: bool = True) -
             logger.debug('Group data already exists locally: %s', group_folder)
             return True
         
-        # Attempt to pull from Firebase
+        # Attempt to pull from Firebase (run in background to avoid blocking login)
         logger.info('Group data missing locally, attempting lazy-pull: %s', group_folder)
+        # Start background pull to avoid blocking requests (non-blocking behaviour)
+        try:
+            t = threading.Thread(target=_start_background_pull, args=(group_folder,), daemon=True)
+            t.start()
+            return True
+        except Exception:
+            logger.debug('Background pull spawn failed, falling back to synchronous pull for %s', group_folder)
+
         if firebase_pull_group_to_local(group_folder, data_root):
             # Pull succeeded (either found data or returned without error)
             # Ensure the folder exists (might be empty if Firebase had no data)
@@ -992,6 +1069,52 @@ def _load_sync_state() -> Dict[str, float]:
     except Exception:
         pass
     return {}
+
+
+# -----------------
+# Group sync progress helpers
+# -----------------
+def _group_progress_path(group_name: str) -> str:
+    try:
+        grp_dir = os.path.join(os.getcwd(), 'data', group_name)
+        os.makedirs(grp_dir, exist_ok=True)
+        return os.path.join(grp_dir, '.sync_progress.json')
+    except Exception:
+        return os.path.join(os.getcwd(), 'data', f'.sync_progress_{group_name}.json')
+
+
+def set_group_sync_progress(group_name: str, status: str, percent: int = 0, message: str = '') -> None:
+    try:
+        p = _group_progress_path(group_name)
+        with open(p, 'w', encoding='utf-8') as fh:
+            json.dump({'status': status, 'percent': int(percent or 0), 'message': message}, fh)
+    except Exception:
+        pass
+
+
+def get_group_sync_progress(group_name: str) -> Dict[str, Any]:
+    try:
+        p = _group_progress_path(group_name)
+        if not os.path.exists(p):
+            return {'status': 'not_started', 'percent': 0, 'message': ''}
+        with open(p, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        return {
+            'status': data.get('status', 'unknown'),
+            'percent': int(data.get('percent', 0) or 0),
+            'message': data.get('message', '')
+        }
+    except Exception:
+        return {'status': 'error', 'percent': 0, 'message': 'Could not read progress'}
+
+
+def clear_group_sync_progress(group_name: str) -> None:
+    try:
+        p = _group_progress_path(group_name)
+        if os.path.exists(p):
+            os.remove(p)
+    except Exception:
+        pass
 
 
 def _save_sync_state(state: Dict[str, float]) -> None:

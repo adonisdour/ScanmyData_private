@@ -35,6 +35,13 @@ class User(UserMixin, db.Model):
     email_verified = db.Column(db.Boolean, default=False, nullable=False)
     email_verified_at = db.Column(db.DateTime(), nullable=True)
 
+    # Session / presence tracking (for single-session lock and admin stats)
+    current_session_id = db.Column(db.String(128), nullable=True)
+    session_started_at = db.Column(db.DateTime(), nullable=True)
+    last_active_at = db.Column(db.DateTime(), nullable=True)
+    # accumulated active time in seconds (sum of finished sessions)
+    total_active_seconds = db.Column(db.Integer, nullable=False, default=0)
+
     user_groups = db.relationship('UserGroup', back_populates='user', cascade='all, delete-orphan')
 
     # Compatibility properties for legacy code that expects `email` and `pw_hash`
@@ -77,6 +84,55 @@ class User(UserMixin, db.Model):
             if ug.group_id == group.id:
                 return ug.role
         return None
+
+    # --- Session helpers ---
+    def is_online(self, timeout_seconds: int = 300) -> bool:
+        """Return True if the user's last_active_at is recent (within timeout)."""
+        try:
+            if not self.last_active_at:
+                return False
+            now = datetime.datetime.utcnow()
+            delta = now - self.last_active_at
+            return delta.total_seconds() <= int(timeout_seconds)
+        except Exception:
+            return False
+
+    def start_session(self, session_id: str) -> None:
+        """Claim a session for this user. Overwrites any stale session info."""
+        now = datetime.datetime.utcnow()
+        self.current_session_id = session_id
+        self.session_started_at = now
+        self.last_active_at = now
+
+    def heartbeat(self, session_id: str) -> bool:
+        """Update last_active_at if session_id matches current_session_id. Returns True if updated."""
+        try:
+            if not session_id or self.current_session_id != session_id:
+                return False
+            self.last_active_at = datetime.datetime.utcnow()
+            return True
+        except Exception:
+            return False
+
+    def end_session(self, session_id: str) -> int:
+        """End the session if session_id matches. Returns duration seconds added (0 if none)."""
+        try:
+            if not session_id or self.current_session_id != session_id:
+                return 0
+            now = datetime.datetime.utcnow()
+            started = self.session_started_at or now
+            duration = int((now - started).total_seconds())
+            try:
+                self.total_active_seconds = int((self.total_active_seconds or 0)) + int(duration)
+            except Exception:
+                self.total_active_seconds = int(duration)
+            # clear session claim
+            self.current_session_id = None
+            self.session_started_at = None
+            self.last_active_at = None
+            return duration
+        except Exception:
+            return 0
 
 
 class Group(db.Model):

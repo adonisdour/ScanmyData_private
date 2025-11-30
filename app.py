@@ -962,6 +962,32 @@ def get_group_base_dir():
 def credentials_path_for_request():
     return os.path.join(get_group_base_dir(), 'credentials.json')
 
+
+@app.route('/api/sync_progress', methods=['GET'])
+def api_sync_progress():
+    """Return current sync progress for the active group (non-blocking)."""
+    try:
+        from auth import get_active_group
+        grp = get_active_group()
+        if not grp or not getattr(grp, 'data_folder', None):
+            return jsonify({'status': 'no_group', 'percent': 0, 'message': 'No active group'})
+        # If Firebase is not enabled, report explicitly so frontend won't show overlay
+        try:
+            if not firebase_config.is_firebase_enabled():
+                return jsonify({'status': 'disabled', 'percent': 0, 'message': 'Firebase disabled'})
+        except Exception:
+            pass
+
+        prog = None
+        try:
+            prog = firebase_config.get_group_sync_progress(grp.data_folder)
+        except Exception:
+            prog = {'status': 'not_started', 'percent': 0, 'message': ''}
+        return jsonify(prog)
+    except Exception as e:
+        app.logger.error(f"Failed to get sync progress: {e}")
+        return jsonify({'status': 'error', 'percent': 0, 'message': str(e)}), 500
+
 def _load_credentials():
     p = Path(credentials_path_for_request())
     if not p.exists():
@@ -1017,8 +1043,9 @@ def _load_all_credentials():
 def _save_all_credentials(creds):
     base = get_group_base_dir()
     os.makedirs(base, exist_ok=True)
-    p = os.path.join(base, 'credentials.json')
-    with open(p, "w", encoding="utf-8") as f:
+    p = Path(os.path.join(base, 'credentials.json'))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
         json.dump(creds, f, ensure_ascii=False, indent=2)
 
 def _active_cred_index(creds):
@@ -1101,6 +1128,52 @@ def _profiles_set_for_active(profiles):
 @app.before_request
 def log_request_path():
     log.info("Incoming request: method=%s path=%s remote=%s ref=%s", request.method, request.path, request.remote_addr, request.referrer)
+    
+
+
+@app.before_request
+def session_heartbeat():
+    """Lightweight heartbeat to update user's last_active_at when they have an active session.
+    Writes to DB at most once every 30 seconds (tracked in flask session) to avoid excessive writes.
+    """
+    try:
+        from flask_login import current_user
+        from flask import session as _session
+        from models import db as _db
+        if not getattr(current_user, 'is_authenticated', False):
+            return None
+        sid = _session.get('session_id')
+        if not sid:
+            return None
+        # Only heartbeat if session_id matches user's claimed session
+        if getattr(current_user, 'current_session_id', None) != sid:
+            return None
+        # Throttle DB writes: only update if last heartbeat older than 30s
+        try:
+            last_ts = _session.get('_last_heartbeat_ts')
+            now = datetime.datetime.utcnow()
+            do_update = False
+            if not last_ts:
+                do_update = True
+            else:
+                try:
+                    last_dt = datetime.datetime.fromisoformat(str(last_ts))
+                    if (now - last_dt).total_seconds() > 30:
+                        do_update = True
+                except Exception:
+                    do_update = True
+            if do_update:
+                current_user.last_active_at = now
+                _db.session.commit()
+                _session['_last_heartbeat_ts'] = now.isoformat()
+        except Exception:
+            try:
+                _db.session.rollback()
+            except Exception:
+                pass
+    except Exception:
+        # fail silently
+        pass
 # --- Logging (Europe/Athens timezone) ---
 import datetime
 import logging

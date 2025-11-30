@@ -13,6 +13,15 @@
             <p><strong>Email:</strong> {{ user.email or 'N/A' }}</p>
             <p><strong>Created:</strong> {{ user.created_at }}</p>
             <p><strong>Last Login:</strong> {{ user.last_login or 'Never' }}</p>
+            <p><strong>Currently Active:</strong>
+                {% if user.current_session_minutes %}
+                    <span class="badge badge-success">Yes</span>
+                    <small class="text-muted">({{ user.current_session_minutes }} min)</small>
+                {% else %}
+                    <span class="text-muted">No</span>
+                {% endif %}
+            </p>
+            <p><strong>Total Active Time:</strong> {{ user.total_active_minutes or 0 }} minutes</p>
         </div>
     </div>
 

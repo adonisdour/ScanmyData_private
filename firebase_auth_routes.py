@@ -12,6 +12,8 @@ from firebase_auth_handlers import FirebaseAuthHandler
 from firebed_email_verification import FirebedEmailVerification
 from models import db, User, Group, UserGroup
 from sqlalchemy.exc import IntegrityError
+import secrets
+import utils
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +267,22 @@ def firebase_login():
         if not firebase_email:
             firebase_email = identifier
 
+        # If we have a local user for this email/username, check session lock before calling Firebase
+        try:
+            from sqlalchemy import or_
+            local_check_user = User.query.filter(or_(User.username == firebase_email, User.email == firebase_email)).first()
+            if local_check_user:
+                try:
+                    if utils.is_session_locked(local_check_user.id):
+                        logger.info(f"Blocked login attempt for user id={local_check_user.id} (locked)")
+                        flash('Ο λογαριασμός είναι ήδη ενεργός σε άλλη συσκευή/σύνδεση.', 'warning')
+                        return redirect(url_for('firebase_auth.firebase_login'))
+                except Exception:
+                    # on any failure, continue to auth (fail-open)
+                    pass
+        except Exception:
+            local_check_user = None
+
         # Verify with Firebase
         success, uid, error = FirebaseAuthHandler.login_user(firebase_email, password)
         
@@ -326,11 +344,39 @@ def firebase_login():
             user.email = firebase_email
         db.session.commit()
         
-        # Login user
+        # Prevent concurrent login: check DB-backed session and allow takeover if stale
+        try:
+            SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 300))
+            existing_sid = getattr(user, 'current_session_id', None)
+            last_active = getattr(user, 'last_active_at', None)
+            if existing_sid and last_active:
+                try:
+                    now = datetime.utcnow()
+                    delta = now - last_active
+                    if delta.total_seconds() <= SESSION_TIMEOUT:
+                        logger.info(f"Blocked login; live session exists for user id={user.id}")
+                        flash('Ο λογαριασμός είναι ήδη ενεργός σε άλλη συσκευή/σύνδεση.', 'warning')
+                        return redirect(url_for('firebase_auth.firebase_login'))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Login user and create DB-backed session id
         login_user(user, remember=True)
+        try:
+            session_id = secrets.token_urlsafe(32)
+            user.start_session(session_id)
+            db.session.commit()
+            session['session_id'] = session_id
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
         # Update last_login timestamp
         try:
-            user.last_login = datetime.datetime.utcnow()
+            user.last_login = datetime.utcnow()
             db.session.commit()
         except Exception:
             pass
@@ -443,6 +489,19 @@ def firebase_logout():
         logger.exception('Failed to initiate sync-on-logout')
 
     # Fallback: if no active group, proceed to immediate logout
+    # End DB-backed session for this user
+    try:
+        sid = session.get('session_id')
+        try:
+            dur = current_user.end_session(sid)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+    except Exception:
+        pass
     logout_user()
     try:
         session.pop('active_group', None)

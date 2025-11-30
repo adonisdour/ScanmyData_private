@@ -1,5 +1,6 @@
 # utils.py
 import os
+import logging
 import io
 import json
 import re
@@ -395,6 +396,115 @@ def format_euro_str(val):
         return out
     except Exception:
         return ""
+
+
+# ----------------------
+# Session lock helpers (prevent concurrent logins)
+# ----------------------
+def _session_dir() -> str:
+    d = os.path.join(os.getcwd(), 'data', 'sessions')
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def set_session_lock(user_id: int, token: str, meta: dict = None) -> None:
+    """Create or update the session lock file for a user."""
+    try:
+        logger = logging.getLogger(__name__)
+        p = os.path.join(_session_dir(), f"{user_id}.json")
+        payload = {'token': token, 'started_at': __import__('datetime').datetime.utcnow().isoformat(), 'meta': meta or {}}
+        with open(p, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        logger.debug(f"Session lock set for user {user_id} -> {p}")
+    except Exception:
+        pass
+
+
+def get_session_lock(user_id: int) -> dict:
+    """Return session lock dict or {} if none."""
+    try:
+        logger = logging.getLogger(__name__)
+        p = os.path.join(_session_dir(), f"{user_id}.json")
+        if not os.path.exists(p):
+            return {}
+        with open(p, 'r', encoding='utf-8') as fh:
+            data = json.load(fh) or {}
+        logger.debug(f"Read session lock for user {user_id}: {data}")
+        return data
+    except Exception:
+        return {}
+
+
+def clear_session_lock(user_id: int) -> None:
+    try:
+        logger = logging.getLogger(__name__)
+        p = os.path.join(_session_dir(), f"{user_id}.json")
+        if os.path.exists(p):
+            os.remove(p)
+            logger.debug(f"Cleared session lock for user {user_id}: {p}")
+    except Exception:
+        pass
+
+
+def is_session_locked(user_id: int, token: str = None) -> bool:
+    """Return True if a lock exists and token does not match (or if token omitted and any lock exists)."""
+    try:
+        lock = get_session_lock(user_id)
+        if not lock or not lock.get('token'):
+            return False
+        if token is None:
+            return True
+        return str(lock.get('token')) != str(token)
+    except Exception:
+        return False
+
+
+def list_active_sessions() -> list:
+    """Return a list of active session dicts: {user_id, username, token, started_at, meta}.
+
+    This is best-effort and queries the database for usernames when available.
+    """
+    out = []
+    logger = logging.getLogger(__name__)
+    d = _session_dir()
+    try:
+        for fn in os.listdir(d):
+            if not fn.endswith('.json'):
+                continue
+            uid_part = fn[:-5]
+            try:
+                user_id = int(uid_part)
+            except Exception:
+                continue
+            p = os.path.join(d, fn)
+            try:
+                with open(p, 'r', encoding='utf-8') as fh:
+                    lock = json.load(fh) or {}
+            except Exception:
+                lock = {}
+            username = None
+            try:
+                from models import User
+                user = User.query.get(user_id)
+                if user:
+                    username = user.username
+            except Exception:
+                username = None
+
+            out.append({
+                'user_id': user_id,
+                'username': username,
+                'token': lock.get('token'),
+                'started_at': lock.get('started_at'),
+                'meta': lock.get('meta') or {}
+            })
+        logger.debug(f"Active sessions listed: {len(out)}")
+    except Exception:
+        pass
+    return out
 
 # ----------------------
 # Classification regex (E3_xxx, VAT_xxx, NOT_VAT_295 etc.)
