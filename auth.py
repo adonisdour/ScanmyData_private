@@ -98,6 +98,23 @@ def signup():
                 user.add_to_group(grp, role='member')
 
         db.session.commit()
+        # Log signup completion
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=user.id,
+                group_name='system',
+                action='signup_complete',
+                details={
+                    'email': user.email,
+                    'username': user.username,
+                    'description': 'Ολοκλήρωση εγγραφής χρήστη'
+                },
+                user_email=user.email,
+                user_username=user.username
+            )
+        except Exception:
+            pass
 
         # If we registered in Firebase, generate a verification link via Firebase Admin SDK
         try:
@@ -350,9 +367,89 @@ def list_groups():
     # Only show groups the current user belongs to or has been granted access to
     try:
         groups = current_user.groups
+        # Get groups where user is admin for the dropdown
+        admin_groups = [g for g in groups if current_user.role_for_group(g) == 'admin']
     except Exception:
         groups = []
-    return render_template('auth/groups.html', groups=groups)
+        admin_groups = []
+    return render_template('auth/groups.html', groups=groups, admin_groups=admin_groups)
+
+
+@auth_bp.route('/groups/delete', methods=['POST'])
+@login_required
+def delete_group():
+    """Admin-only deletion of a group. Removes memberships, deletes folder, logs action.
+    Expects 'group_name' param. Action code: group_delete.
+    """
+    group_name = (request.form.get('group_name') or '').strip()
+    if not group_name and request.is_json:
+        payload = request.get_json(silent=True) or {}
+        group_name = (payload.get('group_name') or '').strip()
+    if not group_name:
+        resp = {'ok': False, 'error': 'group_name required'}
+        return (jsonify(resp), 400) if request.is_json else (flash('Απαιτείται όνομα ομάδας.', 'danger'), redirect(url_for('auth.list_groups')))
+    grp = Group.query.filter_by(name=group_name).first()
+    if not grp:
+        resp = {'ok': False, 'error': 'group not found'}
+        return (jsonify(resp), 404) if request.is_json else (flash('Η ομάδα δεν βρέθηκε.', 'danger'), redirect(url_for('auth.list_groups')))
+    # admin check
+    try:
+        from admin_panel import is_admin
+        if not is_admin(current_user):
+            resp = {'ok': False, 'error': 'not authorized'}
+            return (jsonify(resp), 403) if request.is_json else (flash('Μόνο διαχειριστής μπορεί να διαγράψει ομάδα.', 'danger'), redirect(url_for('auth.list_groups')))
+    except Exception:
+        resp = {'ok': False, 'error': 'admin check failed'}
+        return (jsonify(resp), 500) if request.is_json else (flash('Σφάλμα ελέγχου δικαιωμάτων.', 'danger'), redirect(url_for('auth.list_groups')))
+    data_folder = getattr(grp, 'data_folder', None)
+    try:
+        # append deletion entry to group activity log BEFORE removing records/files
+        try:
+            # Structured log entry for admin-deleted group (for admin panel consumption)
+            _append_group_log(grp, {
+                'action': 'group_delete',
+                'group': group_name,
+                'description': 'Διαγραφή ομάδας',
+                'details': {'reason': 'admin_deleted'}
+            })
+        except Exception:
+            pass
+        # delete group (cascade removes memberships)
+        db.session.delete(grp)
+        db.session.commit()
+        # remove folder under data/ if exists
+        if data_folder:
+            import shutil, os
+            folder_path = os.path.join(current_app.root_path, 'data', data_folder)
+            try:
+                shutil.rmtree(folder_path, ignore_errors=True)
+            except Exception:
+                pass
+        # log deletion
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=current_user.id,
+                group_name=group_name,
+                action='group_delete',
+                details={'group': group_name, 'description': 'Διαγραφή ομάδας'},
+                user_email=getattr(current_user, 'email', None),
+                user_username=current_user.username
+            )
+        except Exception:
+            pass
+        # clear session active_group if deleted
+        if session.get('active_group') == group_name:
+            session.pop('active_group', None)
+        resp = {'ok': True, 'message': 'group deleted', 'group': group_name}
+        return jsonify(resp) if request.is_json else (flash('Η ομάδα διαγράφηκε.', 'info'), redirect(url_for('auth.list_groups')))
+    except Exception as e:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        resp = {'ok': False, 'error': str(e)}
+        return (jsonify(resp), 500) if request.is_json else (flash('Σφάλμα διαγραφής ομάδας.', 'danger'), redirect(url_for('auth.list_groups')))
 
 
 @auth_bp.route('/groups/assign-user', methods=['POST'])
@@ -360,12 +457,12 @@ def list_groups():
 def assign_user_to_group():
     """Assign a user to a group by email or username (admin/group-admin only)"""
     try:
-        group_name = (request.form.get('group_name') or '').strip()
-        user_identifier = (request.form.get('user_identifier') or '').strip()  # email or username
+        group_name = (request.form.get('group') or '').strip()
+        user_identifier = (request.form.get('username') or '').strip()  # email or username
         role = (request.form.get('role') or 'member').strip()
         
         if not group_name or not user_identifier:
-            return jsonify({'ok': False, 'error': 'group_name and user_identifier required'}), 400
+            return jsonify({'ok': False, 'error': 'Όνομα ομάδας και χρήστης είναι απαραίτητα'}), 400
         
         grp = Group.query.filter_by(name=group_name).first()
         if not grp:
@@ -384,47 +481,67 @@ def assign_user_to_group():
         if not user:
             return jsonify({'ok': False, 'error': f'user not found: {user_identifier}'}), 404
         
+        # Check if assigning admin role and group already has an admin
+        if role == 'admin':
+            existing_admins = [ug for ug in grp.user_groups if ug.role == 'admin']
+            if existing_admins:
+                return jsonify({'ok': False, 'error': 'η ομάδα έχει ήδη διαχειριστή'}), 400
+        
         # Add user to group with specified role
         user.add_to_group(grp, role=role)
         db.session.commit()
         
-        return jsonify({'ok': True, 'message': f'User {user.username} assigned to {group_name} as {role}'})
+        # append to group activity log (structured)
+        try:
+            _append_group_log(grp, {
+                'action': 'add_user',
+                'target_user': user.username,
+                'role': role,
+                'description': f'Προσθήκη χρήστη {user.username} ως {role}',
+            })
+        except Exception:
+            pass
+
+        flash(f'Ο χρήστης {user.username} προστέθηκε στην ομάδα {group_name} ως {role}', 'success')
+        return redirect(url_for('auth.list_groups'))
     except Exception as e:
         current_app.logger.exception('Error assigning user to group')
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        flash('Σφάλμα κατά την ανάθεση χρήστη στην ομάδα', 'danger')
+        return redirect(url_for('auth.list_groups'))
 
 
 @auth_bp.route('/groups/create', methods=['POST'])
 @login_required
 def create_group():
     name = (request.form.get('name') or '').strip()
-    data_folder = (request.form.get('data_folder') or '').strip()
-    if not name or not data_folder:
-        flash('Απαιτείται όνομα ομάδας και φάκελος δεδομένων', 'danger')
+    if not name:
+        flash('Απαιτείται όνομα ομάδας', 'danger')
         return redirect(url_for('auth.list_groups'))
 
     if Group.query.filter_by(name=name).first():
         flash('Η ομάδα υπάρχει ήδη', 'warning')
         return redirect(url_for('auth.list_groups'))
 
-    # sanitize folder name and validate uniqueness
-    safe_folder = secure_filename(data_folder)
-    if not safe_folder:
-        flash('Μη έγκυρο όνομα φακέλου δεδομένων', 'danger')
-        return redirect(url_for('auth.list_groups'))
-    if Group.query.filter_by(data_folder=safe_folder).first():
-        flash('Ο φάκελος δεδομένων χρησιμοποιείται ήδη από άλλη ομάδα', 'warning')
-        return redirect(url_for('auth.list_groups'))
+    # Auto-generate data folder name from group name (convert to latin characters)
+    def greek_to_latin(text):
+        greek_chars = 'αβγδεζηθικλμνξοπρστυφχψωάέήίόύώϊϋ'
+        latin_chars = 'abgdezhthiklmnxoprstyfxpswaehioyoiy'
+        trans = str.maketrans(greek_chars + greek_chars.upper(), latin_chars + latin_chars.upper())
+        return text.translate(trans).replace('ς', 's').replace('Σ', 'S')
 
-    # Enforce: a user may be admin in at most one group
-    try:
-        if getattr(current_user, 'is_authenticated', False):
-            for ug in current_user.user_groups:
-                if ug.role == 'admin':
-                    flash('Είστε ήδη διαχειριστής σε άλλη ομάδα. Δεν μπορείτε να δημιουργήσετε άλλη.', 'danger')
-                    return redirect(url_for('auth.list_groups'))
-    except Exception:
-        pass
+    # Create safe folder name: convert greek to latin, keep only alphanumeric and underscores
+    safe_folder = ''.join(c if c.isalnum() or c == '_' else '_' for c in greek_to_latin(name).lower())
+    safe_folder = safe_folder.strip('_')  # remove leading/trailing underscores
+    
+    # Ensure uniqueness by adding number if needed
+    base_folder = safe_folder
+    counter = 1
+    while Group.query.filter_by(data_folder=safe_folder).first():
+        safe_folder = f"{base_folder}_{counter}"
+        counter += 1
+
+    # Allow users to be admin in multiple groups
+    # Removed restriction: users can now be admin in multiple groups
 
     grp = Group(name=name, data_folder=safe_folder)
     db.session.add(grp)
@@ -443,9 +560,14 @@ def create_group():
         pass
 
     db.session.commit()
-    # append to group activity log
+    # append to group activity log (structured)
     try:
-        _append_group_log(grp, f"Group created by {user.username}")
+        _append_group_log(grp, {
+            'action': 'create_group',
+            'group': grp.name,
+            'description': 'Δημιουργία ομάδας',
+            'details': {'created_by': getattr(current_user, 'username', 'unknown')}
+        })
     except Exception:
         pass
     flash('Η ομάδα δημιουργήθηκε επιτυχώς', 'success')
@@ -464,12 +586,14 @@ def assign_user_to_group_legacy():
     if not username or not group_name:
         return jsonify({'ok': False, 'error': 'username and group required'}), 400
 
-    # support either username or user_id
+    # support username, user_id, or email
     user = None
     if username and username.isdigit():
         user = User.query.get(int(username))
     if not user and username:
         user = User.query.filter_by(username=username).first()
+    if not user and username:
+        user = User.query.filter_by(email=username).first()
     grp = Group.query.filter_by(name=group_name).first()
     if not user or not grp:
         return jsonify({'ok': False, 'error': 'user or group not found'}), 404
@@ -483,11 +607,8 @@ def assign_user_to_group_legacy():
     except Exception:
         return jsonify({'ok': False, 'error': 'permission check failed'}), 500
 
-    # If assigning admin role, ensure the target user is not already admin in another group
-    if role == 'admin':
-        for ug in user.user_groups:
-            if ug.role == 'admin' and ug.group_id != grp.id:
-                return jsonify({'ok': False, 'error': 'target user is already admin of another group'}), 400
+    # Allow users to be admin in multiple groups
+    # Removed restriction: users can now be admin in multiple groups
 
     # assign role
     db.session.commit()
@@ -495,9 +616,14 @@ def assign_user_to_group_legacy():
     user.add_to_group(grp, role=role)
     db.session.commit()
 
-    # log the assignment in the group's activity log
+    # log the assignment in the group's activity log (structured)
     try:
-        _append_group_log(grp, f"{current_user.username} assigned {user.username} as {role}")
+        _append_group_log(grp, {
+            'action': 'add_user',
+            'target_user': user.username,
+            'role': role,
+            'description': f'Προσθήκη χρήστη {user.username} ως {role}',
+        })
     except Exception:
         pass
 
@@ -545,11 +671,21 @@ def remove_member():
             return jsonify({'ok': False, 'error': 'user is not a member of group'}), 400
         db.session.delete(ug)
         db.session.commit()
-        _append_group_log(grp, f"{current_user.username} removed member {target.username}")
-        return jsonify({'ok': True})
+        # structured log for removal
+        try:
+            _append_group_log(grp, {
+                'action': 'remove_user',
+                'target_user': target.username,
+                'description': f'Αφαίρεση χρήστη {target.username} από ομάδα',
+            })
+        except Exception:
+            pass
+        flash(f'Ο χρήστης {target.username} αφαιρέθηκε από την ομάδα {group_name}', 'success')
+        return redirect(url_for('auth.list_groups'))
     except Exception:
         db.session.rollback()
-        return jsonify({'ok': False, 'error': 'failed to remove member'}), 500
+        flash('Σφάλμα κατά την αφαίρεση του μέλους', 'danger')
+        return redirect(url_for('auth.list_groups'))
 
 
 @auth_bp.route('/groups/leave', methods=['POST'])
@@ -569,24 +705,61 @@ def leave_group():
         if not ug:
             return jsonify({'ok': False, 'error': 'not a member'}), 400
 
-        # if admin and only admin, return warning status code with message about data loss
+        # if admin and only admin, automatically delete the entire group
         if ug.role == 'admin':
             other_admins = [u for u in grp.user_groups if u.role == 'admin' and u.user_id != current_user.id]
             if not other_admins:
-                # Return 409 (Conflict) to signal a warning condition
-                return jsonify({
-                    'ok': False, 
-                    'warning': True,
-                    'error': 'you are the only admin of this group',
-                    'message': 'Leaving this group will permanently delete all associated data. Are you sure?'
-                }), 409
+                # Get data folder before deleting group
+                data_folder = getattr(grp, 'data_folder', None)
+
+                # append deletion entry to group activity log BEFORE removing records/files
+                try:
+                    _append_group_log(grp, {
+                        'action': 'group_delete',
+                        'group': grp.name,
+                        'description': 'Διαγραφή ομάδας',
+                        'details': {'reason': 'last_admin_left'}
+                    })
+                except Exception:
+                    pass
+
+                # Delete all user memberships for this group
+                for user_group in grp.user_groups:
+                    db.session.delete(user_group)
+
+                # Delete the group itself
+                db.session.delete(grp)
+                
+                # Clear active group from session if it was this group
+                if session.get('active_group') == grp.name:
+                    session.pop('active_group', None)
+                
+                db.session.commit()
+                
+                # Remove folder under data/ if exists
+                if data_folder:
+                    import shutil, os
+                    folder_path = os.path.join(current_app.root_path, 'data', data_folder)
+                    try:
+                        shutil.rmtree(folder_path, ignore_errors=True)
+                    except Exception:
+                        pass
+                
+                return jsonify({'ok': True, 'message': 'Group deleted successfully - you were the last admin'})
 
         db.session.delete(ug)
         db.session.commit()
         # if active_group matches, clear it
         if session.get('active_group') == grp.name:
             session.pop('active_group', None)
-        _append_group_log(grp, f"{current_user.username} left the group")
+        try:
+            _append_group_log(grp, {
+                'action': 'leave_group',
+                'user': current_user.username,
+                'description': 'Αποχώρηση χρήστη από ομάδα'
+            })
+        except Exception:
+            pass
         return jsonify({'ok': True})
     except Exception:
         db.session.rollback()
@@ -615,17 +788,44 @@ def leave_group_confirm():
             if other_admins:
                 return jsonify({'ok': False, 'error': 'other admins exist; use regular leave'}), 400
 
-        db.session.delete(ug)
-        db.session.commit()
-        
+        # append deletion entry to group activity log BEFORE removing records/files
+        try:
+            _append_group_log(grp, {
+                'action': 'group_delete',
+                'group': grp.name,
+                'description': 'Διαγραφή ομάδας',
+                'details': {'reason': 'force_delete_confirmed'}
+            })
+        except Exception:
+            pass
+
+        # Delete all user memberships for this group
+        for user_group in grp.user_groups:
+            db.session.delete(user_group)
+
+        # Delete the group itself
+        data_folder = getattr(grp, 'data_folder', None)
+        db.session.delete(grp)
+
+        # Clear active group from session if it was this group
         if session.get('active_group') == grp.name:
             session.pop('active_group', None)
-        
-        _append_group_log(grp, f"{current_user.username} left the group (confirmed)")
-        return jsonify({'ok': True, 'message': 'Left group successfully'})
+
+        db.session.commit()
+
+        # Remove folder under data/ if exists
+        if data_folder:
+            try:
+                import shutil, os
+                folder_path = os.path.join(current_app.root_path, 'data', data_folder)
+                shutil.rmtree(folder_path, ignore_errors=True)
+            except Exception:
+                pass
+
+        return jsonify({'ok': True, 'message': 'Group deleted successfully - all data removed'})
     except Exception:
         db.session.rollback()
-        return jsonify({'ok': False, 'error': 'failed to leave group'}), 500
+        return jsonify({'ok': False, 'error': 'failed to delete group'}), 500
 
 
 @auth_bp.route('/lookup_user', methods=['GET'])
@@ -634,12 +834,14 @@ def lookup_user():
     q = (request.args.get('q') or '').strip()
     if not q:
         return jsonify({'ok': False, 'error': 'missing query'}), 400
-    # allow lookup by username or id
+    # allow lookup by username, id, or email
     user = None
     if q.isdigit():
         user = User.query.get(int(q))
     if not user:
         user = User.query.filter_by(username=q).first()
+    if not user:
+        user = User.query.filter_by(email=q).first()
     if not user:
         return jsonify({'ok': False, 'found': False}), 200
     return jsonify({'ok': True, 'found': True, 'username': user.username, 'id': user.id})
@@ -686,10 +888,50 @@ def _append_group_log(group: Group, message: str) -> None:
         base = os.path.join(current_app.root_path, 'data', folder)
         os.makedirs(base, exist_ok=True)
         p = os.path.join(base, 'activity.log')
-        ts = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
-        entry = f"{ts} - {message}\n"
-        with open(p, 'a', encoding='utf-8') as fh:
-            fh.write(entry)
+
+        # Build JSON object for log entry. Accept either a dict-like message or a string.
+        try:
+            import json
+            ts = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+            if isinstance(message, (dict, list)):
+                obj = dict(message) if isinstance(message, dict) else {"value": message}
+            else:
+                # If message is a plain string, preserve it under 'message'
+                obj = {"message": str(message)}
+
+            # Add actor/username and email and user_id if not provided
+            try:
+                actor = getattr(current_user, 'username', None)
+                if actor and 'actor' not in obj:
+                    obj['actor'] = actor
+            except Exception:
+                actor = None
+            try:
+                uemail = getattr(current_user, 'email', None)
+                if uemail and 'user_email' not in obj:
+                    obj['user_email'] = uemail
+            except Exception:
+                pass
+            try:
+                uid = getattr(current_user, 'id', None)
+                if uid and 'user_id' not in obj:
+                    obj['user_id'] = uid
+            except Exception:
+                pass
+
+            # Use standardized timestamp key 'timestamp' for admin panel; keep 'ts' for backward compat
+            obj['timestamp'] = ts
+            obj['ts'] = ts
+
+            # Write one JSON object per line (JSON Lines format), UTF-8, do not escape non-ascii
+            with open(p, 'a', encoding='utf-8') as fh:
+                fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        except Exception:
+            # On JSON or write failure, fall back to plain text entry for resilience
+            ts = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+            entry = f"{ts} - {message}\n"
+            with open(p, 'a', encoding='utf-8') as fh:
+                fh.write(entry)
     except Exception:
         try:
             current_app.logger.exception('Failed to append group log')
@@ -727,7 +969,8 @@ def select_group():
         current_app.logger.debug(f"Lazy-pull failed when selecting group {group_name}: {e}")
 
     session['active_group'] = grp.name
-    return jsonify({'ok': True, 'group': grp.name})
+    flash(f'Επιλέχθηκε η ομάδα: {grp.name}', 'info')
+    return redirect(url_for('auth.list_groups'))
 
 
 # --- JSON API endpoints for frontend-driven login/logout/status ---

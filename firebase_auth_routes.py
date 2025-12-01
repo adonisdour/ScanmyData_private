@@ -55,6 +55,23 @@ def forgot_password():
             flash('📧 Οδηγίες επαναφοράς κωδικού στάλθηκαν στο email σας!', 'success')
         else:
             flash('❌ Το email δεν βρέθηκε ή υπήρξε σφάλμα.', 'danger')
+        # Log forgot password request
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=email,  # use email as identifier if user id not resolved
+                group_name='system',
+                action='forgot_password_request',
+                details={
+                    'email': email,
+                    'success': success,
+                    'description': 'Αίτημα επαναφοράς κωδικού'
+                },
+                user_email=email,
+                user_username=email
+            )
+        except Exception:
+            pass
         
         return redirect(url_for('firebase_auth.firebase_login'))
     
@@ -167,6 +184,19 @@ def firebase_signup():
         
         # Register with Firebase
         success, uid, error = FirebaseAuthHandler.register_user(email, password, display_name)
+        # Log signup attempt
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=email,
+                group_name='system',
+                action='signup_request',
+                details={'email': email, 'display_name': display_name, 'success': success, 'description': 'Αίτημα εγγραφής χρήστη'},
+                user_email=email,
+                user_username=email
+            )
+        except Exception:
+            pass
         
         if not success:
             flash(f'Registration failed: {error}', 'danger')
@@ -211,6 +241,19 @@ def firebase_signup():
                 'user_signup_complete',
                 {'email': email, 'verification_email_sent': verification_sent}
             )
+            # Local structured log for unified admin panel
+            try:
+                from utils import log_user_activity
+                log_user_activity(
+                    user_id=user.id,
+                    group_name='system',
+                    action='signup_complete',
+                    details={'email': email, 'verification_email_sent': verification_sent, 'description': 'Ολοκλήρωση εγγραφής χρήστη'},
+                    user_email=email,
+                    user_username=email
+                )
+            except Exception:
+                pass
             
             if is_admin:
                 flash('🎉 Η εγγραφή admin ολοκληρώθηκε! Μπορείτε να συνδεθείτε απευθείας.', 'success')

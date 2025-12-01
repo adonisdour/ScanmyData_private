@@ -328,10 +328,56 @@ def firebase_log_activity(user_id: str, group_name: str, action: str, details: O
         except Exception:
             pass
 
+        # Bump global activity version for auto-reload mechanisms
+        try:
+            _increment_activity_version()
+        except Exception:
+            pass
+
         return wrote_any
     except Exception as e:
         logger.error(f"Failed to log activity to Firebase: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Activity Version Counter (for frontend auto-reload)
+# ---------------------------------------------------------------------------
+_activity_version_lock = threading.Lock()
+
+def _activity_version_path() -> str:
+    data_dir = os.path.join(os.getcwd(), 'data', 'system')
+    os.makedirs(data_dir, exist_ok=True)
+    return os.path.join(data_dir, 'activity_version.txt')
+
+def _increment_activity_version() -> int:
+    path = _activity_version_path()
+    with _activity_version_lock:
+        try:
+            current = 0
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        current = int((f.read() or '0').strip() or 0)
+                except Exception:
+                    current = 0
+            new_val = current + 1
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(str(new_val))
+            return new_val
+        except Exception:
+            # best-effort only
+            return 0
+
+def get_activity_version() -> int:
+    path = _activity_version_path()
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return int((f.read() or '0').strip() or 0)
+        return 0
+    except Exception:
+        return 0
 
 
 def firebase_get_group_activity_logs(group_name: str, limit: int = 100) -> list:

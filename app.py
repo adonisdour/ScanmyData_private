@@ -6419,9 +6419,30 @@ def api_last_fetch_date():
         # Format for display if available
         if last_date:
             try:
-                # Parse ISO 8601 and format as Greek date
-                dt = datetime.datetime.fromisoformat(last_date)
-                formatted = dt.strftime("%d/%m/%Y %H:%M")
+                # Parse ISO 8601, interpret naive as UTC, then convert to Europe/Athens
+                try:
+                    dt = datetime.datetime.fromisoformat(last_date)
+                except Exception:
+                    dt = None
+
+                if dt is not None:
+                    # Ensure tz-aware: treat naive timestamps as UTC
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=datetime.timezone.utc)
+                    # Convert to Europe/Athens for display
+                    try:
+                        from zoneinfo import ZoneInfo
+                        athens_tz = ZoneInfo('Europe/Athens')
+                        dt = dt.astimezone(athens_tz)
+                    except Exception:
+                        # Fallback: add 2 hours offset (approximate)
+                        try:
+                            dt = dt.astimezone(datetime.timezone(datetime.timedelta(hours=2)))
+                        except Exception:
+                            pass
+                    formatted = dt.strftime("%d/%m/%Y %H:%M")
+                else:
+                    formatted = last_date
             except Exception:
                 formatted = last_date
         else:

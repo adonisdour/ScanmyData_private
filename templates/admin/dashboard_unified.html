@@ -89,15 +89,16 @@
             <tr>
               <th class="text-left px-4 py-3 font-medium">Email</th>
               <th class="text-left px-4 py-3 font-medium">Όνομα</th>
+              <th class="text-left px-2 py-3 font-medium">Κατάσταση</th>
               <th class="text-left px-4 py-3 font-medium">Ομάδες</th>
               <th class="text-left px-4 py-3 font-medium">Δημιουργία</th>
-              <th class="text-left px-4 py-3 font-medium">Μέγεθος (MB)</th>
+              <th class="text-left px-4 py-3 font-medium">Σύνολο Χρόνου</th>
               <th class="text-center px-4 py-3 font-medium">Ενέργειες</th>
             </tr>
           </thead>
           <tbody id="users-tbody">
             <tr>
-              <td colspan="6" class="px-4 py-3 text-center text-gray-500">Φόρτωση...</td>
+              <td colspan="7" class="px-4 py-3 text-center text-gray-500">Φόρτωση...</td>
             </tr>
           </tbody>
         </table>
@@ -504,6 +505,43 @@ async function loadRecentActivity() {
 // Auto-refresh recent activity every 30 seconds
 setInterval(loadRecentActivity, 30000);
 
+// ==================== ACTIVITY AUTO-RELOAD VIA VERSION ====================
+let lastActivityVersion = null;
+let versionPollTimer = null;
+
+async function pollActivityVersion() {
+  try {
+    const res = await fetch('/admin/api/activity/version');
+    const data = await res.json();
+    if (!data || !data.success) return;
+    const ver = parseInt(data.version || 0, 10);
+    if (lastActivityVersion === null) {
+      lastActivityVersion = ver;
+      return;
+    }
+    if (ver !== lastActivityVersion) {
+      lastActivityVersion = ver;
+      // Refresh recent activity and the activity table if the tab is visible
+      loadRecentActivity();
+      const activityTab = document.getElementById('activity');
+      if (activityTab && !activityTab.classList.contains('hidden')) {
+        loadActivity();
+      }
+    }
+  } catch (e) {
+    // silent fail
+  }
+}
+
+function startVersionPolling() {
+  if (versionPollTimer) clearInterval(versionPollTimer);
+  versionPollTimer = setInterval(pollActivityVersion, 10000); // every 10s
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  startVersionPolling();
+});
+
 // ==================== USERS TAB ====================
 async function loadUsers() {
   try {
@@ -512,30 +550,42 @@ async function loadUsers() {
     const tbody = document.getElementById('users-tbody');
     
     if (!data.users || data.users.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-3 text-center text-gray-500">Δεν υπάρχουν χρήστες</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-3 text-center text-gray-500">Δεν υπάρχουν χρήστες</td></tr>';
       return;
     }
 
-    tbody.innerHTML = data.users.map(user => `
+    const toHhMm = (mins) => {
+      const m = Math.max(0, parseInt(mins || 0, 10));
+      const h = Math.floor(m / 60);
+      const r = m % 60;
+      return h > 0 ? `${h}ω ${r}λ` : `${r}λ`;
+    };
+
+    tbody.innerHTML = data.users.map(user => {
+      const online = !!user.active;
+      const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;${online ? 'background:#22c55e' : 'background:#ef4444'}"></span>`;
+      const since = user.session_started_at ? `<span class="text-xs text-gray-500 ml-2">από ${user.session_started_at.split('T')[0]}</span>` : '';
+      const total = toHhMm(user.total_active_minutes);
+      const groupsCount = (user.groups ? user.groups.length : 0);
+      return `
       <tr class="border-b border-gray-200 hover:bg-gray-50">
         <td class="px-4 py-3">${user.email || '-'}</td>
         <td class="px-4 py-3">${user.username || user.display_name || '-'}</td>
+        <td class="px-2 py-3">${dot}${since}</td>
         <td class="px-4 py-3">
-          <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">
-            ${user.groups ? user.groups.length : 0} ομάδες
-          </span>
+          <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">${groupsCount} ομάδες</span>
         </td>
         <td class="px-4 py-3 text-xs text-gray-500">${user.created_at ? user.created_at.split('T')[0] : '-'}</td>
-        <td class="px-4 py-3 text-xs">${user.total_size_mb || 0}</td>
+        <td class="px-4 py-3 text-xs">${total}</td>
         <td class="px-4 py-3 text-center space-x-1">
           <button onclick="viewUserDetails(${user.id})" class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">👁️</button>
           <button onclick="deleteUser(${user.id}, '${user.username}')" class="px-2 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200">🗑️</button>
         </td>
-      </tr>
-    `).join('');
+      </tr>`;
+    }).join('');
   } catch (error) {
     console.error('Error loading users:', error);
-    document.getElementById('users-tbody').innerHTML = '<tr><td colspan="6" class="px-4 py-3 text-center text-red-500">Σφάλμα φόρτωσης</td></tr>';
+    document.getElementById('users-tbody').innerHTML = '<tr><td colspan="7" class="px-4 py-3 text-center text-red-500">Σφάλμα φόρτωσης</td></tr>';
   }
 }
 
@@ -835,7 +885,8 @@ async function loadActivity() {
         userDisplay,
         groupDisplay,
         actionDisplay,
-        detailsDisplay
+        detailsDisplay,
+        Number(log.ts_sort || 0)
       ];
     });
     
@@ -848,7 +899,7 @@ async function loadActivity() {
     activityTable = $('#activity-table').DataTable({
       data: tableData,
       pageLength: 25,
-      order: [[0, 'desc']], // Sort by timestamp descending
+      order: [[5, 'desc']], // Sort by numeric ts_sort (hidden)
       language: {
         search: "Αναζήτηση:",
         lengthMenu: "Εμφάνιση _MENU_ εγγραφών",
@@ -868,7 +919,8 @@ async function loadActivity() {
         { width: "15%", targets: 1 },
         { width: "15%", targets: 2 },
         { width: "15%", targets: 3 },
-        { width: "40%", targets: 4 }
+        { width: "40%", targets: 4 },
+        { targets: 5, visible: false, searchable: false }
       ]
     });
     
@@ -895,6 +947,16 @@ function startActivityAutoRefresh() {
     }
   }, 30000); // 30 seconds
 }
+
+// Initialize auto-refresh when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  startActivityAutoRefresh();
+});
+
+// Initialize auto-refresh when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  startActivityAutoRefresh();
+});
 
 // ==================== BACKUPS TAB ====================
 async function loadGroupsForBackup() {

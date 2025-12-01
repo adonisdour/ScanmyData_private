@@ -1,4 +1,4 @@
-{% extends 'base.html' %}
+﻿{% extends 'base.html' %}
 
 {% block title %}Ομάδες{% endblock %}
 
@@ -6,18 +6,10 @@
   <div class="content-wrap">
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-xl font-semibold">Ομάδες</h1>
-      <div>Συνδεδεμένος ως <strong>{{ current_user.username }}</strong></div>
+      <div>Συνδεδεμένος χρήστης → <strong>{{ current_user.username }}</strong></div>
     </div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div class="space-y-2 mb-4">
-          {% for category, msg in messages %}
-            <div class="flash-banner {{ 'flash-error' if category=='error' else 'flash-success' }}" role="alert">{{ msg|safe }}</div>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
+    <!-- Flash messages are shown in base.html, no need to duplicate here -->
 
     <style>
       ul li.selected { background: #e6f7ff; border-color: #38bdf8; }
@@ -42,7 +34,7 @@
         border: 1px solid rgba(0,0,0,0.08);
       }
 
-      /* Modal visual improvements — larger, more readable */
+      /* Modal visual improvements έΑΦ larger, more readable */
       .gm-modal-backdrop {
         display: none; position: fixed; inset:0; background: rgba(0,0,0,0.55); align-items:center; justify-content:center; z-index:60;
       }
@@ -62,7 +54,7 @@
 
     <div class="grid grid-cols-2 gap-6">
       <div>
-        <h2 class="font-medium mb-2">Δημιουργία ομάδας</h2>
+        <h2 class="font-medium mb-2">Φιλική ομάδα</h2>
         <button id="open-create" class="px-4 py-2 rounded bg-sky-600 text-white">Δημιουργία ομάδας</button>
       </div>
 
@@ -78,7 +70,6 @@
         <h3>Δημιουργία ομάδας</h3>
         <form method="post" action="{{ url_for('auth.create_group') }}" class="grid gap-3">
           <input type="text" name="name" placeholder="Όνομα ομάδας" class="px-3 py-2 border rounded" required />
-          <input type="text" name="data_folder" placeholder="Φάκελος δεδομένων (κάτω από data/)" class="px-3 py-2 border rounded" required />
           <div class="actions">
             <button type="submit" class="px-4 py-2 rounded bg-sky-600 text-white">Δημιουργία</button>
             <button type="button" id="close-create" class="px-4 py-2 rounded muted-btn">Άκυρο</button>
@@ -93,11 +84,15 @@
         <h3>Ανάθεση χρήστη σε ομάδα</h3>
         <form id="assign-form" method="post" action="{{ url_for('auth.assign_user_to_group') }}" class="grid gap-3">
           <div class="flex items-center gap-2">
-            <input id="assign-username" type="text" name="username" placeholder="Όνομα χρήστη ή ID" class="px-3 py-2 border rounded flex-1" />
-            <button id="check-user" type="button" class="px-3 py-2 rounded muted-btn">Έλεγχος</button>
+            <input id="assign-username" type="text" name="username" placeholder="Όνομα χρήστη ή email" class="px-3 py-2 border rounded flex-1" />
+            <div id="user-check-result" class="text-sm"></div>
           </div>
-          <div id="user-check-result" class="text-sm text-gray-600"></div>
-          <input id="assign-group" type="text" name="group" placeholder="Όνομα ομάδας" class="px-3 py-2 border rounded" />
+          <select name="group" class="px-3 py-2 border rounded">
+            <option value="">Επιλέξτε ομάδα...</option>
+            {% for g in admin_groups %}
+            <option value="{{ g.name }}">{{ g.name }}</option>
+            {% endfor %}
+          </select>
           <select name="role" class="px-3 py-2 border rounded">
             <option value="member">Μέλος</option>
             <option value="admin">Διαχειριστής</option>
@@ -116,7 +111,7 @@
         <li class="px-3 py-2 border rounded {% if session.get('active_group') == g.name %}selected{% endif %}">
           <div class="flex justify-between items-center">
             <div><strong>{{ g.name }}</strong> → <code>{{ g.data_folder }}</code></div>
-            <div class="text-sm text-gray-600">Διαχειριστές: {% for u in g.admins() %}<span class="px-2 py-1 bg-gray-100 rounded">{{ u.username }}</span>{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</div>
+            <div class="text-sm text-gray-600">Διαχειριστές: {% for u in g.admins() %}<span class="px-2 py-1 bg-gray-100 rounded">{{ u.username }}</span>{% if not loop.last %}, {% endif %}{% else %}κανένας{% endfor %}</div>
           </div>
           <div class="mt-2 text-sm">Μέλη:
             {% for ug in g.user_groups %}
@@ -128,36 +123,53 @@
                 {% endif %}
               </span>
             {% else %}
-              <span class="text-gray-500">Χωρίς μέλη</span>
+              <span class="text-gray-500">κανένας μέλος</span>
             {% endfor %}
           </div>
           <div class="mt-2">
             {% if current_user.is_authenticated and (g in current_user.groups) %}
-              <button class="leave-group-btn px-2 py-1 border rounded" data-group="{{ g.name }}">Αποχώρηση</button>
+              {% if current_user.role_for_group(g) == 'admin' %}
+                <button class="leave-group-btn px-2 py-1 border rounded" data-group="{{ g.name }}" data-is-admin="true">Διαγραφή</button>
+              {% else %}
+                <button class="leave-group-btn px-2 py-1 border rounded" data-group="{{ g.name }}" data-is-admin="false">Αποχώρηση</button>
+              {% endif %}
             {% endif %}
           </div>
         </li>
       {% else %}
-        <li class="text-gray-500">Δεν υπάρχουν ομάδες ακόμη</li>
+        <li class="text-gray-500">Δεν υπάρχει καμία ομάδα ακόμη</li>
       {% endfor %}
     </ul>
 
     <script>
-      document.getElementById('check-user').addEventListener('click', async function(){
-        const q = document.getElementById('assign-username').value.trim();
+      // Auto-check user when typing
+      let checkTimeout;
+      document.getElementById('assign-username').addEventListener('input', function(){
+        const q = this.value.trim();
         const out = document.getElementById('user-check-result');
-        out.textContent = 'Έλεγχος...';
-        try{
-          const resp = await fetch("{{ url_for('auth.lookup_user') }}?q=" + encodeURIComponent(q));
-          const data = await resp.json();
-          if(data.ok && data.found){
-            out.innerHTML = `<span style="color:green">Βρέθηκε χρήστης: ${data.username} (id=${data.id})</span>`;
-          } else {
-            out.innerHTML = `<span style="color:orange">Χρήστης δεν βρέθηκε</span>`;
-          }
-        }catch(e){
-          out.textContent = 'Ο έλεγχος απέτυχε';
+        
+        // Clear previous timeout
+        if(checkTimeout) clearTimeout(checkTimeout);
+        
+        if(!q){
+          out.innerHTML = '';
+          return;
         }
+        
+        // Debounce the check
+        checkTimeout = setTimeout(async function(){
+          try{
+            const resp = await fetch("{{ url_for('auth.lookup_user') }}?q=" + encodeURIComponent(q));
+            const data = await resp.json();
+            if(data.ok && data.found){
+              out.innerHTML = '<span style="color:green">✓ Βρέθηκε ο χρήστης</span>';
+            } else {
+              out.innerHTML = '<span style="color:orange">✗ Χρήστης δεν βρέθηκε</span>';
+            }
+          }catch(e){
+            out.innerHTML = '<span style="color:red">✗ Σφάλμα ελέγχου</span>';
+          }
+        }, 500); // Wait 500ms after user stops typing
       });
 
       // modal wiring
@@ -168,23 +180,23 @@
 
       // group selection on double-click and highlight the selected group
       document.querySelectorAll('ul li').forEach(function(li){
-        li.addEventListener('dblclick', async function(){
+        li.addEventListener('dblclick', function(){
           const name = li.querySelector('strong')?.textContent?.trim();
           if(!name) return;
-          try{
-            const resp = await fetch("{{ url_for('auth.select_group') }}", {method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: 'group=' + encodeURIComponent(name)});
-            const data = await resp.json();
-            if(data.ok){
-              // clear existing highlights
-              document.querySelectorAll('ul li').forEach(x=>x.classList.remove('selected'));
-              li.classList.add('selected');
-              // selection done silently (no modal)
-            } else {
-              await showModalAlert('Σφάλμα', 'Αποτυχία επιλογής ομάδας: ' + (data.error || 'άγνωστο σφάλμα'));
-            }
-          }catch(e){
-            await showModalAlert('Σφάλμα', 'Η επιλογή ομάδας απέτυχε');
-          }
+          
+          // Create a form to submit the selection (to show flash message)
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = "{{ url_for('auth.select_group') }}";
+          
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'group';
+          input.value = name;
+          
+          form.appendChild(input);
+          document.body.appendChild(form);
+          form.submit();
         });
       });
 
@@ -194,17 +206,28 @@
           ev.preventDefault();
           const username = btn.dataset.username;
           const group = btn.dataset.group;
-          const confirmed = await showModalConfirm('Αφαίρεση μέλους', 'Θέλεις να αφαιρέσεις τον ' + username + ' από την ομάδα ' + group + ';', 'Αφαίρεση', 'Άκυρο');
+          const confirmed = await showModalConfirm('Επιβεβαίωση αφαίρεσης μέλους', 'Θέλετε να αφαιρέσετε τον ' + username + ' από την ομάδα ' + group + ';', 'Αφαίρεση', 'Άκυρο');
           if(!confirmed) return;
-          try{
-            const resp = await fetch("{{ url_for('auth.remove_member') }}", {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: 'username='+encodeURIComponent(username)+'&group='+encodeURIComponent(group)});
-            const data = await resp.json();
-            if(data.ok){
-              btn.closest('.member-pill').remove();
-            } else {
-              await showModalAlert('Σφάλμα', 'Αποτυχία αφαίρεσης: '+(data.error||'άγνωστο σφάλμα'));
-            }
-          }catch(e){ await showModalAlert('Σφάλμα', 'Σφάλμα αιτήματος'); }
+          
+          // Create a form to submit the removal (to show flash message)
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = "{{ url_for('auth.remove_member') }}";
+          
+          const usernameInput = document.createElement('input');
+          usernameInput.type = 'hidden';
+          usernameInput.name = 'username';
+          usernameInput.value = username;
+          
+          const groupInput = document.createElement('input');
+          groupInput.type = 'hidden';
+          groupInput.name = 'group';
+          groupInput.value = group;
+          
+          form.appendChild(usernameInput);
+          form.appendChild(groupInput);
+          document.body.appendChild(form);
+          form.submit();
         });
       });
 
@@ -213,7 +236,20 @@
         btn.addEventListener('click', async function(ev){
           ev.preventDefault();
           const group = btn.dataset.group;
-          const confirmed = await showModalConfirm('Αποχώρηση ομάδας', 'Θέλεις να αποχωρήσεις την ομάδα ' + group + '; Αυτό δεν μπορεί να αναιρεθεί.', 'Αποχώρηση', 'Άκυρο');
+          const isAdmin = btn.dataset.isAdmin === 'true';
+          
+          let title, message, confirmText;
+          if (isAdmin) {
+            title = 'Διαγραφή ομάδας';
+            message = 'Θέλετε να διαγράψετε την ομάδα ' + group + '; Η ομάδα θα διαγραφεί εντελώς με όλα τα δεδομένα και τα μέλη θα αφαιρεθούν.';
+            confirmText = 'Διαγραφή';
+          } else {
+            title = 'Αποχώρηση από ομάδα';
+            message = 'Θέλετε να αποχωρήσετε από την ομάδα ' + group + ';';
+            confirmText = 'Αποχώρηση';
+          }
+          
+          const confirmed = await showModalConfirm(title, message, confirmText, 'Άκυρο');
           if(!confirmed) return;
           try{
             const resp = await fetch("{{ url_for('auth.leave_group') }}", {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: 'group='+encodeURIComponent(group)});
@@ -222,9 +258,9 @@
               // remove the group li from DOM
               btn.closest('li').remove();
             } else {
-              await showModalAlert('Σφάλμα', 'Αποχώρηση απέτυχε: '+(data.error||'άγνωστο σφάλμα'));
+              await showModalAlert('Σφάλμα', (isAdmin ? 'Διαγραφή' : 'Αποχώρηση') + ' απέτυχε: '+(data.error||'άγνωστο σφάλμα'));
             }
-          }catch(e){ await showModalAlert('Σφάλμα', 'Σφάλμα αιτήματος'); }
+          }catch(e){ await showModalAlert('Σφάλμα', 'Σφάλμα δικτύου'); }
         });
       });
     </script>

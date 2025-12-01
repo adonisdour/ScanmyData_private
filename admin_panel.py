@@ -723,9 +723,31 @@ def admin_restore_backup(backup_name: str, target_group_id: int, current_admin: 
 # Activity & Traffic Logs
 # ============================================================================
 
-def _create_detailed_description(action: str, details: Dict[str, Any]) -> str:
-    """Create detailed description in Greek for activity logs"""
+def _create_detailed_description(action: str, details: Dict[str, Any], entry: Optional[Dict[str, Any]] = None) -> str:
+    """Create detailed description in Greek for activity logs
+    
+    Args:
+        action: The action type
+        details: The details dict (may be empty)
+        entry: The full entry object (for accessing entry-level fields when details is empty)
+    """
     try:
+        # Helper to get a field from details first, then fall back to entry level
+        def get_field(key: str, default=None):
+            if details and key in details and details[key]:
+                return details[key]
+            if entry and key in entry and entry[key]:
+                return entry[key]
+            return default
+        
+        # Normalize legacy action aliases to canonical actions
+        if action in ['remove_member']:
+            action = 'remove_user'
+        if action in ['add_member', 'invite_member']:
+            action = 'add_user'
+        if action in ['group_deleted']:
+            action = 'group_delete'
+
         if action == 'export_bridge':
             # Handle nested details structure for bridge exports
             actual_details = details.get('details', details)
@@ -791,6 +813,57 @@ def _create_detailed_description(action: str, details: Dict[str, Any]) -> str:
             excel_path = actual_details.get('excel_path', 'Άγνωστο αρχείο')
             
             return f"Διαγραφή {count} γραμμών από αρχείο: {excel_path}"
+
+        elif action in ['add_user', 'assign_user']:
+            # details: target_user, role, group, actor/user_email
+            target = get_field('target_user') or get_field('user') or get_field('username') or 'Άγνωστος'
+            role = get_field('role') or ''
+            group = get_field('group') or get_field('group_name') or '-'
+            actor = get_field('user_email') or get_field('actor') or get_field('user_username') or '-'
+            role_text = f" ως {role}" if role else ''
+            return f"Προσθήκη χρήστη {target}{role_text} από {actor} στην ομάδα {group}"
+
+        elif action == 'remove_user':
+            target = get_field('target_user') or get_field('removed_user') or get_field('user') or get_field('username')
+            actor = get_field('actor') or get_field('user_email') or get_field('user_username')
+            group = get_field('group') or get_field('group_name')
+            
+            # If missing fields, try to parse legacy message format: "X removed member Y"
+            if not target or not actor:
+                msg = details.get('message', '')
+                if ' removed member ' in msg:
+                    try:
+                        parts = msg.split(' removed member ', 1)
+                        if len(parts) == 2:
+                            if not actor:
+                                actor = parts[0].strip()
+                            if not target:
+                                target = parts[1].strip()
+                    except Exception:
+                        pass
+            
+            target = target or 'Άγνωστος'
+            actor = actor or '-'
+            group = group or '-'
+            return f"Αφαίρεση χρήστη {target} από ομάδα {group} (από {actor})"
+
+        elif action == 'create_group':
+            group = get_field('group') or get_field('group_name') or '-'
+            # Try nested details.details.created_by, then details.created_by, then entry.created_by, etc.
+            creator = (details.get('details', {}).get('created_by') if isinstance(details.get('details'), dict) else None) or get_field('created_by') or get_field('user') or '-'
+            return f"Δημιουργία ομάδας {group} από {creator}"
+
+        elif action == 'group_delete':
+            group = get_field('group') or get_field('group_name') or '-'
+            actor = get_field('user_email') or get_field('actor') or get_field('user_username') or '-'
+            reason = (details.get('details', {}).get('reason') if isinstance(details.get('details'), dict) else None) or get_field('reason') or ''
+            reason_text = f" (αιτία: {reason})" if reason else ''
+            return f"Διαγραφή ομάδας: {group}{reason_text} από {actor}"
+
+        elif action == 'leave_group':
+            who = get_field('user') or get_field('user_username') or get_field('actor') or '-'
+            group = get_field('group') or get_field('group_name') or '-'
+            return f"Αποχώρηση χρήστη {who} από ομάδα {group}"
         
         elif action in ['fetch_data', 'ληψη παραστατικων']:
             # details may be nested under 'details' or present directly
@@ -888,16 +961,33 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 import os, json
                 data_dir = os.path.join(os.getcwd(), 'data')
                 group_dir = os.path.join(data_dir, str(group_name))
+                # Prefer normalized JSONL if present (created by migration), else fallback to legacy activity.log
+                activity_jsonl = os.path.join(group_dir, 'activity.log.jsonl')
                 activity_path = os.path.join(group_dir, 'activity.log')
-                if os.path.exists(activity_path):
-                    local_lines = []
-                    with open(activity_path, 'r', encoding='utf-8') as fh:
+                local_lines = []
+                # If either local JSONL or legacy activity.log exists, read it and normalize into local_lines
+                if os.path.exists(activity_jsonl) or os.path.exists(activity_path):
+                    # Prefer JSONL when available
+                    chosen_path = activity_jsonl if os.path.exists(activity_jsonl) else activity_path
+                    is_jsonl = chosen_path.endswith('.jsonl')
+                    with open(chosen_path, 'r', encoding='utf-8') as fh:
                         for line in fh:
                             line = line.strip()
                             if not line:
                                 continue
-                            # Try to parse JSON line first
+                            # If JSONL, try to parse each line as JSON first
                             parsed = None
+                            if is_jsonl:
+                                try:
+                                    parsed = json.loads(line)
+                                except Exception:
+                                    parsed = None
+                                if parsed and isinstance(parsed, dict):
+                                    local_lines.append(parsed)
+                                    continue
+                                # If JSON parsing fails for a JSONL file, fall through and treat as legacy line below
+
+                            # For non-JSONL or fallback, try JSON first as well
                             try:
                                 parsed = json.loads(line)
                             except Exception:
@@ -908,14 +998,12 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                                 continue
 
                             # Fallback: try to parse 'TIMESTAMP - message' plain lines
-                            # e.g. '2025-11-22T22:37:50.740089+00:00 - Bulk fetch performed: ...'
                             try:
                                 if ' - ' in line:
                                     ts_part, msg_part = line.split(' - ', 1)
                                     ts = ts_part.strip()
                                     msg = msg_part.strip()
                                     # Detect bulk fetch pattern and convert to structured entry
-                                    # Pattern: Bulk fetch performed: <d1> to <d2>, VAT <vat>, <docs> docs + <summaries> summaries by <email>
                                     import re
                                     m = re.search(r'Bulk fetch performed:\s*(?P<d1>\d{2}/\d{2}/\d{4})\s*to\s*(?P<d2>\d{2}/\d{2}/\d{4}),\s*VAT\s*(?P<vat>\d+),\s*(?P<docs>\d+)\s*docs\s*\+\s*(?P<summaries>\d+)\s*summaries\s*by\s*(?P<by>.+)$', msg)
                                     if m:
@@ -974,22 +1062,23 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                                 local_lines.append(entry)
                             except Exception:
                                 continue
-                    # Prepend local logs (most recent at file bottom) - convert to newest-first
-                    if local_lines:
-                        # Keep only up to 'limit' entries and avoid duplicates by timestamp+user+action
-                        existing_keys = set()
-                        for e in logs:
-                            k = (str(e.get('timestamp','')) + '|' + str(e.get('user_id','')) + '|' + str(e.get('action','')))
-                            existing_keys.add(k)
-                        # Add local entries reversed (newest first) and only if not present
-                        for entry in reversed(local_lines):
-                            k = (str(entry.get('timestamp','')) + '|' + str(entry.get('user_id','')) + '|' + str(entry.get('action','')))
-                            if k in existing_keys:
-                                continue
-                            logs.append(entry)
-                            existing_keys.add(k)
-                            if len(logs) >= limit:
-                                break
+
+                # Prepend local logs (most recent at file bottom) - convert to newest-first
+                if local_lines:
+                    # Keep only up to 'limit' entries and avoid duplicates by timestamp+user+action
+                    existing_keys = set()
+                    for e in logs:
+                        k = (str(e.get('timestamp','')) + '|' + str(e.get('user_id','')) + '|' + str(e.get('action','')))
+                        existing_keys.add(k)
+                    # Add local entries reversed (newest first) and only if not present
+                    for entry in reversed(local_lines):
+                        k = (str(entry.get('timestamp','')) + '|' + str(entry.get('user_id','')) + '|' + str(entry.get('action','')))
+                        if k in existing_keys:
+                            continue
+                        logs.append(entry)
+                        existing_keys.add(k)
+                        if len(logs) >= limit:
+                            break
             except Exception:
                 # Non-fatal fallback; continue with whatever logs we have
                 pass
@@ -1016,34 +1105,99 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 for group in groups:
                     folder_name = getattr(group, 'data_folder', None) or group.name
                     if folder_name:
-                        group_logs = firebase_config.firebase_get_group_activity_logs(folder_name, limit)
-                        all_logs.extend(group_logs)
+                        # First try remote logs
+                        try:
+                            group_logs = firebase_config.firebase_get_group_activity_logs(folder_name, limit) or []
+                            all_logs.extend(group_logs)
+                        except Exception:
+                            group_logs = []
+
+                        # Also include local `data/<folder>/activity.log.jsonl` (preferred) or legacy `activity.log` as a fallback
+                        try:
+                            import os, json
+                            group_dir = os.path.join(os.getcwd(), 'data', folder_name)
+                            activity_jsonl = os.path.join(group_dir, 'activity.log.jsonl')
+                            activity_path = os.path.join(group_dir, 'activity.log')
+                            if os.path.exists(activity_jsonl):
+                                with open(activity_jsonl, 'r', encoding='utf-8') as fh:
+                                    for line in fh:
+                                        line = line.strip()
+                                        if not line:
+                                            continue
+                                        try:
+                                            parsed = json.loads(line)
+                                        except Exception:
+                                            parsed = None
+                                        if parsed and isinstance(parsed, dict):
+                                            if not parsed.get('group'):
+                                                parsed['group'] = folder_name
+                                            all_logs.append(parsed)
+                                            continue
+                            elif os.path.exists(activity_path):
+                                with open(activity_path, 'r', encoding='utf-8') as fh:
+                                    for line in fh:
+                                        line = line.strip()
+                                        if not line:
+                                            continue
+                                        parsed = None
+                                        try:
+                                            parsed = json.loads(line)
+                                        except Exception:
+                                            parsed = None
+
+                                        if parsed and isinstance(parsed, dict):
+                                            # Ensure group key is present
+                                            if not parsed.get('group'):
+                                                parsed['group'] = folder_name
+                                            all_logs.append(parsed)
+                                            continue
+
+                                        # Fallback: parse 'TIMESTAMP - message' pattern
+                                        try:
+                                            if ' - ' in line:
+                                                ts_part, msg_part = line.split(' - ', 1)
+                                                entry = {
+                                                    'timestamp': ts_part.strip(),
+                                                    'group': folder_name,
+                                                    'action': 'log_message',
+                                                    'details': {'message': msg_part.strip()}
+                                                }
+                                                all_logs.append(entry)
+                                                continue
+                                        except Exception:
+                                            pass
+
+                                        # Last resort: raw line as message
+                                        try:
+                                            entry = {
+                                                'timestamp': '',
+                                                'group': folder_name,
+                                                'action': 'log_message',
+                                                'details': {'message': line}
+                                            }
+                                            all_logs.append(entry)
+                                        except Exception:
+                                            continue
+                        except Exception:
+                            # non-fatal: continue
+                            pass
             except Exception as e:
                 logger.debug(f"Could not read new format logs: {e}")
 
-            # Sort all logs by timestamp descending and limit
-            all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-            
-            # Deduplicate logs based on unique identifier (timestamp + user_id + action + group)
-            seen_keys = set()
-            deduped_logs = []
-            for log in all_logs:
-                # Create unique key from identifying fields
-                user_id = log.get('user_id') or log.get('details', {}).get('user_id', '')
-                action = log.get('action') or log.get('event_type', '')
-                group = log.get('group') or log.get('details', {}).get('group', '')
-                timestamp = log.get('timestamp', '')
-                
-                # Create composite key - use first 19 chars of timestamp to ignore milliseconds
-                key = f"{timestamp[:19]}_{user_id}_{action}_{group}"
-                
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    deduped_logs.append(log)
-            
-            logs = deduped_logs[:limit]
+            # Do not pre-limit using string sorting; we'll sort robustly after parsing timestamps
+            logs = all_logs
 
-        # Format timestamps for all logs
+        # Format timestamps for all logs and compute Athens-based sort key
+        def _athens_tz():
+            try:
+                from zoneinfo import ZoneInfo
+                return ZoneInfo("Europe/Athens")
+            except Exception:
+                from datetime import timezone, timedelta
+                return timezone(timedelta(hours=2))
+
+        athens = _athens_tz()
+
         for entry in logs:
             ts = entry.get('timestamp', '')
             dt = None
@@ -1065,6 +1219,7 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                     for fmt in (
                         "%Y-%m-%d %H:%M:%S%z",         # 2025-11-20 13:00:58+0200
                         "%Y-%m-%d %H:%M:%S",           # 2025-11-20 13:00:58
+                        "%d/%m/%Y, %H:%M:%S",          # 01/12/2025, 14:05:33 (24-hour, Greek UI)
                         "%d/%m/%Y, %I:%M:%S %p",       # 20/11/2025, 01:00:58 PM
                         "%Y-%m-%d"                     # 2025-11-20
                     ):
@@ -1074,40 +1229,135 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                         except Exception:
                             continue
                 if dt:
-                    # Convert to Greek timezone (EET/EEST)
-                    from datetime import timezone, timedelta
-                    eet = timezone(timedelta(hours=2))  # EET is UTC+2, EEST is UTC+3
-                    dt = dt.astimezone(eet)
+                    # Attach Athens tz if naive, then convert to Athens
+                    if not getattr(dt, 'tzinfo', None):
+                        dt = dt.replace(tzinfo=athens)
+                    dt = dt.astimezone(athens)
                     # Format in 24-hour format for proper sorting
                     time_str = dt.strftime('%d/%m/%Y, %H:%M:%S')
                     entry['timestamp_fmt'] = time_str
+                    try:
+                        entry['__ts_sort'] = dt.timestamp()
+                    except Exception:
+                        entry['__ts_sort'] = 0
                 elif ts and 'Invalid' not in ts:
                     entry['timestamp_fmt'] = ts
+                    entry['__ts_sort'] = 0
                 else:
                     entry['timestamp_fmt'] = '-'
+                    entry['__ts_sort'] = 0
+
+        # Robust numeric sort (Europe/Athens), newest first, then deduplicate and limit
+        try:
+            logs.sort(key=lambda e: e.get('__ts_sort', 0), reverse=True)
+        except Exception:
+            pass
+
+        # Deduplicate based on (timestamp prefix + user + action + group), keeping newest first
+        seen_keys = set()
+        deduped_logs = []
+        for log in logs:
+            user_id = log.get('user_id') or log.get('details', {}).get('user_id', '')
+            action = log.get('action') or log.get('event_type', '')
+            group = log.get('group') or log.get('details', {}).get('group', '')
+            timestamp = log.get('timestamp', '')
+            key = f"{str(timestamp)[:19]}_{user_id}_{action}_{group}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_logs.append(log)
+            if len(deduped_logs) >= limit:
+                break
+        logs = deduped_logs
 
         # Create formatted logs with Greek details
         formatted = []
+
+        def _resolve_actor_email(entry_obj: Dict[str, Any], details_obj: Dict[str, Any]) -> str:
+            """Try to return a sensible actor email or identifier for display.
+            If only a username or id is present, attempt DB lookup for email.
+            """
+            # Candidate fields in order (include legacy keys like 'by' and admin fields)
+            candidates = []
+            if isinstance(details_obj, dict):
+                candidates.extend([
+                    details_obj.get('user_email'),
+                    details_obj.get('actor_email'),
+                    details_obj.get('performed_by_email'),
+                    details_obj.get('actor'),
+                    details_obj.get('by'),
+                    details_obj.get('performed_by'),
+                    details_obj.get('admin_username'),
+                    details_obj.get('admin_user_id'),
+                    details_obj.get('user'),
+                    details_obj.get('username'),
+                    details_obj.get('user_username')
+                ])
+            candidates.extend([
+                entry_obj.get('user_email'),
+                entry_obj.get('user_id'),
+                entry_obj.get('username'),
+                entry_obj.get('admin_username'),
+                entry_obj.get('admin_user_id')
+            ])
+
+            # Normalize and pick first useful, non-placeholder value
+            placeholders = {'', None, '-', 'Άγνωστος', 'Unknown'}
+            for c in candidates:
+                if not c:
+                    continue
+                c_str = str(c).strip()
+                if not c_str or c_str in placeholders:
+                    continue
+                # If looks like email, return directly
+                if '@' in c_str:
+                    return c_str
+                # If numeric, try lookup by id
+                try:
+                    uid = int(c_str)
+                    try:
+                        user = User.query.get(uid)
+                        if user and getattr(user, 'email', None):
+                            return user.email
+                        if user and getattr(user, 'username', None):
+                            return user.username
+                    except Exception:
+                        pass
+                except Exception:
+                    # Not an int; try username lookup
+                    try:
+                        user = User.query.filter_by(username=c_str).first()
+                        if user and getattr(user, 'email', None):
+                            return user.email
+                        if user and getattr(user, 'username', None):
+                            return user.username
+                    except Exception:
+                        pass
+                # Return this candidate as last resort
+                return c_str
+
+            return '-'
+
         for entry in logs:
-            # Extract user and group info
-            if 'details' in entry and isinstance(entry['details'], dict):
-                details = entry['details']
-                user_email = details.get('user_email') or details.get('email') or entry.get('user_id') or '-'
-                group = details.get('group') or entry.get('group') or '-'
-                action = details.get('action') or entry.get('action') or '-'
-                # Create detailed description in Greek
-                details_text = _create_detailed_description(action, details)
-            else:
-                # Handle simple structure
-                user_email = entry.get('user_email') or entry.get('user_id') or entry.get('username') or '-'
+            try:
+                # Extract user and group info
+                details = entry.get('details') if isinstance(entry.get('details'), dict) else {}
+                # Resolve a displayable user_email (may be username if email missing)
+                user_email = _resolve_actor_email(entry, details)
+                group = details.get('group') or entry.get('group') or entry.get('group_name') or '-'
+                action = details.get('action') or entry.get('action') or entry.get('event') or '-'
+                # Create detailed description in Greek (include actor/target/group where possible)
+                details_text = _create_detailed_description(action, details, entry)
+            except Exception:
+                # Fallback safe handling
+                try:
+                    user_email = entry.get('user_email') or entry.get('user_id') or entry.get('username') or '-'
+                except Exception:
+                    user_email = '-'
                 action = entry.get('action') or entry.get('message') or entry.get('event') or '-'
                 group = entry.get('group') or entry.get('group_name') or '-'
-                details_obj = entry.get('details', {})
-                if isinstance(details_obj, dict):
-                    details_text = _create_detailed_description(action, details_obj)
-                else:
-                    details_text = str(details_obj) if details_obj else ''
-            
+                details_text = str(entry.get('details') or '')
+
             # Translate actions to Greek (keep simple for display)
             action_descriptions = {
                 'user_login_attempt': 'Προσπάθεια σύνδεσης',
@@ -1136,6 +1386,13 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 'ληψη παραστατικων': 'Λήψη Παραστατικών',
                 'user_deleted': 'Διαγραφή χρήστη',
                 'delete_rows': 'Διαγραφή γραμμών',
+                'remove_member': 'Αφαίρεση χρήστη',
+                'add_user': 'Προσθήκη χρήστη ομάδας',
+                'assign_user': 'Ανάθεση χρήστη',
+                'remove_user': 'Αφαίρεση χρήστη',
+                'create_group': 'Δημιουργία ομάδας',
+                'group_delete': 'Διαγραφή ομάδας',
+                'leave_group': 'Αποχώρηση από ομάδα',
             }
             action_display = action_descriptions.get(action, action)
             
@@ -1145,9 +1402,15 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 'group': group,
                 'action': action_display,  # This is the translated Greek action
                 'summary': action_display,  # Add summary field for template compatibility
-                'details': details_text  # This is the detailed Greek description
+                'details': details_text,  # This is the detailed Greek description
+                '_ts_sort': entry.get('__ts_sort', 0),
+                'ts_sort': entry.get('__ts_sort', 0)  # expose for frontend sorting
             })
-        
+        # Sort newest first based on Athens time
+        formatted.sort(key=lambda e: e.get('_ts_sort', 0), reverse=True)
+        # Keep ts_sort for frontend; drop only the private key
+        for e in formatted:
+            e.pop('_ts_sort', None)
         return formatted
 
     except Exception as e:

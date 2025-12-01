@@ -1169,5 +1169,37 @@
     "AFM_issuer": "094439854",
     "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
     "paymentMethodType": "7"
+  },
+  {
+    "mark": "400011820234407",
+    "issueDate": "01/12/2025",
+    "series": "TΔA",
+    "aa": "61498",
+    "AA": "61498",
+    "type": "1.1",
+    "vatCategory": "1",
+    "totalNetValue": "69,36",
+    "totalVatAmount": "16,65",
+    "totalValue": "86,01",
+    "classification": "αχαρακτηριστο",
+    "AFM_issuer": "800916954",
+    "Name_issuer": "",
+    "paymentMethodType": "5"
+  },
+  {
+    "mark": "400011823705209",
+    "issueDate": "01/12/2025",
+    "series": "ΤΔΑ",
+    "aa": "4653",
+    "AA": "4653",
+    "type": "1.1",
+    "vatCategory": "1",
+    "totalNetValue": "24,06",
+    "totalVatAmount": "5,77",
+    "totalValue": "29,83",
+    "classification": "αχαρακτηριστο",
+    "AFM_issuer": "800470153",
+    "Name_issuer": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
+    "paymentMethodType": "3"
   }
 ]

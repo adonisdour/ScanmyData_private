@@ -244,8 +244,26 @@ def api_get_activity():
                     except Exception:
                         continue
                 return datetime.min
-            
-            logs.sort(key=lambda x: _parse_ts(x.get('timestamp')), reverse=True)
+            # Convert parsed times to Europe/Athens for consistent ordering when naive
+            try:
+                from zoneinfo import ZoneInfo
+                athens = ZoneInfo("Europe/Athens")
+            except Exception:
+                from datetime import timezone, timedelta
+                athens = timezone(timedelta(hours=2))
+
+            def _sort_key(x):
+                dt = _parse_ts(x.get('timestamp'))
+                try:
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=athens)
+                    else:
+                        dt = dt.astimezone(athens)
+                    return dt.timestamp()
+                except Exception:
+                    return 0.0
+
+            logs.sort(key=_sort_key, reverse=True)
             logs = logs[:limit]
         
         return jsonify({
@@ -296,6 +314,20 @@ def api_get_stats():
         })
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@admin_api_bp.route('/activity/version', methods=['GET'])
+@login_required
+@_require_admin
+def api_get_activity_version():
+    """Return the global activity version for frontend polling (auto-reload)."""
+    try:
+        from datetime import datetime, timezone
+        version = firebase_config.get_activity_version()
+        return jsonify({'success': True, 'version': int(version), 'timestamp': datetime.now(timezone.utc).isoformat()})
+    except Exception as e:
+        logger.error(f"Error getting activity version: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1129,42 +1161,8 @@ def api_activity_logs():
                     filtered_logs.append(log)
             enhanced_logs = filtered_logs
         
-        # Robust sort by timestamp descending (latest first)
-        from datetime import datetime
-        def _parse_ts(ts: str):
-            if not ts or ts == '-':
-                return datetime.min
-            # Try ISO8601 variants
-            for variant in (
-                lambda s: s.replace('Z','+00:00'),  # handle trailing Z
-                lambda s: s,
-            ):
-                try:
-                    return datetime.fromisoformat(variant(ts))
-                except Exception:
-                    pass
-            # Try numeric epoch
-            try:
-                return datetime.fromtimestamp(float(ts))
-            except Exception:
-                pass
-            # Common fallback formats (now including 24-hour format)
-            for fmt in (
-                "%Y-%m-%d %H:%M:%S%z",
-                "%Y-%m-%d %H:%M:%S",
-                "%d/%m/%Y, %H:%M:%S",  # 24-hour format
-                "%d/%m/%Y, %I:%M:%S %p",  # 12-hour with AM/PM
-                "%Y-%m-%d",
-            ):
-                try:
-                    return datetime.strptime(ts, fmt)
-                except Exception:
-                    continue
-            return datetime.min
-
-        enhanced_logs.sort(key=lambda x: _parse_ts(x.get('timestamp') or x.get('timestamp_fmt') or ''), reverse=True)
-
-        # Re-limit after sorting to respect requested limit
+        # Keep the order provided by admin_panel (already newest-first in Athens time)
+        # Re-limit to respect requested limit
         enhanced_logs = enhanced_logs[:limit]
 
         return jsonify({'success': True, 'logs': enhanced_logs, 'count': len(enhanced_logs)})
