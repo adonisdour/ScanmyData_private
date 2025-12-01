@@ -11,5 +11,6 @@ curl -v \
 
 προσθηκη ειδους κινησης mtype στο modal των αποδειξεων γ κατηγοριας (οχι επαναληψιμη),
 page tour, και chatbot μεσω discord, αυτοματο reload οταν καποιος χρηστης εισαγει/αφαιρει κατι στον ιδιο ενεργο πελατη.
-signup/forgot password logging
+signup/forgot password logging ελληνικη μεταφραση
+στα email να εμφανιζεται το λογοτυπο
  

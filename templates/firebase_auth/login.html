@@ -3,28 +3,7 @@
 {% block title %}Login - Firebed Private{% endblock %}
 
 {% block content %}
-<!-- Flash Messages -->
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, msg in messages %}
-                        {% if category in ['danger','error'] %}
-                            {% set _cls = 'danger' %}
-                        {% elif category == 'success' %}
-                            {% set _cls = 'success' %}
-                        {% elif category == 'info' %}
-                            {% set _cls = 'info' %}
-                        {% elif category == 'warning' %}
-                            {% set _cls = 'warning' %}
-                        {% else %}
-                            {% set _cls = 'secondary' %}
-                        {% endif %}
-                        <div class="alert alert-{{ _cls }} alert-dismissible fade show" role="alert">
-                            {{ msg }}
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+            {# Flash messages are rendered globally in base.html -> #flashContainer; avoid duplicate rendering here #}
 
 <div class="container py-5">
     <div class="row justify-content-center">

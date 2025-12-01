@@ -16,6 +16,23 @@ login_manager = LoginManager()
 login_manager.login_view = 'auth.login'
 
 
+@login_manager.unauthorized_handler
+def unauthorized_callback():
+    """Return JSON for API/XHR requests when unauthenticated, otherwise redirect to login."""
+    try:
+        # If the request looks like an API or XHR call, return JSON/401 instead of redirecting
+        accept = request.headers.get('Accept', '') or ''
+        xrw = request.headers.get('X-Requested-With', '') or ''
+        # Consider Authorization header as indicator of API call as well
+        auth_hdr = request.headers.get('Authorization')
+        if request.path.startswith('/api') or 'application/json' in accept or xrw == 'XMLHttpRequest' or auth_hdr:
+            return jsonify({'error': 'Authentication required'}), 401
+    except Exception:
+        pass
+    # Default behavior: redirect to login page with next
+    return redirect(url_for('auth.login', next=request.path))
+
+
 @login_manager.user_loader
 def load_user(user_id):
     try:
@@ -45,6 +62,28 @@ def signup():
         # Try to register user in Firebase (if enabled). If successful, store firebase_uid.
         firebase_uid = None
         try:
+            # Check if user exists locally (do not expose this to the end-user)
+            try:
+                from models import User
+                from sqlalchemy import or_
+                local_user = User.query.filter(or_(User.email == email, User.username == email)).first()
+                user_exists = bool(local_user)
+            except Exception:
+                local_user = None
+                user_exists = False
+            # Log that a forgot-password request was received (will not reveal existence to user)
+            try:
+                from utils import log_user_activity
+                log_user_activity(
+                    user_id=email,
+                    group_name='system',
+                    action='forgot_password_request_received',
+                    details={'email': email, 'user_exists': user_exists, 'description': 'Αίτημα επαναφοράς λησμονημένου κωδικού (λήφθηκε)'} ,
+                    user_email=email,
+                    user_username=email
+                )
+            except Exception:
+                pass
             success, uid, err = FirebaseAuthHandler.register_user(username, password, display_name=username)
             if success and uid:
                 firebase_uid = uid
@@ -837,7 +876,27 @@ def lookup_user():
     # allow lookup by username, id, or email
     user = None
     if q.isdigit():
-        user = User.query.get(int(q))
+            # Compatibility: some versions of FirebaseAuthHandler expose
+            # `generate_password_reset_link`, others expose `reset_password`.
+            # Try the most specific method first, fall back gracefully.
+            ok = False
+            link_or_err = None
+            try:
+                if hasattr(FirebaseAuthHandler, 'generate_password_reset_link'):
+                    ok, link_or_err = FirebaseAuthHandler.generate_password_reset_link(email)
+                    used_method = 'generate_password_reset_link'
+                elif hasattr(FirebaseAuthHandler, 'generate_password_reset_link_local'):
+                    ok, link_or_err = FirebaseAuthHandler.generate_password_reset_link_local(email)
+                    used_method = 'generate_password_reset_link_local'
+                elif hasattr(FirebaseAuthHandler, 'reset_password'):
+                    # `reset_password` may only return (True, None) and not a link.
+                    ok, link_or_err = FirebaseAuthHandler.reset_password(email)
+                    used_method = 'reset_password'
+                else:
+                    raise AttributeError('No compatible password-reset method on FirebaseAuthHandler')
+            except Exception as _method_err:
+                # Re-raise to be handled by outer except so we log activity and flash user-friendly message
+                raise
     if not user:
         user = User.query.filter_by(username=q).first()
     if not user:
@@ -1123,38 +1182,44 @@ def forgot_password():
                 # Enhanced email template for password reset
                 app_url = os.getenv('APP_URL', 'http://localhost:5001')
                 logo_url = f"{app_url}/icons/scanmydata_logo_3000w.png"
+                # Build a resilient HTML email (high contrast and explicit styles)
                 html_body = f"""
                 <html>
-                    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                            <div style="text-align: center; margin-bottom: 30px;">
-                                <img src="{logo_url}" alt="ScanmyData" style="height: 60px; width: auto;">
-                            </div>
-                            <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-                                <h1 style="margin: 0; font-size: 28px;">🔐 Επαναφορά Κωδικού</h1>
-                            </div>
-                            
-                            <div style="background: white; padding: 30px; border: 1px solid #e1e5e9; border-radius: 0 0 10px 10px;">
-                                <h2 style="color: #333; margin-top: 0;">Αλλαγή Κωδικού Πρόσβασης</h2>
-                                <p style="color: #666; font-size: 16px; line-height: 1.6;">Λάβαμε αίτημα για επαναφορά του κωδικού πρόσβασής σας. Κάντε κλικ στο παρακάτω κουμπί για να ορίσετε νέο κωδικό:</p>
-                                
-                                <div style="text-align: center; margin: 30px 0;">
-                                    <a href="{reset_link}" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 50px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);">🔑 Επαναφορά Κωδικού</a>
-                                </div>
-                                
-                                <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                                    <p style="margin: 0; color: #856404; font-size: 14px;">⏰ <strong>Σημαντικό:</strong> Αυτός ο σύνδεσμος λήγει σε 1 ώρα για λόγους ασφαλείας.</p>
-                                </div>
-                                
-                                <p style="color: #888; font-size: 14px; margin-top: 30px;">Εάν το κουμπί δεν λειτουργεί, αντιγράψτε αυτό το link:</p>
-                                <p style="background: #f8f9fa; padding: 10px; border-radius: 5px; word-break: break-all; font-family: monospace; font-size: 12px;">{reset_link}</p>
-                                
-                                <hr style="border: none; height: 1px; background: #eee; margin: 30px 0;">
-                                <p style="color: #888; font-size: 12px; text-align: center;">Εάν δεν ζητήσατε αυτή την αλλαγή, παραβλέψτε αυτό το email. Ο κωδικός σας θα παραμείνει αμετάβλητος.</p>
-                                <div style="text-align: center; margin-top: 30px;">
-                                    <img src="{logo_url}" alt="ScanmyData" style="height: 40px; width: auto; opacity: 0.6;">
-                                </div>
-                            </div>
+                    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a; background-color: #ffffff; margin:0; padding:0;">
+                        <div style="width:100%; padding:20px; background-color:#f8fafc;">
+                            <table width="100%" cellspacing="0" cellpadding="0" style="max-width:600px; margin:0 auto;">
+                                <tr>
+                                    <td style="padding:18px 0; text-align:center;">
+                                        <img src="{logo_url}" alt="ScanmyData" style="height:60px; width:auto; display:block; margin:0 auto;" />
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <table width="100%" cellspacing="0" cellpadding="0" style="background:#ffffff; border-radius:10px; box-shadow:0 4px 12px rgba(16,24,40,0.05);">
+                                            <tr>
+                                                <td style="padding:24px; text-align:left;">
+                                                    <h2 style="color:#0f172a; margin:0 0 10px; font-size:20px;">🔐 Επαναφορά Κωδικού</h2>
+                                                    <p style="color:#475569; font-size:15px; margin:0 0 16px;">Λάβαμε αίτημα για επαναφορά του κωδικού πρόσβασής σας. Κάντε κλικ στο παρακάτω κουμπί για να ορίσετε νέο κωδικό:</p>
+                                                    <div style="text-align:center; margin:18px 0;">
+                                                        <a href="{reset_link}" style="display:inline-block; background-color:#ff6b6b; color:#ffffff !important; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:700; font-family:Arial, sans-serif; border:2px solid #ee5a24;">🔑 Επαναφορά Κωδικού</a>
+                                                    </div>
+                                                    <div style="background:#fff7ed; border:1px solid #ffedd5; padding:12px; border-radius:6px; margin:12px 0; color:#92400e;">
+                                                        <p style="margin:0; font-size:14px;">⏰ <strong>Σημαντικό:</strong> Αυτός ο σύνδεσμος λήγει σε 1 ώρα για λόγους ασφαλείας.</p>
+                                                    </div>
+                                                    <p style="color:#475569; font-size:14px;">Εάν το κουμπί δεν λειτουργεί, αντιγράψτε αυτό το link στον browser σας:</p>
+                                                    <p style="background:#f8fafc; padding:10px; border-radius:6px; word-break:break-all; font-size:13px; font-family:monospace;">{reset_link}</p>
+                                                    <p style="color:#94a3b8; font-size:12px; text-align:center; margin:18px 0 0;">Εάν δεν ζητήσατε αυτή την αλλαγή, αγνοήστε αυτό το email.</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:14px; text-align:center;">
+                                                    <img src="{logo_url}" alt="ScanmyData" style="height:40px; width:auto; display:block; margin:0 auto; opacity:0.9;" />
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
                         </div>
                     </body>
                 </html>
@@ -1162,15 +1227,51 @@ def forgot_password():
                 sent = email_utils.send_email(email, '🔐 Επαναφορά Κωδικού - ScanmyData', html_body)
                 if sent:
                     flash('Εάν το email υπάρχει στο σύστημά μας, θα λάβετε σύνδεσμο επαναφοράς κωδικού (ελέγξτε τα εισερχόμενά σας).', 'info')
+                    try:
+                        from utils import log_user_activity
+                        log_user_activity(
+                            user_id=email,
+                            group_name='system',
+                            action='forgot_password_request',
+                            details={'email': email, 'sent': True, 'description': 'Αποστολή συνδέσμου επαναφοράς'},
+                            user_email=email,
+                            user_username=email
+                        )
+                    except Exception:
+                        pass
                 else:
                     current_app.logger.info(f"Firebase password reset link for {email}: {reset_link}")
                     flash('Εάν το email υπάρχει στο σύστημά μας, θα λάβετε σύνδεσμο επαναφοράς κωδικού (ελέγξτε τα εισερχόμενά σας).', 'info')
+                    try:
+                        from utils import log_user_activity
+                        log_user_activity(
+                            user_id=email,
+                            group_name='system',
+                            action='forgot_password_request',
+                            details={'email': email, 'sent': False, 'link': reset_link, 'description': 'Καταγραφή συνδέσμου επαναφοράς (fallback)'},
+                            user_email=email,
+                            user_username=email
+                        )
+                    except Exception:
+                        pass
             else:
                 current_app.logger.warning(f"Could not generate Firebase password reset link: {link_or_err}")
                 flash('Εάν το email υπάρχει στο σύστημά μας, θα λάβετε σύνδεσμο επαναφοράς κωδικού (ελέγξτε τα εισερχόμενά σας).', 'info')
             return redirect(url_for('auth.login'))
         except Exception as e:
             current_app.logger.exception('Forgot password failed')
+            try:
+                from utils import log_user_activity
+                log_user_activity(
+                    user_id=email if 'email' in locals() else 'unknown',
+                    group_name='system',
+                    action='forgot_password_request_error',
+                    details={'email': email if 'email' in locals() else None, 'error': str(e), 'description': 'Σφάλμα κατά επεξεργασία αιτήματος επαναφοράς'},
+                    user_email=email if 'email' in locals() else None,
+                    user_username=email if 'email' in locals() else None
+                )
+            except Exception:
+                pass
             flash('Σφάλμα κατά την επεξεργασία του αιτήματος επαναφοράς κωδικού', 'danger')
             return redirect(url_for('auth.forgot_password'))
     

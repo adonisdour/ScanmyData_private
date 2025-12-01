@@ -192,7 +192,7 @@ class FirebedEmailVerification:
                     body {{ 
                         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                         line-height: 1.6;
-                        color: #333;
+                        color: #0f172a;
                         max-width: 600px;
                         margin: 0 auto;
                         padding: 20px;
@@ -426,30 +426,26 @@ ScanmyData Team
                     .header {{
                         text-align: center;
                         margin-bottom: 30px;
-                        border-bottom: 3px solid #f39c12;
+                        border-bottom: 3px solid #f1f5f9;
                         padding-bottom: 20px;
                     }}
                     .logo {{
                         font-size: 28px;
                         font-weight: bold;
-                        color: #e74c3c;
+                        color: #0f172a;
                         margin-bottom: 10px;
                     }}
                     .reset-btn {{
                         display: inline-block;
-                        background: linear-gradient(135deg, #f39c12, #e67e22);
-                        color: white !important;
-                        padding: 15px 30px;
-                        text-decoration: none;
+                        background-color: #ff6b6b !important;
+                        color: #ffffff !important;
+                        padding: 14px 28px;
+                        text-decoration: none !important;
                         border-radius: 8px;
                         font-weight: bold;
                         text-align: center;
                         margin: 20px 0;
-                        transition: all 0.3s ease;
-                    }}
-                    .reset-btn:hover {{
-                        background: linear-gradient(135deg, #e67e22, #d35400);
-                        transform: translateY(-2px);
+                        border: 2px solid #ee5a24;
                     }}
                     .warning-box {{
                         background: #fff3cd;

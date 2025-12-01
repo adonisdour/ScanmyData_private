@@ -120,12 +120,36 @@ def reset_password():
                 'password_reset_completed',
                 {'email': email, 'timestamp': datetime.now(timezone.utc).isoformat()}
             )
+            try:
+                from utils import log_user_activity
+                log_user_activity(
+                    user_id=user.uid,
+                    group_name='system',
+                    action='password_reset_completed',
+                    details={'email': email, 'description': 'Ολοκλήρωση επαναφοράς κωδικού'},
+                    user_email=email,
+                    user_username=email
+                )
+            except Exception:
+                pass
             
             flash('✅ Ο κωδικός επαναφέρθηκε επιτυχώς! Μπορείτε τώρα να συνδεθείτε.', 'success')
             return redirect(url_for('firebase_auth.firebase_login'))
             
         except Exception as e:
             logger.error(f"Password reset error: {e}")
+            try:
+                from utils import log_user_activity
+                log_user_activity(
+                    user_id=email if 'email' in locals() else 'unknown',
+                    group_name='system',
+                    action='password_reset_error',
+                    details={'email': email if 'email' in locals() else None, 'error': str(e), 'description': 'Σφάλμα επαναφοράς κωδικού'},
+                    user_email=email if 'email' in locals() else None,
+                    user_username=email if 'email' in locals() else None
+                )
+            except Exception:
+                pass
             flash('❌ Σφάλμα επαναφοράς κωδικού. Δοκιμάστε ξανά.', 'danger')
             return render_template('firebase_auth/reset_password.html', token=token)
     

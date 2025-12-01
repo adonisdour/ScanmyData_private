@@ -380,43 +380,66 @@ def send_password_reset(user_email: str, user_id: int, user_username: str) -> bo
     reset_url = f"{APP_URL}/auth/reset-password?token={token}"
     logo_url = f"{APP_URL}/icons/scanmydata_logo_3000w.png"
     
+    # Use a high-contrast, simple layout so the email renders correctly
+    # in both light and dark modes and across common email clients.
     html_body = f"""
     <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
-                <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                    <div style="text-align: center; margin-bottom: 30px;">
-                        <img src="{logo_url}" alt="ScanmyData" style="height: 80px; width: auto;">
-                    </div>
-                    <h2 style="color: #f39c12; text-align: center;">🔐 Επαναφορά Κωδικού - ScanmyData</h2>
-                    <p>Γεια σου {user_username},</p>
-                    <p>Λάβαμε αίτημα για επαναφορά του κωδικού σου στο <strong>ScanmyData</strong>. Πάτησε τον παρακάτω σύνδεσμο για να ορίσεις νέο κωδικό:</p>
-                    <p style="margin: 25px 0; text-align: center;">
-                        <a href="{reset_url}" style="background-color: #f39c12; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">🔐 Επαναφορά Κωδικού</a>
-                    </p>
-                    <div style="background: #e8f4fd; border-left: 4px solid #3498db; padding: 15px; margin: 20px 0; border-radius: 4px;">
-                        <strong>📋 Διαδικασία Επαναφοράς:</strong><br>
-                        1. Κάνε κλικ στο κουμπί παραπάνω<br>
-                        2. Εισάγαγε νέο κωδικό (τουλάχιστον 6 χαρακτήρες)<br>
-                        3. Επιβεβαίωσε τον νέο κωδικό<br>
-                        4. Κάνε login με τα νέα στοιχεία
-                    </div>
-                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 6px; margin: 20px 0;">
-                        <strong>⚠️ Σημαντικό:</strong><br>
-                        • Το link ισχύει για 1 ώρα από την αποστολή<br>
-                        • Αν δεν ζήτησες εσύ επαναφορά, αγνόησε αυτό το email<br>
-                        • Ο κωδικός σου δεν θα αλλάξει χωρίς την επιβεβαίωσή σου
-                    </div>
-                    <p style="font-size: 14px; color: #666;"><strong>Δεν μπορείς να κάνεις κλικ στο κουμπί;</strong><br>Αντίγραψε αυτό το URL στον browser σου:</p>
-                    <p style="background-color: #f3f4f6; padding: 10px; border-radius: 5px; word-break: break-all; font-size: 12px;"><small>{reset_url}</small></p>
-                    <p style="font-size: 12px; color: #999; text-align: center;">Ο σύνδεσμος λήγει σε 1 ώρα.</p>
-                    <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
-                    <p style="color: #6b7280; font-size: 0.9em; text-align: center;">Εάν δεν ζήτησες αυτό, παρακαλώ αγνόησε αυτό το email και ο κωδικός σου θα παραμείνει αμετάβλητος.</p>
-                    <div style="text-align: center; margin-top: 30px;">
-                        <img src="{logo_url}" alt="ScanmyData" style="height: 50px; width: auto; opacity: 0.6;">
-                        <p style="font-size: 12px; color: #999; margin-top: 10px;"><strong>ScanmyData Security Team</strong></p>
-                    </div>
-                </div>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a; background-color: #ffffff; margin:0; padding:0;">
+            <div style="width:100%; padding:20px; background-color:#f8fafc;">
+                <table width="100%" cellspacing="0" cellpadding="0" style="max-width:600px; margin:0 auto;">
+                    <tr>
+                        <td style="padding:20px 0; text-align:center;">
+                            <img src="{logo_url}" alt="ScanmyData" style="height:80px; width:auto; display:block; margin:0 auto;" />
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <table width="100%" cellspacing="0" cellpadding="0" style="background:#ffffff; border-radius:10px; box-shadow:0 4px 12px rgba(16,24,40,0.05);">
+                                <tr>
+                                    <td style="Padding:28px; text-align:left;">
+                                        <h2 style="color:#0f172a; margin:0 0 12px; font-size:20px;">🔐 Επαναφορά Κωδικού - ScanmyData</h2>
+                                        <p style="color:#475569; font-size:15px; margin:0 0 18px;">Γεια σου {user_username},</p>
+                                        <p style="color:#475569; font-size:15px; margin:0 0 22px;">Λάβαμε αίτημα για επαναφορά του κωδικού σου στο <strong>ScanmyData</strong>. Πάτησε το κουμπί παρακάτω για να ορίσεις νέο κωδικό:</p>
+                                        <div style="text-align:center; margin: 18px 0;">
+                                            <!-- Button as a solid, high-contrast link with border for email clients -->
+                                            <a href="{reset_url}" style="display:inline-block; background-color:#ff6b6b; color:#ffffff !important; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:700; font-family:Arial, sans-serif; border:2px solid #ee5a24;">🔑 Επαναφορά Κωδικού</a>
+                                        </div>
+
+                                        <div style="background:#f1f5f9; border-left:4px solid #60a5fa; padding:12px 14px; margin:18px 0; border-radius:6px; color:#0f172a;">
+                                            <strong>📋 Διαδικασία Επαναφοράς:</strong>
+                                            <div style="margin-top:6px; font-size:14px; color:#475569;">
+                                                1. Κάνε κλικ στο κουμπί παραπάνω<br>
+                                                2. Εισάγαγε νέο κωδικό (τουλάχιστον 6 χαρακτήρες)<br>
+                                                3. Επιβεβαίωσε τον νέο κωδικό<br>
+                                                4. Κάνε login με τα νέα στοιχεία
+                                            </div>
+                                        </div>
+
+                                        <div style="background:#fff7ed; border:1px solid #ffedd5; padding:12px; border-radius:6px; margin:0 0 18px; color:#92400e;">
+                                            <strong>⚠️ Σημαντικό:</strong>
+                                            <div style="margin-top:6px; font-size:14px; color:#92400e;">
+                                                • Το link ισχύει για 1 ώρα από την αποστολή<br>
+                                                • Αν δεν ζήτησες εσύ επαναφορά, αγνόησε αυτό το email<br>
+                                            </div>
+                                        </div>
+
+                                        <p style="font-size:14px; color:#475569;">Εάν το κουμπί δεν λειτουργεί, αντιγράψε αυτό το URL στον browser σου:</p>
+                                        <p style="background:#f8fafc; padding:10px; border-radius:6px; word-break:break-all; font-size:13px; font-family:monospace;">{reset_url}</p>
+
+                                        <p style="font-size:13px; color:#64748b; text-align:center; margin:26px 0 8px;">Ο σύνδεσμος λήγει σε 1 ώρα.</p>
+                                        <p style="font-size:12px; color:#94a3b8; text-align:center; margin:0;">Εάν δεν ζήτησες αυτό, παρακαλώ αγνόησε αυτό το email.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:16px; text-align:center;">
+                                        <img src="{logo_url}" alt="ScanmyData" style="height:42px; width:auto; display:block; margin:0 auto; opacity:0.85;" />
+                                        <p style="font-size:12px; color:#94a3b8; margin:8px 0 0;"><strong>ScanmyData Security Team</strong></p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
             </div>
         </body>
     </html>
