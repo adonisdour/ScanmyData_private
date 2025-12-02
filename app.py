@@ -2776,18 +2776,101 @@ def get_last_fetch_date(credential_name: str) -> Optional[str]:
     Get the last fetch date for a credential (stored in fiscal_meta.json).
     Returns ISO 8601 date string or None if not found.
     """
+    # First try: fiscal_meta.json (existing behavior)
     try:
         p = _fiscal_meta_path()
-        if not os.path.exists(p):
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    data = json.load(fh) or {}
+            except Exception:
+                data = {}
+            fetches = data.get("last_fetches", {}) if isinstance(data, dict) else {}
+            if isinstance(fetches, dict) and credential_name in fetches:
+                return fetches.get(credential_name)
+    except Exception:
+        pass
+
+    # Fallback: read activity.log and extract latest fetch timestamp for this credential (VAT)
+    try:
+        import re
+        from datetime import datetime, timezone
+        grp_base = get_group_base_dir()
+        act_path = os.path.join(grp_base, 'activity.log')
+        if not os.path.exists(act_path):
             return None
-        with open(p, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if not data:
+
+        candidate = None
+        fetch_actions = {"fetch_data", "ληψη παραστατικων", "ληψη παραστατικων", "ληψη παραστατικών", "Λήψη Παραστατικών", "λήψη παραστατικων", "ληψη παραστατικών"}
+
+        with open(act_path, 'r', encoding='utf-8') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                # try JSON line
+                try:
+                    obj = json.loads(line)
+                    act = obj.get('action') or ''
+                    if act and act in fetch_actions:
+                        ts = obj.get('timestamp') or obj.get('ts') or (obj.get('details') or {}).get('timestamp')
+                        if not ts:
+                            continue
+                        # if credential looks like VAT, filter by details.vat / πελατης
+                        if re.fullmatch(r"\d{8,9}", str(credential_name)):
+                            details = obj.get('details') or {}
+                            v = details.get('vat') or details.get('πελατης') or details.get('client')
+                            if v and str(v) != str(credential_name):
+                                continue
+                        try:
+                            dt = datetime.fromisoformat(ts)
+                        except Exception:
+                            try:
+                                dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+                            except Exception:
+                                dt = None
+                        if dt:
+                            if (candidate is None) or (dt > candidate):
+                                candidate = dt
+                    continue
+                except Exception:
+                    pass
+
+                # legacy text lines
+                m = re.search(r'(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:\.\+\-]+)\s+-\s+Bulk fetch performed:.*VAT\s+(?P<vat>\d+)', line)
+                if m:
+                    ts = m.group('ts')
+                    vat = m.group('vat')
+                    if re.fullmatch(r"\d{8,9}", str(credential_name)) and str(vat) != str(credential_name):
+                        continue
+                    try:
+                        dt = datetime.fromisoformat(ts)
+                    except Exception:
+                        try:
+                            dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+                        except Exception:
+                            dt = None
+                    if dt:
+                        if (candidate is None) or (dt > candidate):
+                            candidate = dt
+
+        if candidate is None:
             return None
-        fetches = data.get("last_fetches", {})
-        if isinstance(fetches, dict):
-            return fetches.get(credential_name)
-        return None
+
+        # convert to Europe/Athens and format dd/mm/YYYY HH:MM
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo('Europe/Athens')
+            if candidate.tzinfo is None:
+                candidate = candidate.replace(tzinfo=timezone.utc)
+            local_dt = candidate.astimezone(tz)
+            return local_dt.strftime('%d/%m/%Y %H:%M')
+        except Exception:
+            # best-effort fallback: return ISO
+            try:
+                return candidate.isoformat()
+            except Exception:
+                return None
     except Exception:
         return None
 
