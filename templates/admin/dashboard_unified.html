@@ -206,7 +206,7 @@
           <div class="flex gap-2">
             <div class="flex-1 relative">
               <input type="text" id="group-search" class="w-full px-3 py-2 border rounded" placeholder="Αναζήτηση ομάδας..." autocomplete="off">
-              <select id="group-select" class="absolute inset-0 w-full px-3 py-2 border rounded opacity-0 cursor-pointer">
+              <select id="group-select" class="absolute inset-0 w-full px-3 py-2 border rounded opacity-0" style="pointer-events:none;" aria-hidden="true">
                 <option value="">-- Επιλέξτε Ομάδα --</option>
               </select>
               <div id="group-dropdown" class="absolute top-full left-0 right-0 bg-white border border-gray-300 rounded-b shadow-lg max-h-48 overflow-y-auto hidden z-10">
@@ -1026,6 +1026,20 @@ function populateGroupSelect(groups) {
       dropdown.style.display = 'none';
     }
   });
+
+  // Restore previously selected group from localStorage if available
+  try {
+    const saved = localStorage.getItem('admin_backup_selected_group');
+    if (saved) {
+      const opt = Array.from(select.options).find(o => o.value === saved);
+      if (opt) {
+        select.value = saved;
+        searchInput.value = opt.textContent;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
 }
 
 function selectGroup(value, text) {
@@ -1036,6 +1050,9 @@ function selectGroup(value, text) {
   select.value = value;
   searchInput.value = text;
   dropdown.style.display = 'none';
+  try {
+    localStorage.setItem('admin_backup_selected_group', value);
+  } catch (e) {}
 }
 
 function showBackupTab(type) {
@@ -1311,12 +1328,26 @@ async function restoreBackup(backupName, type) {
 async function backupAllData() {
   const btn = event.target;
   btn.disabled = true;
-  btn.textContent = '⏳ Δημιουργία backup...';
-  
   try {
-    const response = await fetch('/admin/api/backup/all', { method: 'POST' });
+    const choice = await showModalChoice('Πού να αποθηκευτεί το backup;', 'Επιλέξτε που θέλετε να αποθηκευτεί το backup:', [
+      { key: 'local', label: 'Τοπικά (Server)' },
+      { key: 'remote', label: 'Firebase (Remote)' },
+      { key: 'both', label: 'Και τα δύο' }
+    ]);
+
+    if (!choice) {
+      btn.disabled = false;
+      return;
+    }
+
+    btn.textContent = '⏳ Δημιουργία backup...';
+    const response = await fetch('/admin/api/backup/all', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: choice })
+    });
     const data = await response.json();
-    
+
     if (data.success) {
       showSuccessModal('✅ Επιτυχία', 'Backup δημιουργήθηκε επιτυχώς', () => {
         loadBackups();
@@ -1325,6 +1356,7 @@ async function backupAllData() {
       showErrorModal('❌ Σφάλμα', 'Σφάλμα: ' + (data.error || 'Άγνωστο σφάλμα'));
     }
   } catch (err) {
+    console.error('backupAllData error', err);
     showErrorModal('❌ Σφάλμα', 'Σφάλμα backup');
   } finally {
     btn.disabled = false;
@@ -1338,16 +1370,30 @@ async function backupSpecificGroup() {
     showErrorModal('❌ Σφάλμα', 'Παρακαλώ επιλέξτε ομάδα');
     return;
   }
-  
+
   const btn = event.target;
   btn.disabled = true;
-  btn.textContent = '⏳ Δημιουργία backup...';
-  
   try {
-    const response = await fetch(`/admin/groups/${groupId}/backup`, { method: 'POST' });
+    const choice = await showModalChoice('Πού να αποθηκευτεί το backup ομάδας;', 'Επιλέξτε προορισμό για το backup της ομάδας:', [
+      { key: 'local', label: 'Τοπικά (Server)' },
+      { key: 'remote', label: 'Firebase (Remote)' },
+      { key: 'both', label: 'Και τα δύο' }
+    ]);
+
+    if (!choice) {
+      btn.disabled = false;
+      return;
+    }
+
+    btn.textContent = '⏳ Δημιουργία backup...';
+    const response = await fetch(`/admin/api/group/${groupId}/backup`, { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: choice })
+    });
     const data = await response.json();
-    
-    if (data.ok) {
+
+    if (data.success || data.ok) {
       showSuccessModal('✅ Επιτυχία', 'Backup ομάδας δημιουργήθηκε επιτυχώς', () => {
         loadBackups();
       });
@@ -1355,6 +1401,7 @@ async function backupSpecificGroup() {
       showErrorModal('❌ Σφάλμα', 'Σφάλμα: ' + (data.error || 'Άγνωστο σφάλμα'));
     }
   } catch (err) {
+    console.error('backupSpecificGroup error', err);
     showErrorModal('❌ Σφάλμα', 'Σφάλμα backup ομάδας');
   } finally {
     btn.disabled = false;

@@ -431,33 +431,57 @@ def api_restore_remote_backup():
 def api_backup_all():
     """Backup all system data"""
     try:
+        data = request.json or {}
+        target = data.get('target', 'remote')  # 'local' | 'remote' | 'both'
+
         backup_timestamp = datetime.now(timezone.utc).isoformat()
         backup_path = f'/backups/full_backup/{backup_timestamp}'
-        
-        # Backup all groups
+
+        # Backup all groups list
         groups = admin_list_all_groups()
-        backup_data = {
-            'timestamp': backup_timestamp,
-            'user_id': current_user.id,
-            'groups_count': len(groups),
-            'groups': {}
-        }
-        
-        for group in groups:
-            group_name = group.get('name') or group.get('group_name')
-            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data:
-                backup_data['groups'][group['group_name']] = group_data
-        
-        # Write backup
-        firebase_config.firebase_write_data(backup_path, backup_data)
-        
-        logger.info(f"Full system backup created: {backup_path}")
-        
+
+        results = {'groups_processed': 0, 'local_paths': [], 'remote_path': None}
+
+        # If remote requested, build payload and write to firebase (existing behavior)
+        if target in ('remote', 'both'):
+            backup_data = {
+                'timestamp': backup_timestamp,
+                'user_id': current_user.id,
+                'groups_count': len(groups),
+                'groups': {}
+            }
+
+            for group in groups:
+                group_name = group.get('name') or group.get('group_name')
+                group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
+                if group_data:
+                    backup_data['groups'][group['group_name']] = group_data
+
+            firebase_config.firebase_write_data(backup_path, backup_data)
+            results['remote_path'] = backup_path
+
+        # If local requested, create per-group backups into data/_backups
+        if target in ('local', 'both'):
+            local_paths = []
+            for grp in groups:
+                gid = grp.get('id')
+                try:
+                    p = admin_panel.admin_backup_group(gid)
+                    if p:
+                        local_paths.append(p)
+                except Exception as e:
+                    logger.warning(f"Failed local backup for group {gid}: {e}")
+            results['local_paths'] = local_paths
+
+        results['groups_processed'] = len(groups)
+        logger.info(f"Full system backup completed: target={target} groups={len(groups)}")
+
         return jsonify({
             'success': True,
-            'backup_path': backup_path,
-            'groups_backed_up': len(groups),
+            'backup_target': target,
+            'remote_path': results.get('remote_path'),
+            'local_paths': results.get('local_paths'),
+            'groups_backed_up': results.get('groups_processed'),
             'message': 'Full system backup created'
         })
     except Exception as e:

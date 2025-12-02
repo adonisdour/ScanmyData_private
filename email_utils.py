@@ -59,6 +59,12 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     provider = get_email_provider()
     logger.info(f"send_email called: to={to_email}, subject={subject}, provider={provider}")
     
+    # Try to inline local logo image as data URI so recipients see it even when remote images are blocked
+    try:
+        html_body = _inline_logo_into_html(html_body)
+    except Exception:
+        pass
+
     # Route to appropriate sending function
     if provider == 'railway_proxy':
         logger.info(f"Routing to Railway Proxy for {to_email}")
@@ -72,6 +78,53 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     else:
         logger.info(f"Routing to SMTP for {to_email}")
         return send_smtp_email(to_email, subject, html_body, text_body)
+
+
+def _inline_logo_into_html(html: str) -> str:
+    """If a local logo file exists (icons/scanmydata_logo_3000w.png), embed it as a base64 data URI
+    and replace absolute logo URLs (using APP_URL) in the provided HTML. This helps email clients
+    show the logo even if they block external images or the APP_URL is localhost.
+    """
+    try:
+        if not html or '<img' not in html:
+            return html
+        # Common logo file paths to try (project relative)
+        candidates = [
+            os.path.join(os.getcwd(), 'icons', 'scanmydata_logo_3000w.png'),
+            os.path.join(os.getcwd(), 'static', 'icons', 'scanmydata_logo_3000w.png'),
+            os.path.join(os.getcwd(), 'icons', 'scanmydata_logo.png'),
+        ]
+        logo_path = None
+        for p in candidates:
+            if os.path.exists(p):
+                logo_path = p
+                break
+        if not logo_path:
+            return html
+
+        # Read and base64-encode
+        import base64
+        with open(logo_path, 'rb') as fh:
+            raw = fh.read()
+        mime = 'image/png'
+        b64 = base64.b64encode(raw).decode('ascii')
+        data_uri = f'data:{mime};base64,{b64}'
+
+        # Replace occurrences of absolute logo URL (APP_URL + /icons/...) with data URI
+        # Also replace any src="/icons/..." occurrences
+        abs_url_prefix = APP_URL.rstrip('/') + '/icons/'
+        html = html.replace(abs_url_prefix, 'data-inline-logo://')
+        html = html.replace('src="/icons/', f'src="{data_uri}')
+        html = html.replace("src='/icons/", f"src='{data_uri}")
+        # Replace the temporary placeholder
+        html = html.replace('data-inline-logo://', data_uri)
+
+        # Also replace any remaining direct APP_URL/icon occurrences
+        html = html.replace(APP_URL.rstrip('/') + '/', APP_URL.rstrip('/') + '/')
+        return html
+    except Exception as e:
+        logger.debug(f"_inline_logo_into_html failed: {e}")
+        return html
 
 
 def send_smtp_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:

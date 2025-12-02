@@ -123,6 +123,68 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+
+/**
+ * Show a choice modal with multiple options
+ * @param {string} title
+ * @param {string} message
+ * @param {Array<{key:string,label:string}>} options - array of {key,label}
+ * @returns {Promise<string|null>} - selected key or null if cancelled
+ */
+async function showModalChoice(title, message, options) {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[100]';
+    modal.id = 'modalChoice_' + Date.now();
+
+    const buttonsHtml = (options || []).map(opt => `
+      <button type="button" data-key="${escapeHtml(opt.key)}" class="modal-choice-btn modal-warning-btn modal-choice-option" style="margin:6px;">
+        ${escapeHtml(opt.label)}
+      </button>
+    `).join('');
+
+    modal.innerHTML = `
+      <div class="modal-warning-panel max-w-md w-11/12">
+        <div class="modal-warning-title">${escapeHtml(title)}</div>
+        <div class="modal-warning-body">
+          <p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>
+        </div>
+        <div class="modal-warning-actions" style="display:flex;flex-wrap:wrap;justify-content:flex-end;">
+          ${buttonsHtml}
+          <button type="button" class="modal-warning-btn modal-warning-btn--muted modal-choice-cancel" style="margin:6px;">Άκυρο</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const optionBtns = modal.querySelectorAll('.modal-choice-option');
+    optionBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const key = btn.getAttribute('data-key');
+        modal.remove();
+        resolve(key);
+      });
+    });
+
+    const cancelBtn = modal.querySelector('.modal-choice-cancel');
+    cancelBtn.focus();
+    cancelBtn.addEventListener('click', () => {
+      modal.remove();
+      resolve(null);
+    });
+
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', handleEscape);
+        modal.remove();
+        resolve(null);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+  });
+}
+
 /**
  * Create a simple wrapper for existing showAlert pattern
  * If a modal with id 'id' and data-role='modal-warning' exists, use it

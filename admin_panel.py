@@ -889,7 +889,22 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
         
         elif action == 'password_changed':
             return "Αλλαγή κωδικού πρόσβασης"
-        
+
+        elif action == 'password_reset_requested' or action == 'forgot_password_request':
+            # details may contain 'email' or 'user'
+            email = get_field('email') or get_field('user_email') or get_field('user') or get_field('actor') or '-'
+            return f"Αίτηση επαναφοράς κωδικού για {email} — αποστολή email επαναφοράς"
+
+        elif action in ['password_reset_email_sent']:
+            email = get_field('email') or get_field('user_email') or get_field('user') or get_field('actor') or '-'
+            return f"Αποστολή email επαναφοράς κωδικού σε {email}"
+
+        elif action in ['forgot_password_request_error', 'password_reset_error']:
+            reason = get_field('reason') or get_field('message') or get_field('error') or ''
+            reason_text = f": {reason}" if reason else ''
+            email = get_field('email') or get_field('user_email') or get_field('user') or '-'
+            return f"Σφάλμα κατά την αίτηση επαναφοράς κωδικού για {email}{reason_text}"
+
         elif action == 'password_reset_completed':
             return "Ολοκλήρωση επαναφοράς κωδικού μέσω email"
         
@@ -907,9 +922,25 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
             return f"Διαγραφή backup: {backup_name}{admin_text}"
         
         elif action in ['send_email', 'admin_send_email']:
-            recipient_count = details.get('recipient_count') or details.get('recipients', [])
-            if isinstance(recipient_count, list):
-                recipient_count = len(recipient_count)
+            # Determine recipient count from multiple possible shapes used in logging
+            recipient_count = 0
+            try:
+                if isinstance(details.get('recipients'), list):
+                    recipient_count = len(details.get('recipients'))
+                elif isinstance(details.get('recipient_count'), int):
+                    recipient_count = int(details.get('recipient_count'))
+                elif isinstance(details.get('user_count'), int):
+                    recipient_count = int(details.get('user_count'))
+                elif isinstance(details.get('sent'), int):
+                    recipient_count = int(details.get('sent'))
+                else:
+                    # Fallback: if recipients is present but not a list, try to compute length
+                    recs = details.get('recipients')
+                    if recs and isinstance(recs, str):
+                        # comma separated
+                        recipient_count = len([r for r in recs.split(',') if r.strip()])
+            except Exception:
+                recipient_count = 0
             admin_text = " (από admin)" if action.startswith('admin_') else ""
             return f"Αποστολή email σε {recipient_count} παραλήπτες{admin_text}"
         
@@ -1371,6 +1402,11 @@ def admin_get_activity_logs(group_name: Optional[str] = None, limit: int = 100) 
                 'logout': 'Αποσύνδεση',
                 'user_registered': 'Εγγραφή χρήστη',
                 'verification_email_sent': 'Αποστολή email επαλήθευσης',
+                'password_reset_requested': 'Αίτηση επαναφοράς κωδικού',
+                'password_reset_email_sent': 'Αποστολή email επαναφοράς',
+                'forgot_password_request': 'Αίτηση επαναφοράς κωδικού',
+                'forgot_password_request_error': 'Σφάλμα επαναφοράς κωδικού',
+                'password_reset_error': 'Σφάλμα επαναφοράς κωδικού',
                 'delete_user': 'Διαγραφή χρήστη',
                 'delete_backup': 'Διαγραφή backup',
                 'admin_delete_user': 'Διαγραφή χρήστη (admin)',
