@@ -7131,6 +7131,30 @@ def api_update_epsilon_characteristic():
             epsilon_list.append(new_item)
 
         _save_json(epsilon_path, epsilon_list)
+        try:
+            # Log reclassification activity for live-update detection
+            try:
+                from utils import log_user_activity
+                from flask_login import current_user
+                from auth import get_active_group
+                grp = get_active_group()
+                log_user_activity(
+                    user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+                    group_name=grp.name if grp else 'unknown',
+                    action='reclassify',
+                    details={
+                        'vat': vat,
+                        'mark': mark,
+                        'description': f'Επαναχαρακτηρισμός mark={mark} -> {new_char}'
+                    },
+                    user_email=getattr(current_user, 'email', None),
+                    user_username=getattr(current_user, 'username', None)
+                )
+            except Exception:
+                log.exception('api_update_epsilon_characteristic: failed to log activity')
+        except Exception:
+            pass
+
         return jsonify({"ok": True, "updated": True, "found_existing": found}), 200
 
     except Exception as e:
@@ -9288,6 +9312,26 @@ def save_summary():
             epsilon_cache.append(epsilon_entry)
             _safe_save_epsilon_cache(vat, epsilon_cache)
             flash("Η περίληψη αποθηκεύτηκε και προστέθηκε νέα εγγραφή epsilon.", "success")
+            try:
+                from utils import log_user_activity
+                from flask_login import current_user
+                from auth import get_active_group
+                grp = get_active_group()
+                log_user_activity(
+                    user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+                    group_name=grp.name if grp else 'unknown',
+                    action='save_invoice',
+                    details={
+                        'vat': vat,
+                        'mark': mark,
+                        'AA': _first(summary.get("number"), summary.get("AA"), summary.get("aa"), summary.get("progressive_aa")),
+                        'description': f'Αποθήκευση παραστατικού mark={mark}'
+                    },
+                    user_email=getattr(current_user, 'email', None),
+                    user_username=getattr(current_user, 'username', None)
+                )
+            except Exception:
+                log.exception("save_summary: failed to log activity")
         except Exception:
             log.exception("save_summary: failed saving new epsilon cache")
             flash("Αποτυχία ενημέρωσης cache epsilon (δείτε τα logs του διακομιστή)", "error")
@@ -9335,6 +9379,33 @@ def save_receipt():
     data.append(receipt)
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # Log save_receipt activity for live-update detection
+    try:
+        from utils import log_user_activity
+        from flask_login import current_user
+        from auth import get_active_group
+        grp = get_active_group()
+        try:
+            log_user_activity(
+                user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+                group_name=grp.name if grp else 'unknown',
+                action='save_receipt',
+                details={
+                    'vat': vat,
+                    'file': os.path.basename(excel_file) if excel_file else None,
+                    'description': f'Αποθήκευση απόδειξης για ΑΦΜ {vat}'
+                },
+                user_email=getattr(current_user, 'email', None),
+                user_username=getattr(current_user, 'username', None)
+            )
+        except Exception:
+            log.exception("save_receipt: failed to call log_user_activity")
+    except Exception:
+        try:
+            current_app.logger.exception("save_receipt: failed to import or log activity")
+        except Exception:
+            pass
 
     return redirect(url_for("search"))
 
@@ -9570,6 +9641,26 @@ def api_confirm_receipt():
     # save epsilon atomically
     try:
         _safe_save_epsilon_cache(vat, epsilon_cache)
+        try:
+            from utils import log_user_activity
+            from flask_login import current_user
+            from auth import get_active_group
+            grp = get_active_group()
+            log_user_activity(
+                user_id=getattr(current_user, 'id', None) or getattr(current_user, 'pw_hash', None),
+                group_name=grp.name if grp else 'unknown',
+                action='save_receipt',
+                details={
+                    'vat': vat,
+                    'mark': mark,
+                    'updated_existing': bool(updated_existing),
+                    'description': f'Αποθήκευση απόδειξης/τιμολογίου mark={mark}'
+                },
+                user_email=getattr(current_user, 'email', None),
+                user_username=getattr(current_user, 'username', None)
+            )
+        except Exception:
+            log.exception("api_confirm_receipt: failed to log activity")
     except Exception:
         log.exception("api_confirm_receipt: _safe_save_epsilon_cache failed")
 
@@ -10045,6 +10136,133 @@ def list_invoices():
         active_credential=active_name
     )
 
+
+@app.route('/list/fragment', methods=['GET'])
+def list_fragment():
+    """Return only the HTML table fragment for the current active VAT/group.
+    Used by client-side partial refresh when other users update the same VAT.
+    """
+    try:
+        active = get_active_credential_from_session()
+        excel_path = DEFAULT_EXCEL_FILE
+        if active and active.get("vat"):
+            excel_path = excel_path_for(vat=active.get("vat"))
+        elif active and active.get("name"):
+            excel_path = excel_path_for(cred_name=active.get("name"))
+
+        table_html = ""
+        if os.path.exists(excel_path):
+            try:
+                import pandas as pd
+                df = pd.read_excel(excel_path, engine="openpyxl", dtype=str).fillna("")
+                df = df.astype(str)
+                drop_cols = [col for col in ["ΦΠΑ_ΑΝΑΛΥΣΗ", "Α/Α", "ΦΠΑ_ΚΑΤΗΓΟΡΙΑ"] if col in df.columns]
+                if drop_cols:
+                    df = df.drop(columns=drop_cols)
+
+                if "MARK" in df.columns:
+                    # Match full-page checkbox: include value attribute
+                    checkboxes = df["MARK"].apply(lambda v: f'<input type="checkbox" name="delete_mark" value="{str(v)}">')
+                    df.insert(0, "✓", checkboxes)
+
+                table_html = df.to_html(classes="summary-table", index=False, escape=False)
+                table_html = table_html.replace(
+                    "<th>✓</th>",
+                    '<th><input type="checkbox" id="selectAll" title="Επιλογή όλων"></th>'
+                )
+                # Wrap TDs same as full-page render
+                table_html = table_html.replace("<td>", '<td><div class="cell-wrap">').replace("</td>", "</div></td>")
+                table_html = strip_server_totals(table_html)
+            except Exception:
+                table_html = "<div class=\"p-3 text-red-600\">Σφάλμα ανάγνωσης Excel.</div>"
+        else:
+            table_html = f"<div class=\"p-3 text-gray-500\">Δεν βρέθηκε το αρχείο {os.path.basename(excel_path)}.</div>"
+
+        return jsonify({"ok": True, "table_html": table_html})
+    except Exception as exc:
+        current_app.logger.exception('list_fragment failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/activity/check_updates', methods=['GET'])
+def activity_check_updates():
+    """Return recent activity events relevant to current active credential (vat) and group.
+    Used by `list_inner` to detect changes made by other connected users for the same active client.
+    """
+    try:
+        from flask_login import current_user
+        from auth import get_active_group
+        from utils import log_user_activity
+        grp = get_active_group()
+        active = get_active_credential_from_session()
+        vat = active.get('vat') if isinstance(active, dict) else None
+
+        # look back window (seconds)
+        lookback = int(request.args.get('lookback', 30))
+        cutoff_ts = None
+        try:
+            from datetime import datetime, timezone, timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=lookback)
+            cutoff_ts = cutoff.isoformat()
+        except Exception:
+            cutoff_ts = None
+
+        # get recent activity for this group
+        events = []
+        try:
+            import firebase_config
+            folder = grp.name if grp else (grp.data_folder if grp and getattr(grp, 'data_folder', None) else 'unknown')
+            raw = firebase_config.firebase_get_group_activity_logs(folder, limit=50) or []
+            for e in raw:
+                try:
+                    # skip entries by current user
+                    if str(e.get('user_id') or '') == str(getattr(current_user, 'id', '') or getattr(current_user, 'pw_hash', '')):
+                        continue
+                    # time filter
+                    ts = e.get('timestamp')
+                    if cutoff_ts and ts and ts < cutoff_ts:
+                        continue
+                    details = e.get('details') or {}
+                    # filter by vat/client if available
+                    candidate_vat = None
+                    if isinstance(details, dict):
+                        candidate_vat = details.get('vat') or details.get('customers') or details.get('customers_count')
+                        # customers may be list of vats
+                        if isinstance(candidate_vat, list) and vat:
+                            if str(vat) not in [str(x) for x in candidate_vat]:
+                                continue
+                        # if vat is a scalar and matches
+                        if isinstance(candidate_vat, (str, int)) and vat and str(candidate_vat) != str(vat):
+                            # not matching
+                            continue
+                    # If no vat in details but action is delete_rows and excel_path exists, include only if active vat matches excel filename heuristics
+                    action = e.get('action')
+                    if vat and action in ('delete_rows', 'save_invoice', 'add_invoice', 'insert_row'):
+                        # if details.excel_path present, try to match vat inside filename
+                        ex = details.get('excel_path') or ''
+                        if ex and str(vat) not in str(ex):
+                            continue
+
+                    # passed filters — include event
+                    actor = details.get('user_email') or details.get('user_username') or e.get('user_id') or 'unknown'
+                    summary = details.get('description') or details.get('message') or action
+                    events.append({
+                        'action': action,
+                        'actor': actor,
+                        'timestamp': e.get('timestamp'),
+                        'summary': summary,
+                        'details': details
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            events = []
+
+        return jsonify({'ok': True, 'events': events})
+    except Exception as exc:
+        current_app.logger.exception('activity_check_updates failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
 # --- νέο route: προεπισκόπηση Epsilon (ίδιο tab) ---
 @app.route("/epsilon/preview")
 def epsilon_preview():
@@ -10515,7 +10733,8 @@ def delete_invoices():
                 'count': total_requested,
                 'from_excel': deleted_from_excel,
                 'from_epsilon': deleted_from_epsilon,
-                'excel_path': os.path.basename(excel_path) if excel_path else None
+                'excel_path': os.path.basename(excel_path) if excel_path else None,
+                'vat': active.get('vat') if active else None
             },
             user_email=getattr(current_user, 'email', None),
             user_username=getattr(current_user, 'username', None)

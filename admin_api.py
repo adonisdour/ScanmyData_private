@@ -357,6 +357,16 @@ def api_backup_group(group_name):
                 firebase_config.firebase_write_data(backup_path, group_data)
                 results['remote'] = backup_path
                 logger.info(f"Remote backup created for group {group_name} at {backup_path}")
+                try:
+                    # Log backup creation to activity logs so admin panel shows it
+                    firebase_config.firebase_log_activity(
+                        current_user.pw_hash or current_user.id,
+                        group_name,
+                        'backup_created',
+                        {'backup_path': backup_path, 'groups_count': 1}
+                    )
+                except Exception:
+                    logger.debug('Failed to write firebase_log_activity for backup_created')
         
         # Local backup (Server filesystem)
         if target in ['local', 'both']:
@@ -365,6 +375,18 @@ def api_backup_group(group_name):
             if local_path:
                 results['local'] = local_path
                 logger.info(f"Local backup created for group {group_name} at {local_path}")
+                try:
+                    # log local backup creation (store friendly backup_name)
+                    import os
+                    backup_name = os.path.basename(local_path)
+                    firebase_config.firebase_log_activity(
+                        current_user.pw_hash or current_user.id,
+                        group_name,
+                        'backup_created',
+                        {'backup_name': backup_name, 'local_path': local_path}
+                    )
+                except Exception:
+                    logger.debug('Failed to write firebase_log_activity for local backup_created')
         
         return jsonify({
             'success': True,
@@ -480,6 +502,16 @@ def api_backup_all():
 
             firebase_config.firebase_write_data(backup_path, backup_data)
             results['remote_path'] = backup_path
+            try:
+                # Log full backup creation as admin-level event
+                firebase_config.firebase_log_activity(
+                    current_user.pw_hash or current_user.id,
+                    '__admin__',
+                    'backup_created',
+                    {'backup_path': backup_path, 'groups_count': len(groups)}
+                )
+            except Exception:
+                logger.debug('Failed to write firebase_log_activity for full backup_created')
 
         # If local requested, create per-group backups into data/_backups
         if target in ('local', 'both'):
@@ -493,6 +525,23 @@ def api_backup_all():
                 except Exception as e:
                     logger.warning(f"Failed local backup for group {gid}: {e}")
             results['local_paths'] = local_paths
+            try:
+                if results.get('local_paths'):
+                    # Log each local backup created
+                    for lp in results.get('local_paths'):
+                        import os
+                        bn = os.path.basename(lp)
+                        try:
+                            firebase_config.firebase_log_activity(
+                                current_user.pw_hash or current_user.id,
+                                '__admin__',
+                                'backup_created',
+                                {'backup_name': bn, 'local_path': lp}
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                logger.debug('Failed to log local backup entries')
 
         results['groups_processed'] = len(groups)
         logger.info(f"Full system backup completed: target={target} groups={len(groups)}")
@@ -1309,17 +1358,33 @@ def api_send_email():
         </html>
         """
         
-        # Send emails using the bulk email function
+        # Resolve recipient emails for logging, then send
         import email_utils
+        from models import User
+        recipients = []
+        for uid in user_ids:
+            try:
+                u = User.query.get(uid)
+                if u and u.email:
+                    recipients.append(u.email)
+            except Exception:
+                continue
+
         results = email_utils.send_bulk_email_to_users(user_ids, subject, html_body)
-        
-        # Log the admin action
-        _log_admin_action('send_email', 'users', f'{len(user_ids)}_users', {
-            'subject': subject,
-            'user_count': len(user_ids),
-            'sent': results['sent'],
-            'failed': results['failed']
-        })
+
+        # Log the admin action (include recipient list and sent/failed counts)
+        try:
+            _log_admin_action('send_email', 'users', f'{len(user_ids)}_users', {
+                'subject': subject,
+                'user_count': len(user_ids),
+                'recipient_count': len(recipients),
+                'recipients': recipients,
+                'sent': results.get('sent', 0),
+                'failed': results.get('failed', 0),
+                'errors': results.get('errors', [])
+            })
+        except Exception:
+            logger.debug('Failed to log admin send_email action')
         
         return jsonify({
             'success': True,
@@ -1700,6 +1765,21 @@ def api_download_local_backup(backup_name):
             logger.error(f"ZIP file was not created: {zip_path}")
             return jsonify({'success': False, 'error': 'Failed to create ZIP file'}), 500
         
+        # Log the download action to activity so admin panel shows who downloaded which backup
+        try:
+            firebase_config.firebase_log_activity(
+                current_user.pw_hash or current_user.id,
+                '__admin__',
+                'backup_download',
+                {
+                    'backup_name': decoded_backup_name,
+                    'backup_path': backup_path,
+                    'zip_path': zip_path,
+                }
+            )
+        except Exception:
+            logger.debug('Failed to write firebase_log_activity for backup_download')
+
         # Send the file
         return send_file(
             zip_path,

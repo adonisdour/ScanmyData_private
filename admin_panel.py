@@ -734,10 +734,24 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
     try:
         # Helper to get a field from details first, then fall back to entry level
         def get_field(key: str, default=None):
-            if details and key in details and details[key]:
-                return details[key]
-            if entry and key in entry and entry[key]:
-                return entry[key]
+            # Check top-level details
+            try:
+                if details and isinstance(details, dict):
+                    if key in details and details.get(key):
+                        return details.get(key)
+                    # Check nested details inside details (common wrapper)
+                    nested = details.get('details')
+                    if isinstance(nested, dict) and key in nested and nested.get(key):
+                        return nested.get(key)
+                # Check entry-level keys
+                if entry and isinstance(entry, dict):
+                    if key in entry and entry.get(key):
+                        return entry.get(key)
+                    nested_e = entry.get('details')
+                    if isinstance(nested_e, dict) and key in nested_e and nested_e.get(key):
+                        return nested_e.get(key)
+            except Exception:
+                pass
             return default
         
         # Normalize legacy action aliases to canonical actions
@@ -912,30 +926,137 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
             return "Αποστολή email επαλήθευσης λογαριασμού"
         
         elif action in ['delete_user', 'admin_delete_user']:
-            target_user = details.get('target_user_email') or details.get('deleted_user') or 'Άγνωστος'
+            target_user = None
+            if isinstance(details, dict):
+                # details may wrap real details under 'details'
+                inner = details.get('details', details)
+            else:
+                inner = details or {}
+            target_user = inner.get('target_user_email') or inner.get('deleted_user') or inner.get('user_email') or 'Άγνωστος'
             admin_text = " (από admin)" if action.startswith('admin_') else ""
             return f"Διαγραφή χρήστη: {target_user}{admin_text}"
-        
-        elif action in ['delete_backup', 'admin_delete_backup']:
-            backup_name = details.get('backup_name') or 'Άγνωστο'
+
+        elif action in ['delete_backup', 'admin_delete_backup', 'backup_deleted']:
+            # Use get_field helper so we check both details and entry-level keys
+            backup_name = get_field('backup_name') or get_field('backup') or get_field('name')
+            if not backup_name:
+                bp = get_field('backup_path') or get_field('path')
+                if bp:
+                    try:
+                        parts = str(bp).strip('/').split('/')
+                        backup_name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                    except Exception:
+                        backup_name = None
+            # Last-resort: search any textual fields for a '/backups/...' pattern
+            if not backup_name:
+                try:
+                    import re, json
+                    hay = ''
+                    try:
+                        hay = json.dumps(entry or {}, ensure_ascii=False)
+                    except Exception:
+                        hay = str(entry or '')
+                    try:
+                        if details:
+                            hay += ' ' + json.dumps(details, ensure_ascii=False)
+                    except Exception:
+                        hay += ' ' + str(details or '')
+                    m = re.search(r'/backups/([^\s"\']+/?[^\s"\']*)', hay)
+                    if m:
+                        bp2 = m.group(0)
+                        parts = str(bp2).strip('/').split('/')
+                        backup_name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                except Exception:
+                    pass
+            if not backup_name:
+                backup_name = 'Άγνωστο'
             admin_text = " (από admin)" if action.startswith('admin_') else ""
             return f"Διαγραφή backup: {backup_name}{admin_text}"
-        
+
+        elif action in ['backup_created', 'backup_upload', 'backup_saved']:
+            # Creation/upload of a backup
+            actual_details = details.get('details', details) if isinstance(details, dict) else details
+            backup_name = None
+            try:
+                if isinstance(actual_details, dict):
+                    backup_name = actual_details.get('backup_name') or actual_details.get('backup_path') or actual_details.get('name')
+            except Exception:
+                backup_name = None
+            if not backup_name:
+                try:
+                    bp = actual_details.get('backup_path') or actual_details.get('path')
+                    if bp:
+                        parts = str(bp).strip('/').split('/')
+                        backup_name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                except Exception:
+                    backup_name = None
+            if not backup_name:
+                backup_name = 'Άγνωστο'
+            admin_text = " (από admin)" if action.startswith('admin_') else ""
+            return f"Δημιουργία backup: {backup_name}{admin_text}"
+
+        elif action in ['backup_download', 'backup_downloaded', 'backup_retrieved']:
+            # Backup download event (admin or user)
+            actual_details = details.get('details', details) if isinstance(details, dict) else details
+            backup_name = get_field('backup_name') or get_field('backup') or None
+            if not backup_name:
+                try:
+                    if isinstance(actual_details, dict):
+                        backup_name = actual_details.get('backup_name') or actual_details.get('backup')
+                except Exception:
+                    backup_name = None
+            if not backup_name:
+                bp = get_field('backup_path') or (actual_details.get('backup_path') if isinstance(actual_details, dict) else None)
+                if bp:
+                    try:
+                        parts = str(bp).strip('/').split('/')
+                        backup_name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                    except Exception:
+                        backup_name = None
+            # If backup_name still missing, try common fallback keys like file_name or zip_path
+            if not backup_name:
+                try:
+                    fn = get_field('file_name') or (actual_details.get('file_name') if isinstance(actual_details, dict) else None)
+                    if fn:
+                        backup_name = fn
+                    else:
+                        zp = get_field('zip_path') or (actual_details.get('zip_path') if isinstance(actual_details, dict) else None)
+                        if zp:
+                            import os
+                            backup_name = os.path.basename(str(zp))
+                except Exception:
+                    backup_name = None
+            if not backup_name:
+                backup_name = 'Άγνωστο'
+            groups_count = None
+            try:
+                if isinstance(actual_details, dict):
+                    groups_count = actual_details.get('groups_count') or actual_details.get('groups') or None
+            except Exception:
+                groups_count = None
+            gc_text = f" ({groups_count} ομάδες)" if groups_count else ''
+            admin_text = " (από admin)" if action.startswith('admin_') else ""
+            return f"Λήψη αντιγράφου ασφαλείας: {backup_name}{gc_text}{admin_text}"
+
         elif action in ['send_email', 'admin_send_email']:
+            # Accept several shapes: details may already be the outer log entry (which wraps
+            # the real details under a 'details' key) or may be the inner details dict.
+            actual_details = details.get('details', details) if isinstance(details, dict) else details
+
             # Determine recipient count from multiple possible shapes used in logging
             recipient_count = 0
             try:
-                if isinstance(details.get('recipients'), list):
-                    recipient_count = len(details.get('recipients'))
-                elif isinstance(details.get('recipient_count'), int):
-                    recipient_count = int(details.get('recipient_count'))
-                elif isinstance(details.get('user_count'), int):
-                    recipient_count = int(details.get('user_count'))
-                elif isinstance(details.get('sent'), int):
-                    recipient_count = int(details.get('sent'))
+                if isinstance(actual_details.get('recipients'), list):
+                    recipient_count = len(actual_details.get('recipients'))
+                elif isinstance(actual_details.get('recipient_count'), int):
+                    recipient_count = int(actual_details.get('recipient_count'))
+                elif isinstance(actual_details.get('user_count'), int):
+                    recipient_count = int(actual_details.get('user_count'))
+                elif isinstance(actual_details.get('sent'), int):
+                    recipient_count = int(actual_details.get('sent'))
                 else:
                     # Fallback: if recipients is present but not a list, try to compute length
-                    recs = details.get('recipients')
+                    recs = actual_details.get('recipients')
                     if recs and isinstance(recs, str):
                         # comma separated
                         recipient_count = len([r for r in recs.split(',') if r.strip()])
@@ -953,7 +1074,18 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
             return f"Επαναφορά ομάδας: {group_name}"
         
         elif action == 'backup_deleted':
-            backup_name = details.get('backup_name') or 'Άγνωστο'
+            # Use get_field helper to check details first then entry-level fields
+            backup_name = get_field('backup_name') or get_field('backup') or get_field('name')
+            if not backup_name:
+                bp = get_field('backup_path') or get_field('path')
+                if bp:
+                    try:
+                        parts = str(bp).strip('/').split('/')
+                        backup_name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                    except Exception:
+                        backup_name = None
+            if not backup_name:
+                backup_name = 'Άγνωστο'
             return f"Διαγραφή backup: {backup_name}"
         
         elif action == 'user_deleted':

@@ -131,7 +131,7 @@
     <div id="deleteSpinner" class="ml-2 hidden text-gray-700">Αποστολή…</div>
   </div>
 
-  <div class="overflow-x-auto">
+  <div id="summary-container" class="overflow-x-auto">
     {% if table_html %}
       {{ table_html | safe }}
     {% else %}
@@ -249,6 +249,39 @@
 
 <script>
 (function(){
+  // Expose a lightweight reinitialization function so partial-refresh can call it.
+  window.FBP_REINIT = function(){
+    try{
+      // try to perform minimal table recalculations and attach simple handlers
+      // Prefer to run the full table initializer if available (preserves DataTables setup)
+      if (typeof window.FBP_INIT_TABLE === 'function'){
+        try{ window.FBP_INIT_TABLE(); return; }catch(_){ }
+      }
+
+      const table = document.querySelector('.summary-table');
+      if(!table) return;
+      // hide server totals rows and compute footer totals (best-effort)
+      try{ if(typeof hideServerTotalsRows==='function') hideServerTotalsRows(table); }catch(_){ }
+      try{ if(typeof ensureFooter==='function') ensureFooter(table); }catch(_){ }
+      try{ if(typeof computeAndRenderTotals==='function') computeAndRenderTotals(table); }catch(_){ }
+
+      // Re-attach simple global search/filter
+      const globalSearch = document.getElementById('globalSearch');
+      if(globalSearch){
+        const recalc = ()=>{
+          const q = (globalSearch.value||'').toLowerCase();
+          table.querySelectorAll('tbody tr').forEach(tr=>{
+            if (tr.getAttribute && tr.getAttribute('data-server-totals')==='1') { tr.style.display='none'; return; }
+            tr.style.display = (tr.innerText||tr.textContent||'').toLowerCase().includes(q) ? '' : 'none';
+          });
+          try{ if(typeof computeAndRenderTotals==='function') computeAndRenderTotals(table); }catch(_){ }
+        };
+        globalSearch.removeEventListener('input', recalc);
+        globalSearch.addEventListener('input', ()=>setTimeout(recalc,0));
+      }
+    }catch(_){ }
+  };
+
   const $ = window.jQuery;
 
   function greekNorm(s){
@@ -393,65 +426,67 @@
     syncCloneFooter(table);
   }
 
-  document.addEventListener('DOMContentLoaded', function(){
-    const table = document.querySelector('.summary-table');
-    if(!table) return;
+  // Main table initializer: extracted so it can be reused after partial refresh
+  window.FBP_INIT_TABLE = function(){
+    try{
+      const table = document.querySelector('.summary-table');
+      if(!table) return;
 
-    hideServerTotalsRows(table);
+      hideServerTotalsRows(table);
 
-    if (window.jQuery && jQuery.fn && jQuery.fn.dataTable){
-      const $t = jQuery('.summary-table');
+      if (window.jQuery && jQuery.fn && jQuery.fn.dataTable){
+        const $t = jQuery('.summary-table');
 
-            const bind = ()=>{
-        hideServerTotalsRows(table);
+        const bind = ()=>{
+          hideServerTotalsRows(table);
+          ensureFooter(table);
+          computeAndRenderTotals(table);
+
+          lockHeaderHeight($t);
+
+          $t.off('draw.dt._dynTotals').on('draw.dt._dynTotals', ()=>{
+            hideServerTotalsRows(table);
+            computeAndRenderTotals(table);
+            lockHeaderHeight($t);
+          });
+          $t.off('order.dt._hdr').on('order.dt._hdr', ()=> lockHeaderHeight($t));
+          $t.off('column-visibility.dt._hdr').on('column-visibility.dt._hdr', ()=> lockHeaderHeight($t));
+          $t.off('column-sizing.dt._hdr').on('column-sizing.dt._hdr', ()=> lockHeaderHeight($t));
+
+          let _hdrTO=null;
+          $(window).off('resize._hdr').on('resize._hdr', ()=>{
+            clearTimeout(_hdrTO); _hdrTO=setTimeout(()=>lockHeaderHeight($t), 60);
+          });
+        };
+
+        if (jQuery.fn.dataTable.isDataTable($t)) {
+          bind();
+        } else {
+          $t.off('init.dt._dynTotals').on('init.dt._dynTotals', () => bind());
+        }
+      } else {
+        // Fallback without DataTables
         ensureFooter(table);
         computeAndRenderTotals(table);
-
-        // κλείδωσε ύψος header στην αρχική τιμή
-        lockHeaderHeight($t);
-
-        // Re-lock μετά από redraw/order/visibility/column sizing
-        $t.off('draw.dt._dynTotals').on('draw.dt._dynTotals', ()=>{
-          hideServerTotalsRows(table);
-          computeAndRenderTotals(table);
-          lockHeaderHeight($t);
-        });
-        $t.off('order.dt._hdr').on('order.dt._hdr', ()=> lockHeaderHeight($t));
-        $t.off('column-visibility.dt._hdr').on('column-visibility.dt._hdr', ()=> lockHeaderHeight($t));
-        $t.off('column-sizing.dt._hdr').on('column-sizing.dt._hdr', ()=> lockHeaderHeight($t));
-
-        // και σε window resize (debounced)
-        let _hdrTO=null;
-        $(window).off('resize._hdr').on('resize._hdr', ()=>{
-          clearTimeout(_hdrTO); _hdrTO=setTimeout(()=>lockHeaderHeight($t), 60);
-        });
-      };
-
-
-      if (jQuery.fn.dataTable.isDataTable($t)) {
-        bind();
-      } else {
-        $t.off('init.dt._dynTotals').on('init.dt._dynTotals', () => bind());
+        const globalSearch = document.getElementById('globalSearch');
+        if (globalSearch){
+          const recalc = ()=>{
+            const q = (globalSearch.value||'').toLowerCase();
+            table.querySelectorAll('tbody tr').forEach(tr=>{
+              if (tr.getAttribute && tr.getAttribute('data-server-totals')==='1') { tr.style.display='none'; return; }
+              tr.style.display = (tr.innerText||tr.textContent||'').toLowerCase().includes(q) ? '' : 'none';
+            });
+            computeAndRenderTotals(table);
+          };
+          globalSearch.addEventListener('input', ()=>setTimeout(recalc,0));
+          globalSearch.addEventListener('keydown', e=>{ if(e.key==='Escape'){ globalSearch.value=''; setTimeout(recalc,0);} });
+        }
       }
-    } else {
-      // Fallback χωρίς DataTables
-      ensureFooter(table);
-      computeAndRenderTotals(table);
-      const globalSearch = document.getElementById('globalSearch');
-      if (globalSearch){
-        const recalc = ()=>{
-          const q = (globalSearch.value||'').toLowerCase();
-          table.querySelectorAll('tbody tr').forEach(tr=>{
-            if (tr.getAttribute && tr.getAttribute('data-server-totals')==='1') { tr.style.display='none'; return; }
-            tr.style.display = (tr.innerText||tr.textContent||'').toLowerCase().includes(q) ? '' : 'none';
-          });
-          computeAndRenderTotals(table);
-        };
-        globalSearch.addEventListener('input', ()=>setTimeout(recalc,0));
-        globalSearch.addEventListener('keydown', e=>{ if(e.key==='Escape'){ globalSearch.value=''; setTimeout(recalc,0);} });
-      }
-    }
-  });
+    }catch(_){ }
+  };
+
+  // Run on initial load
+  document.addEventListener('DOMContentLoaded', function(){ try{ window.FBP_INIT_TABLE(); }catch(_){ } });
 })();  
 
 /* ======= ΔΕΥΤΕΡΟ SCRIPT (όπως το είχες) — τρέχει ΜΟΝΟ χωρίς DataTables ======= */
@@ -849,4 +884,198 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
   const vat = this.dataset.vat || '{{ vat }}';
   window.location.href = "{{ url_for('epsilon_preview') }}" + "?vat=" + encodeURIComponent(vat);
 });
+</script>
+
+<!-- Live-update polling for shared active client -->
+<script>
+(function(){
+  const POLL_INTERVAL = 6000; // ms
+  let pollTimer = null;
+  let lastEventsHash = '';
+  const CURRENT_USER_EMAIL = "{{ current_user.email if current_user and current_user.is_authenticated else '' }}";
+  const CURRENT_USER_ID = "{{ current_user.id if current_user and current_user.is_authenticated else '' }}";
+
+  function showToast(msg){
+    try{
+      let t = document.getElementById('fbp-live-toast');
+      if(!t){
+        t = document.createElement('div');
+        t.id = 'fbp-live-toast';
+        t.style.position = 'fixed';
+        t.style.right = '16px';
+        t.style.top = '16px';
+        t.style.zIndex = 99999;
+        document.body.appendChild(t);
+      }
+      const el = document.createElement('div');
+      el.className = 'p-3 mb-2 rounded shadow bg-blue-600 text-white';
+      el.style.minWidth = '220px';
+      el.textContent = msg;
+      t.appendChild(el);
+      setTimeout(()=>{ el.style.transition='opacity 0.4s'; el.style.opacity='0'; setTimeout(()=>el.remove(),450); }, 5000);
+    }catch(_){ }
+  }
+
+  async function checkUpdates(){
+    try{
+      const res = await fetch('/activity/check_updates');
+      if(!res.ok) return;
+      const data = await res.json();
+      if(!data || !data.ok) return;
+      const events = data.events || [];
+      if(!events.length) return;
+      // simple dedupe by JSON string
+      const hash = JSON.stringify(events.map(e=>({a:e.action,t:e.timestamp,actor:e.actor}))); 
+      if(hash === lastEventsHash) return;
+      lastEventsHash = hash;
+
+      // filter out events caused by current user
+      const others = events.filter(e=>{
+        const actor = String(e.actor||'').toLowerCase();
+        if(!actor) return true;
+        if(CURRENT_USER_EMAIL && actor.includes(String(CURRENT_USER_EMAIL).toLowerCase())) return false;
+        if(CURRENT_USER_ID && actor.includes(String(CURRENT_USER_ID).toLowerCase())) return false;
+        return true;
+      });
+      if(!others.length) return;
+
+      // show simple message for the first event and refresh the inner table fragment
+      const ev = others[0];
+      const actorName = ev.actor || 'Κάποιος';
+      const action = (ev.action || 'update');
+      const human = ev.summary || action;
+      const message = `${actorName} έκανε αλλαγή: ${human}`;
+      // Prefer the existing global showFlash if available, else fallback to inline toast
+      if (typeof window.showFlash === 'function'){
+        try{ window.showFlash(message, 'info', 4000); }catch(_){ showToast(message); }
+      } else if (typeof showFlash === 'function'){
+        try{ showFlash(message, 'info', 4000); }catch(_){ showToast(message); }
+      } else {
+        showToast(message);
+      }
+      // fetch updated table by requesting the full /list page and extracting
+      // the `#summary-container` fragment. This mirrors the initial render
+      // exactly and avoids subtle DOM shape differences from piecemeal fragments.
+      try{
+        const listUrl = window.location.pathname.indexOf('/list')===0 ? window.location.href : '/list';
+        const pageResp = await fetch(listUrl);
+        if(pageResp && pageResp.ok){
+          const text = await pageResp.text();
+          // Parse the returned HTML and extract #summary-container
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(text, 'text/html');
+          const newContainer = doc.getElementById('summary-container');
+          const container = document.getElementById('summary-container');
+          if(newContainer && container){
+            const newHtml = newContainer.innerHTML;
+            // If DataTables is active, prefer in-place update via its API to
+            // preserve instance state (selections, modal overlays, event handlers).
+            const oldTable = container.querySelector('.summary-table');
+            try{
+              if (window.jQuery && jQuery.fn && jQuery.fn.dataTable && oldTable && jQuery.fn.dataTable.isDataTable(oldTable)){
+                const $old = jQuery(oldTable);
+                const dt = $old.DataTable();
+                // preserve checked marks and scroll
+                const checked = Array.from(container.querySelectorAll('input[name="delete_mark"]:checked')).map(cb=>cb.value);
+                const scrollTop = container.scrollTop || 0;
+
+                // parse new rows into arrays of HTML cell content
+                const tmp = document.createElement('div'); tmp.innerHTML = newHtml;
+                const newTableNode = tmp.querySelector('.summary-table');
+                if(newTableNode){
+                  const rowsData = [];
+                  newTableNode.querySelectorAll('tbody tr').forEach(tr=>{
+                    const cells = Array.from(tr.children).map(td=>td.innerHTML);
+                    rowsData.push(cells);
+                  });
+
+                  // replace data in DataTable (keeps the same table element)
+                  try{
+                    dt.clear();
+                    dt.rows.add(rowsData);
+                    dt.draw(false);
+                  }catch(_){
+                    // fallback: destroy and replace wrapper if API operation fails
+                    try{ dt.destroy(); }catch(_){ }
+                    const $wrap = $old.closest('.dataTables_wrapper');
+                    if($wrap && $wrap.length){ $wrap.replaceWith(newHtml); } else { container.innerHTML = newHtml; }
+                  }
+
+                  // restore checked marks
+                  try{ checked.forEach(v=>{ const cb = container.querySelector('input[name="delete_mark"][value="'+v+'"]'); if(cb) cb.checked = true; }); }catch(_){ }
+                  // restore scroll
+                  try{ container.scrollTop = scrollTop; }catch(_){ }
+                } else {
+                  // no table found in new HTML — replace container
+                  const $wrap = $old.closest('.dataTables_wrapper');
+                  if($wrap && $wrap.length){ $wrap.replaceWith(newHtml); } else { container.innerHTML = newHtml; }
+                }
+              } else {
+                // No DataTables active — safe to replace innerHTML
+                container.innerHTML = newHtml;
+              }
+            }catch(_){
+              container.innerHTML = newHtml;
+            }
+
+            // Reattach select-all checkbox behaviour if present
+            try{
+              const sel = document.getElementById('selectAll');
+              if(sel){
+                sel.addEventListener('change', function(){
+                  const checked = !!this.checked;
+                  const inputs = container.querySelectorAll('input[name="delete_mark"]');
+                  inputs.forEach(cb => { try{ cb.checked = checked; }catch(_){} });
+                });
+              }
+            }catch(_){ }
+
+            // Re-run full initializer to rebuild DataTables and layout
+            try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
+            return;
+          }
+        }
+      }catch(_){ /* fall through to fragment fallback */ }
+
+      // Fallback: fetch the fragment endpoint (older behaviour)
+      try{
+        const frag = await fetch('/list/fragment');
+        if(frag && frag.ok){
+          const j = await frag.json();
+          if(j && j.ok && j.table_html){
+            const container = document.getElementById('summary-container');
+            if(container){
+              try{
+                if (window.jQuery && jQuery.fn && jQuery.fn.dataTable && container.querySelector('.summary-table') && jQuery.fn.dataTable.isDataTable(container.querySelector('.summary-table'))){
+                  const $old = jQuery(container.querySelector('.summary-table'));
+                  try{ $old.DataTable().destroy(); }catch(_){ }
+                  const $wrap = $old.closest('.dataTables_wrapper');
+                  if($wrap && $wrap.length){
+                    $wrap.replaceWith(j.table_html);
+                  } else {
+                    container.innerHTML = j.table_html;
+                  }
+                } else {
+                  container.innerHTML = j.table_html;
+                }
+              }catch(_){ container.innerHTML = j.table_html; }
+
+              try{ const sel = document.getElementById('selectAll'); if(sel){ sel.addEventListener('change', function(){ const checked=!!this.checked; const inputs=container.querySelectorAll('input[name="delete_mark"]'); inputs.forEach(cb=>{ try{ cb.checked=checked; }catch(_){} }); }); } }catch(_){ }
+              try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
+            }
+          }
+        }
+      }catch(_){ /* silent */ }
+    }catch(_){ /* silent */ }
+  }
+
+  function startPolling(){
+    if(pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(checkUpdates, POLL_INTERVAL);
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    startPolling();
+  });
+})();
 </script>
