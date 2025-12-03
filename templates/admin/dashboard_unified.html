@@ -108,21 +108,9 @@
 
   <!-- ==================== GROUPS TAB ==================== -->
   <div id="groups" class="tab-content hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- Create Group -->
-      <div class="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 class="text-lg font-bold mb-4">➕ Νέα Ομάδα</h3>
-        <form id="create-group-form" class="space-y-3">
-          <input type="text" name="group_name" placeholder="Όνομα ομάδας" class="w-full px-3 py-2 border rounded" required />
-          <textarea name="description" placeholder="Περιγραφή" class="w-full px-3 py-2 border rounded" rows="3"></textarea>
-          <button type="submit" class="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
-            ✓ Δημιουργία
-          </button>
-        </form>
-      </div>
-
+    <div class="grid grid-cols-1 gap-6">
       <!-- Groups List -->
-      <div class="lg:col-span-2 bg-white border border-gray-200 rounded-lg p-6">
+      <div class="bg-white border border-gray-200 rounded-lg p-6">
         <div class="flex justify-between items-center mb-4">
           <h3 class="text-lg font-bold">📁 Ομάδες</h3>
           <button onclick="loadGroups()" class="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">
@@ -666,7 +654,7 @@ async function loadGroups() {
         <div>
           <div class="font-medium">${group.name || group.group_name}</div>
           <div class="text-xs text-gray-500">
-            ${group.members ? group.members.length : 0} μέλη
+            ${group.members_count || 0} μέλη
             ${group.folder_size_mb ? ' • ' + group.folder_size_mb + ' MB' : ''}
           </div>
         </div>
@@ -702,12 +690,20 @@ async function viewGroupDetails(groupId) {
           <span class="font-medium">Δημιουργία:</span> ${data.group?.created_at || data.created_at || '-'}
         </div>
         <div>
-          <span class="font-medium">Μέλη:</span> 
-          <div class="mt-2">
+          <span class="font-medium">Μέλη:</span> <span class="text-sky-600 font-bold">${(data.group?.members || data.members || []).length}</span>
+          <div class="mt-2 space-y-1">
             ${(data.group?.members || data.members || []).map(m => {
               const memberName = typeof m === 'object' ? (m.username || m.name) : m;
-              const memberRole = typeof m === 'object' ? (m.role ? ` (${m.role})` : '') : '';
-              return `<div class="text-sm">${memberName}${memberRole}</div>`;
+              const memberRole = typeof m === 'object' ? (m.role || 'member') : 'member';
+              const roleColors = {
+                'admin': 'bg-red-100 text-red-700',
+                'member': 'bg-blue-100 text-blue-700'
+              };
+              const roleColor = roleColors[memberRole] || 'bg-gray-100 text-gray-700';
+              return `<div class="flex items-center gap-2 text-sm">
+                <span class="text-gray-700">${memberName}</span>
+                <span class="px-2 py-0.5 rounded text-xs ${roleColor}">${memberRole}</span>
+              </div>`;
             }).join('')}
           </div>
         </div>
