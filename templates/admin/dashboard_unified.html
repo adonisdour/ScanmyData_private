@@ -161,26 +161,7 @@
               <th class="text-left px-4 py-3 font-medium">Ομάδα</th>
               <th class="text-left px-4 py-3 font-medium">Ενέργεια</th>
               <th class="text-left px-4 py-3 font-medium">Λεπτομέρειες</th>
-            <script>
-            // Δυναμική ενημέρωση πλακιδίων dashboard
-            async function updateDashboardStats() {
-              try {
-                const res = await fetch('/api/admin/stats');
-                const stats = await res.json();
-                document.getElementById('stat-users').textContent = stats.total_users ?? '-';
-                document.getElementById('stat-groups').textContent = stats.total_groups ?? '-';
-                // Αν υπάρχει activity_24h ή παρόμοιο, αλλιώς βάζουμε "-"
-                document.getElementById('stat-activity').textContent = stats.activity_24h ?? (stats.total_activity ?? '-') ?? '-';
-                document.getElementById('stat-users-loading').style.display = 'none';
-                document.getElementById('stat-groups-loading').style.display = 'none';
-              } catch (e) {
-                document.getElementById('stat-users').textContent = '-';
-                document.getElementById('stat-groups').textContent = '-';
-                document.getElementById('stat-activity').textContent = '-';
-              }
-            }
-            document.addEventListener('DOMContentLoaded', updateDashboardStats);
-            </script>
+              <th class="text-left px-4 py-3 font-medium" style="display:none;">Sort</th>
             </tr>
           </thead>
           <tbody id="activity-tbody">
@@ -926,7 +907,7 @@ async function loadActivity() {
     
   } catch (error) {
     console.error('Error loading activity:', error);
-    showErrorModal('Σφάλμα', 'Αποτυχία φόρτωσης δραστηριότητας');
+    // Silent fail - don't show modal error, just log to console
   }
 }
 
@@ -978,6 +959,8 @@ function populateGroupSelect(groups) {
   select.innerHTML = '<option value="">-- Επιλέξτε Ομάδα --</option>';
   dropdown.innerHTML = '';
   
+  let selectedIndex = -1;
+  
   // Add options to both select and dropdown
   (groups || []).forEach(g => {
     const optionValue = g.id;
@@ -994,9 +977,17 @@ function populateGroupSelect(groups) {
     dropdownItem.className = 'px-3 py-2 hover:bg-gray-100 cursor-pointer group-option';
     dropdownItem.setAttribute('data-value', optionValue);
     dropdownItem.textContent = optionText;
-    dropdownItem.onclick = () => selectGroup(optionValue, optionText);
+    dropdownItem.onclick = () => selectGroupForBackup(optionValue, optionText);
     dropdown.appendChild(dropdownItem);
   });
+  
+  // Show all options when clicking on search input
+  searchInput.onclick = () => {
+    const options = dropdown.querySelectorAll('.group-option');
+    options.forEach(opt => opt.style.display = 'block');
+    dropdown.style.display = options.length > 0 ? 'block' : 'none';
+    selectedIndex = -1;
+  };
   
   // Setup search functionality
   searchInput.oninput = () => {
@@ -1011,19 +1002,48 @@ function populateGroupSelect(groups) {
       if (visible) hasVisible = true;
     });
     
-    dropdown.style.display = hasVisible && query ? 'block' : 'none';
+    dropdown.style.display = hasVisible ? 'block' : 'none';
+    selectedIndex = -1;
   };
   
-  searchInput.onfocus = () => {
-    if (searchInput.value) {
-      dropdown.style.display = 'block';
+  // Keyboard navigation
+  searchInput.onkeydown = (e) => {
+    const visibleOptions = Array.from(dropdown.querySelectorAll('.group-option')).filter(o => o.style.display !== 'none');
+    
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      selectedIndex = Math.min(selectedIndex + 1, visibleOptions.length - 1);
+      highlightOption(visibleOptions, selectedIndex);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selectedIndex = Math.max(selectedIndex - 1, 0);
+      highlightOption(visibleOptions, selectedIndex);
+    } else if (e.key === 'Enter' && selectedIndex >= 0 && selectedIndex < visibleOptions.length) {
+      e.preventDefault();
+      const selected = visibleOptions[selectedIndex];
+      selectGroupForBackup(selected.getAttribute('data-value'), selected.textContent);
+    } else if (e.key === 'Escape') {
+      dropdown.style.display = 'none';
+      selectedIndex = -1;
     }
   };
+  
+  function highlightOption(options, index) {
+    options.forEach((opt, i) => {
+      if (i === index) {
+        opt.classList.add('bg-blue-100');
+        opt.scrollIntoView({ block: 'nearest' });
+      } else {
+        opt.classList.remove('bg-blue-100');
+      }
+    });
+  }
   
   // Hide dropdown when clicking outside
   document.addEventListener('click', (e) => {
     if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
       dropdown.style.display = 'none';
+      selectedIndex = -1;
     }
   });
 
@@ -1042,7 +1062,7 @@ function populateGroupSelect(groups) {
   }
 }
 
-function selectGroup(value, text) {
+function selectGroupForBackup(value, text) {
   const select = document.getElementById('group-select');
   const searchInput = document.getElementById('group-search');
   const dropdown = document.getElementById('group-dropdown');
@@ -1109,6 +1129,9 @@ async function loadLocalBackups() {
             <div class="text-xs text-gray-500">${backup.size_mb || 0} MB • ${backup.created_at || ''}</div>
           </div>
           <div class="flex gap-2">
+            <button onclick="downloadBackup('${backup.name}')" class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200" title="Download">
+              ⬇️
+            </button>
             <button onclick="compareBackup('${backup.name}', 'local')" class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
               🔍 Σύγκριση
             </button>
@@ -1125,6 +1148,22 @@ async function loadLocalBackups() {
   } catch (err) {
     console.error('Error loading local backups:', err);
     document.getElementById('local-backups-list').innerHTML = '<p class="text-red-500">Σφάλμα φόρτωσης</p>';
+  }
+}
+
+async function downloadBackup(backupName) {
+  try {
+    // Create a temporary link and trigger download
+    const url = `/admin/api/backups/download/${encodeURIComponent(backupName)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${backupName}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.error('Download backup error:', err);
+    showErrorModal('❌ Σφάλμα', 'Σφάλμα κατεβάσματος backup');
   }
 }
 
@@ -1366,8 +1405,18 @@ async function backupAllData() {
 
 async function backupSpecificGroup() {
   const groupId = document.getElementById('group-select').value;
-  if (!groupId) {
-    showErrorModal('❌ Σφάλμα', 'Παρακαλώ επιλέξτε ομάδα');
+  if (!groupId || groupId === '') {
+    showErrorModal('❌ Σφάλμα', 'Παρακαλώ επιλέξτε μια ομάδα από τη λίστα');
+    return;
+  }
+
+  // Find the group name from the select options
+  const select = document.getElementById('group-select');
+  const selectedOption = select.options[select.selectedIndex];
+  const groupName = selectedOption ? selectedOption.textContent : null;
+  
+  if (!groupName) {
+    showErrorModal('❌ Σφάλμα', 'Δεν βρέθηκε το όνομα της ομάδας');
     return;
   }
 
@@ -1386,11 +1435,16 @@ async function backupSpecificGroup() {
     }
 
     btn.textContent = '⏳ Δημιουργία backup...';
-    const response = await fetch(`/admin/api/group/${groupId}/backup`, { 
+    const response = await fetch(`/admin/api/backup/group/${encodeURIComponent(groupName)}`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target: choice })
     });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
     const data = await response.json();
 
     if (data.success || data.ok) {
@@ -1402,7 +1456,7 @@ async function backupSpecificGroup() {
     }
   } catch (err) {
     console.error('backupSpecificGroup error', err);
-    showErrorModal('❌ Σφάλμα', 'Σφάλμα backup ομάδας');
+    showErrorModal('❌ Σφάλμα', 'Σφάλμα backup ομάδας: ' + err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = '📁 Backup';

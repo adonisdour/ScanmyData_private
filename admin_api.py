@@ -335,20 +335,41 @@ def api_get_activity_version():
 @login_required
 @_require_admin
 def api_backup_group(group_name):
-    """Backup a specific group"""
+    """Backup a specific group to local, remote, or both"""
     try:
-        backup_path = f'/backups/{group_name}/{datetime.now(timezone.utc).isoformat()}'
+        from models import Group
         
-        # Backup group data
-        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-        if group_data:
-            firebase_config.firebase_write_data(backup_path, group_data)
+        # Find the group by name
+        group = Group.query.filter_by(name=group_name).first()
+        if not group:
+            return jsonify({'success': False, 'error': f'Group "{group_name}" not found'}), 404
         
-        logger.info(f"Backup created for group {group_name}")
+        data = request.get_json() or {}
+        target = data.get('target', 'remote')  # Default to remote (Firebase)
+        
+        results = {}
+        
+        # Remote backup (Firebase)
+        if target in ['remote', 'both']:
+            backup_path = f'/backups/{group_name}/{datetime.now(timezone.utc).isoformat()}'
+            group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
+            if group_data:
+                firebase_config.firebase_write_data(backup_path, group_data)
+                results['remote'] = backup_path
+                logger.info(f"Remote backup created for group {group_name} at {backup_path}")
+        
+        # Local backup (Server filesystem)
+        if target in ['local', 'both']:
+            from admin_panel import admin_backup_group
+            local_path = admin_backup_group(group.id)
+            if local_path:
+                results['local'] = local_path
+                logger.info(f"Local backup created for group {group_name} at {local_path}")
         
         return jsonify({
             'success': True,
-            'backup_path': backup_path,
+            'ok': True,
+            'results': results,
             'message': f'Backup created for {group_name}'
         })
     except Exception as e:
@@ -1472,8 +1493,8 @@ def api_restore_backup_by_path(backup_path):
 @admin_api_bp.route('/backups/local', methods=['DELETE'])
 @login_required
 @_require_admin
-def api_delete_local_backup():
-    """Delete a local backup. JSON body: {'backup_name': 'name'}"""
+def api_delete_local_backup_legacy():
+    """Delete a local backup. JSON body: {'backup_name': 'name'} - LEGACY endpoint"""
     try:
         data = request.json or {}
         backup_name = data.get('backup_name')
@@ -1613,6 +1634,81 @@ def api_delete_local_backup(backup_name):
         })
     except Exception as e:
         logger.error(f'Error deleting local backup {backup_name}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@admin_api_bp.route('/backups/download/<path:backup_name>', methods=['GET'])
+@login_required
+@_require_admin
+def api_download_local_backup(backup_name):
+    """Download a local backup as ZIP file"""
+    import os
+    import shutil
+    import urllib.parse
+    import tempfile
+    from flask import send_file
+    
+    try:
+        # Decode URL-encoded backup name
+        decoded_backup_name = urllib.parse.unquote(backup_name)
+        
+        backups_dir = os.path.join(os.getcwd(), 'data', '_backups')
+        backup_path = os.path.join(backups_dir, decoded_backup_name)
+        
+        logger.info(f"Download request for backup: {decoded_backup_name}")
+        logger.info(f"Looking for backup at: {backup_path}")
+        
+        if not os.path.exists(backup_path):
+            backup_path_alt = os.path.join(backups_dir, backup_name)
+            if not os.path.exists(backup_path_alt):
+                logger.error(f"Backup not found: {backup_path}")
+                return jsonify({'success': False, 'error': f'Backup not found: {decoded_backup_name}'}), 404
+            backup_path = backup_path_alt
+        
+        # Safety check - ensure it's within backups directory
+        real_backup_path = os.path.realpath(backup_path)
+        real_backups_dir = os.path.realpath(backups_dir)
+        
+        if not real_backup_path.startswith(real_backups_dir):
+            logger.error(f"Security violation: path outside backups dir")
+            return jsonify({'success': False, 'error': 'Invalid backup path - security violation'}), 400
+        
+        # Create ZIP in a temporary location
+        temp_dir = tempfile.gettempdir()
+        zip_base_name = os.path.join(temp_dir, f"backup_{decoded_backup_name}")
+        
+        # Remove old zip if exists
+        old_zip = f"{zip_base_name}.zip"
+        if os.path.exists(old_zip):
+            try:
+                os.remove(old_zip)
+            except:
+                pass
+        
+        logger.info(f"Creating ZIP archive: {zip_base_name}.zip")
+        
+        # Create ZIP archive - shutil.make_archive returns the full path
+        zip_path = shutil.make_archive(
+            zip_base_name,  # Base name without extension
+            'zip',          # Format
+            backup_path     # Directory to archive
+        )
+        
+        logger.info(f"ZIP created successfully at: {zip_path}")
+        
+        if not os.path.exists(zip_path):
+            logger.error(f"ZIP file was not created: {zip_path}")
+            return jsonify({'success': False, 'error': 'Failed to create ZIP file'}), 500
+        
+        # Send the file
+        return send_file(
+            zip_path,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f"{decoded_backup_name}.zip"
+        )
+    except Exception as e:
+        logger.error(f'Error downloading backup {backup_name}: {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

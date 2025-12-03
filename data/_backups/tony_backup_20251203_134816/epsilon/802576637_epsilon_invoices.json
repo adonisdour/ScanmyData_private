@@ -1,0 +1,70 @@
+[
+  {
+    "mark": "400011615024455",
+    "issueDate": "11/11/2025",
+    "series": "TΔA",
+    "aa": "60984",
+    "AA": "60984",
+    "type": "1.1",
+    "vatCategory": "",
+    "totalNetValue": "104,99",
+    "totalVatAmount": "23,91",
+    "totalValue": "128,90",
+    "classification": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "AFM_issuer": "800916954",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+    "AFM": "800916954",
+    "lines": [
+      {
+        "id": "400011615024455_inst0",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "97,83",
+        "vat": "23,48",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011615024455_inst1",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "7,16",
+        "vat": "0,43",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 6%"
+      }
+    ],
+    "mtype": "15",
+    "_updated_at": "2025-11-28T13:24:48.079573+00:00"
+  },
+  {
+    "mark": "400011776481010",
+    "issueDate": "26/11/2025",
+    "series": "301Τ0101",
+    "aa": "000248052",
+    "AA": "000248052",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "70,81",
+    "totalVatAmount": "16,99",
+    "totalValue": "87,80",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "12",
+    "AFM_issuer": "094317955",
+    "Name_issuer": "PRAKTIKER HELLAS ΕΜΠΟΡΙΚΗ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094317955",
+    "lines": [
+      {
+        "id": "400011776481010_inst0",
+        "description": "Instance #1",
+        "amount": "70,81",
+        "vat": "16,99",
+        "category": "αγορες_α_υλων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
+  }
+]
