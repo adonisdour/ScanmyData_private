@@ -245,6 +245,14 @@
   padding-top: 10px !important;
   padding-bottom: 10px !important;    /* DataTables μερικές φορές τα μηδενίζει */
 }
+/* Διόρθωση κενού μεταξύ header και πρώτης γραμμής */
+.dataTables_wrapper .dataTables_scrollBody {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+.dataTables_wrapper .dataTables_scrollHead {
+  margin-bottom: 0 !important;
+}
 </style>
 
 <script>
@@ -255,7 +263,45 @@
       // try to perform minimal table recalculations and attach simple handlers
       // Prefer to run the full table initializer if available (preserves DataTables setup)
       if (typeof window.FBP_INIT_TABLE === 'function'){
-        try{ window.FBP_INIT_TABLE(); return; }catch(_){ }
+        try{ 
+          window.FBP_INIT_TABLE(); 
+          // CRITICAL: Add delay to ensure DataTables scrolling footer is rebuilt
+          (function retrySync(attempts){
+            const table = document.querySelector('.summary-table');
+            if(!table) return;
+            try{ if(typeof computeAndRenderTotals==='function') computeAndRenderTotals(table); }catch(_){ }
+            try{ if(typeof syncCloneFooter==='function') syncCloneFooter(table); }catch(_){ }
+
+            // quick check whether the visible cloned footer has non-empty cells
+            try{
+              const $ = window.jQuery;
+              if($ && $.fn && $.fn.dataTable && $.fn.dataTable.isDataTable(table)){
+                const $wrap = $(table).closest('.dataTables_wrapper');
+                const $clone = $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]');
+                if($clone.length){
+                  const hasContent = $clone.children().toArray().some(function(el){ return ($(el).text()||'').trim() !== ''; });
+                  if(hasContent) return; // success
+                }
+              } else {
+                const tfoot = table.tFoot;
+                if(tfoot){
+                  const tr = tfoot.querySelector('tr[data-totals="1"]');
+                  if(tr){
+                    const has = Array.from(tr.children).some(td => (td.textContent||'').trim() !== '');
+                    if(has) return;
+                  }
+                }
+              }
+            }catch(_){ }
+
+            if(attempts>0){
+              // exponential-ish backoff for retries (short → longer)
+              const delay = attempts>3 ? 300 : 150;
+              setTimeout(function(){ retrySync(attempts-1); }, delay);
+            }
+          })(6);
+          return; 
+        }catch(_){ }
       }
 
       const table = document.querySelector('.summary-table');
@@ -264,6 +310,7 @@
       try{ if(typeof hideServerTotalsRows==='function') hideServerTotalsRows(table); }catch(_){ }
       try{ if(typeof ensureFooter==='function') ensureFooter(table); }catch(_){ }
       try{ if(typeof computeAndRenderTotals==='function') computeAndRenderTotals(table); }catch(_){ }
+      try{ if(typeof syncCloneFooter==='function') syncCloneFooter(table); }catch(_){ }
 
       // Re-attach simple global search/filter
       const globalSearch = document.getElementById('globalSearch');
@@ -290,8 +337,22 @@
   }
   function parseLocalizedNumber(str){
     if (str===undefined || str===null) return 0;
-    const v = parseFloat(String(str).replace(/\./g,'').replace(',','.'));
-    return Number.isFinite(v) ? v : 0;
+    try{
+      let s = String(str);
+      // remove HTML tags
+      s = s.replace(/<[^>]*>/g, '');
+      // detect negative in parentheses like (1.234,56)
+      let neg = false;
+      if (/\(.*\)/.test(s)) { neg = true; s = s.replace(/[()]/g,''); }
+      // keep only digits, dots, commas, minus
+      s = s.replace(/[^0-9\-,.]/g, '').trim();
+      if(!s) return 0;
+      // Normalize thousands (.) and decimals (,) to a JS-friendly format
+      s = s.replace(/\./g, '').replace(/,/g, '.');
+      const v = parseFloat(s);
+      if (!Number.isFinite(v)) return 0;
+      return neg ? -v : v;
+    }catch(_){ return 0; }
   }
   function formatGreekNumber(n){
     const sign = n<0?'-':'';
@@ -395,33 +456,76 @@
   function computeAndRenderTotals(table){
     const idxs = findHeaderIndexes(table);
     let net=0, vat=0, total=0;
+    let netCol=-1, vatCol=-1, totalCol=-1;
 
     if ($ && $.fn && $.fn.dataTable && $.fn.dataTable.isDataTable(table)) {
-      const dt = $(table).DataTable();
-      dt.rows({ filter: 'applied' }).every(function(){
-        const node = this.node();
-        if (node && node.getAttribute && node.getAttribute('data-server-totals')==='1') return;
-        const tds = $(this.node()).find('td').toArray();
-        if (idxs.net  >= 0 && tds[idxs.net])   net   += parseLocalizedNumber(tds[idxs.net].innerText);
-        if (idxs.vat  >= 0 && tds[idxs.vat])   vat   += parseLocalizedNumber(tds[idxs.vat].innerText);
-        if (idxs.total>= 0 && tds[idxs.total]) total += parseLocalizedNumber(tds[idxs.total].innerText);
-      });
+      // Use DataTables API to compute totals using the current column order
+      try{
+        const dt = $(table).DataTable();
+        // Build header texts in the current visible column order
+        const headers = dt.columns().header().toArray().map(h => greekNorm((h.innerText||h.textContent||'')));
+
+        function findIdxByKeys(keys){
+          for(let i=0;i<headers.length;i++){
+            for(let k=0;k<keys.length;k++){
+              if(headers[i].includes(greekNorm(keys[k]))) return i;
+            }
+          }
+          return -1;
+        }
+
+        netCol = findIdxByKeys(['καθαρη αξια','καθαρη','καθαρή','net','netvalue','totalnet']);
+        vatCol = findIdxByKeys(['φπα','vat']);
+        totalCol = findIdxByKeys(['συνολο','total','totalvalue','sum']);
+
+        if(netCol >= 0){
+          const data = dt.column(netCol, {search:'applied'}).data().toArray();
+          data.forEach(v=> net += parseLocalizedNumber(String(v)));
+        }
+        if(vatCol >= 0){
+          const data = dt.column(vatCol, {search:'applied'}).data().toArray();
+          data.forEach(v=> vat += parseLocalizedNumber(String(v)));
+        }
+        if(totalCol >= 0){
+          const data = dt.column(totalCol, {search:'applied'}).data().toArray();
+          data.forEach(v=> total += parseLocalizedNumber(String(v)));
+        }
+      }catch(e){
+        // Fallback to row iteration if DataTables access fails - use physical indexes
+        netCol = idxs.net;
+        vatCol = idxs.vat;
+        totalCol = idxs.total;
+        const dt = $(table).DataTable();
+        dt.rows({ filter: 'applied' }).every(function(){
+          const node = this.node();
+          if (node && node.getAttribute && node.getAttribute('data-server-totals')==='1') return;
+          const tds = $(this.node()).find('td').toArray();
+          if (netCol  >= 0 && tds[netCol])   net   += parseLocalizedNumber(tds[netCol].innerText);
+          if (vatCol  >= 0 && tds[vatCol])   vat   += parseLocalizedNumber(tds[vatCol].innerText);
+          if (totalCol>= 0 && tds[totalCol]) total += parseLocalizedNumber(tds[totalCol].innerText);
+        });
+      }
     } else {
+      // No DataTables - use physical column indexes
+      netCol = idxs.net;
+      vatCol = idxs.vat;
+      totalCol = idxs.total;
       table.querySelectorAll('tbody tr').forEach(tr=>{
         if (tr.style.display==='none') return;
         if (tr.getAttribute && tr.getAttribute('data-server-totals')==='1') return;
         const tds = tr.querySelectorAll('td');
-        if (idxs.net  >= 0 && tds[idxs.net])   net   += parseLocalizedNumber(tds[idxs.net].innerText);
-        if (idxs.vat  >= 0 && tds[idxs.vat])   vat   += parseLocalizedNumber(tds[idxs.vat].innerText);
-        if (idxs.total>= 0 && tds[idxs.total]) total += parseLocalizedNumber(tds[idxs.total].innerText);
+        if (netCol  >= 0 && tds[netCol])   net   += parseLocalizedNumber(tds[netCol].innerText);
+        if (vatCol  >= 0 && tds[vatCol])   vat   += parseLocalizedNumber(tds[vatCol].innerText);
+        if (totalCol>= 0 && tds[totalCol]) total += parseLocalizedNumber(tds[totalCol].innerText);
       });
     }
 
+    // Write totals to footer using the current visual column order
     const tr = ensureFooter(table);
     const tds = tr.querySelectorAll('td');
-    if (idxs.net  >= 0 && tds[idxs.net])   tds[idxs.net].textContent   = formatGreekNumber(net);
-    if (idxs.vat  >= 0 && tds[idxs.vat])   tds[idxs.vat].textContent   = formatGreekNumber(vat);
-    if (idxs.total>= 0 && tds[idxs.total]) tds[idxs.total].textContent = formatGreekNumber(total);
+    if (netCol  >= 0 && tds[netCol])   tds[netCol].textContent   = formatGreekNumber(net);
+    if (vatCol  >= 0 && tds[vatCol])   tds[vatCol].textContent   = formatGreekNumber(vat);
+    if (totalCol>= 0 && tds[totalCol]) tds[totalCol].textContent = formatGreekNumber(total);
 
     syncCloneFooter(table);
   }
@@ -441,12 +545,15 @@
           hideServerTotalsRows(table);
           ensureFooter(table);
           computeAndRenderTotals(table);
+          syncCloneFooter(table);
 
           lockHeaderHeight($t);
 
           $t.off('draw.dt._dynTotals').on('draw.dt._dynTotals', ()=>{
             hideServerTotalsRows(table);
+            ensureFooter(table);
             computeAndRenderTotals(table);
+            syncCloneFooter(table);
             lockHeaderHeight($t);
           });
           $t.off('order.dt._hdr').on('order.dt._hdr', ()=> lockHeaderHeight($t));
@@ -462,7 +569,39 @@
         if (jQuery.fn.dataTable.isDataTable($t)) {
           bind();
         } else {
-          $t.off('init.dt._dynTotals').on('init.dt._dynTotals', () => bind());
+          $t.off('init.dt._dynTotals').on('init.dt._dynTotals', () => {
+            bind();
+            // Extra sync after DataTables initialization completes
+            setTimeout(() => {
+              computeAndRenderTotals(table);
+              syncCloneFooter(table);
+            }, 100);
+
+            // MutationObserver: if DataTables rebuilds the scroll-foot clone later
+            // (race after partial reloads), detect it and run a final sync.
+            try{
+              const $wrap = $t.closest('.dataTables_wrapper');
+              const target = $wrap && $wrap.length ? $wrap[0] : null;
+              if (target){
+                const mo = new MutationObserver(function(mutations, observer){
+                  try{
+                    const $clone = $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]');
+                    if($clone.length){
+                      const hasContent = $clone.children().toArray().some(function(el){ return ($(el).text()||'').trim() !== ''; });
+                      if(hasContent){
+                        try{ computeAndRenderTotals(table); }catch(_){}
+                        try{ syncCloneFooter(table); }catch(_){}
+                        observer.disconnect();
+                      }
+                    }
+                  }catch(_){ }
+                });
+                mo.observe(target, { childList:true, subtree:true });
+                // Safety: stop observing after 2s to avoid leaks
+                setTimeout(()=>{ try{ mo.disconnect(); }catch(_){ } }, 2000);
+              }
+            }catch(_){ }
+          });
         }
       } else {
         // Fallback without DataTables
@@ -496,7 +635,18 @@
 
   function parseLocalizedNumber(str){
     if(!str) return 0;
-    return parseFloat(str.replace(/\./g,'').replace(',','.')) || 0;
+    try{
+      let s = String(str);
+      s = s.replace(/<[^>]*>/g, '');
+      let neg = false;
+      if (/\(.*\)/.test(s)) { neg = true; s = s.replace(/[()]/g,''); }
+      s = s.replace(/[^0-9\-,.]/g, '').trim();
+      if(!s) return 0;
+      s = s.replace(/\./g, '').replace(/,/g, '.');
+      const v = parseFloat(s);
+      if(!isFinite(v)) return 0;
+      return neg ? -v : v;
+    }catch(_){ return 0; }
   }
 
   function formatGreekNumber(n){
@@ -806,67 +956,67 @@
     try{
       if (!$.fn || !$.fn.dataTable) return;
       const dt = $t.DataTable();
-      const $ths = $t.find('thead th');
-      const sums = [];
-      $ths.each(function(i){
-        const $th = $(this);
-        const shouldSum = $th.is('[data-sum="1"]') || $th.hasClass('sum-col') || $th.data('sum') === 1;
-        if(!shouldSum){ sums[i]=null; return; }
-        const data = dt.column(i, {search:'applied'}).data();
-        let total = 0;
-        for (let j=0;j<data.length;j++){ total += parseNum(data[j]); }
-        sums[i]= total;
-      });
+      const tr = ensureFooter(table);
+      const tds = tr.querySelectorAll('td');
 
-      const $footCells = $t.find('tfoot th');
-      if ($footCells.length) {
-        $footCells.each(function(i){
-          const val = sums[i];
-          if (i===0) {
-            $(this).text('Σύνολα (φίλτρο)');
-          } else if (val == null) {
-            // άσε ανέπαφο αν υπήρχε ήδη περιεχόμενο
-            if (!$(this).text()) $(this).text('');
-          } else {
-            $(this).text(val.toLocaleString('el-GR', {minimumFractionDigits:2, maximumFractionDigits:2}));
+      // If DataTables is present, we may have computed totals using visible
+      // column order (colReorder). Populate both the raw tfoot (DOM order)
+      // and the DataTables cloned scrollFoot (visible order) so alignment
+      // and the pseudo-element 'ΣΥΝΟΛΑ' work correctly.
+      if ($ && $.fn && $.fn.dataTable && $.fn.dataTable.isDataTable(table)){
+        try{
+          const $tbl = $(table);
+          const dt = $tbl.DataTable();
+
+          // Visible headers (current order)
+          const visHeaders = dt.columns().header().toArray().map(h => greekNorm((h.innerText||h.textContent||'')));
+
+          function findVisIdx(keys){
+            for(let i=0;i<visHeaders.length;i++){
+              for(let k=0;k<keys.length;k++) if(visHeaders[i].includes(greekNorm(keys[k]))) return i;
+            }
+            return -1;
           }
-        });
+
+          const visNet = findVisIdx(['καθαρη αξια','καθαρη','καθαρή','net','netvalue','totalnet']);
+          const visVat = findVisIdx(['φπα','vat']);
+          const visTotal = findVisIdx(['συνολο','total','totalvalue','sum']);
+
+          // Update cloned footer cells (visible order)
+          const $wrap = $tbl.closest('.dataTables_wrapper');
+          const $clone = $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]');
+          if($clone.length){
+            const $cells = $clone.children();
+            if(visNet>=0) $cells.eq(visNet).text(formatGreekNumber(net));
+            if(visVat>=0) $cells.eq(visVat).text(formatGreekNumber(vat));
+            if(visTotal>=0) $cells.eq(visTotal).text(formatGreekNumber(total));
+          }
+
+          // Also update the raw tfoot by matching header texts in DOM order
+          const rawThs = Array.from(table.querySelectorAll('thead th')).map(h=>greekNorm(h.innerText||h.textContent||''));
+          function findRawIdx(keys){ for(let i=0;i<rawThs.length;i++){ for(let k=0;k<keys.length;k++) if(rawThs[i].includes(greekNorm(keys[k]))) return i; } return -1; }
+          const rawNet = findRawIdx(['καθαρη αξια','καθαρη','καθαρή','net','netvalue','totalnet']);
+          const rawVat = findRawIdx(['φπα','vat']);
+          const rawTotal = findRawIdx(['συνολο','total','totalvalue','sum']);
+          if(rawNet>=0 && tds[rawNet]) tds[rawNet].textContent = formatGreekNumber(net);
+          if(rawVat>=0 && tds[rawVat]) tds[rawVat].textContent = formatGreekNumber(vat);
+          if(rawTotal>=0 && tds[rawTotal]) tds[rawTotal].textContent = formatGreekNumber(total);
+
+          // Ensure the tr has the data-totals marker so CSS ::before shows 'ΣΥΝΟΛΑ'
+          tr.setAttribute('data-totals','1');
+
+          // sync widths as before
+          syncCloneFooter(table);
+          return;
+        }catch(_){ /* fall through to DOM-only path */ }
       }
-    }catch(_){}
-  }
 
-  document.addEventListener('DOMContentLoaded', function(){
-    const $t = pickTable();
-    if(!$t.length) return;
-    if (!window.jQuery || !$.fn || !$.fn.dataTable) return;
+      // Non-DataTables path (or fallback): place totals into raw tfoot cells
+      if (idxs.net  >= 0 && tds[idxs.net])   tds[idxs.net].textContent   = formatGreekNumber(net);
+      if (idxs.vat  >= 0 && tds[idxs.vat])   tds[idxs.vat].textContent   = formatGreekNumber(vat);
+      if (idxs.total>= 0 && tds[idxs.total]) tds[idxs.total].textContent = formatGreekNumber(total);
 
-    const LEN_KEY = 'fbp.list.pageLen';
-
-    function applySavedLen(){
-      try{
-        const saved = parseInt(localStorage.getItem(LEN_KEY) || '', 10);
-        if (Number.isFinite(saved) && saved > 0) {
-          const dt = $t.DataTable();
-          // Μόνο αν η τρέχουσα δεν είναι ίδια (για να μη γίνει διπλό draw)
-          if (dt.page.len() !== saved) {
-            dt.page.len(saved).draw(false);
-          }
-        }
-      }catch(_){}
-    }
-
-    // Αν είναι ήδη έτοιμο το DataTables
-    if ($.fn.dataTable.isDataTable($t[0])) {
-      ensureFooter($t);
-      applySavedLen();
-      updateTotals($t);
-      $t.off('draw.dt._totals').on('draw.dt._totals', function(){ updateTotals($t); });
-      $t.off('length.dt._persist').on('length.dt._persist', function(e, settings, len){
-        try{ localStorage.setItem(LEN_KEY, String(len)); }catch(_){}
-      });
-    } else {
-      // Αλλιώς περίμενε το init
-      $t.off('init.dt._boot').on('init.dt._boot', function(){
+      syncCloneFooter(table);
         ensureFooter($t);
         applySavedLen();
         updateTotals($t);
@@ -1045,6 +1195,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
           if(j && j.ok && j.table_html){
             const container = document.getElementById('summary-container');
             if(container){
+              // Destroy existing DataTables instance if present
               try{
                 if (window.jQuery && jQuery.fn && jQuery.fn.dataTable && container.querySelector('.summary-table') && jQuery.fn.dataTable.isDataTable(container.querySelector('.summary-table'))){
                   const $old = jQuery(container.querySelector('.summary-table'));
@@ -1060,8 +1211,91 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
                 }
               }catch(_){ container.innerHTML = j.table_html; }
 
-              try{ const sel = document.getElementById('selectAll'); if(sel){ sel.addEventListener('change', function(){ const checked=!!this.checked; const inputs=container.querySelectorAll('input[name="delete_mark"]'); inputs.forEach(cb=>{ try{ cb.checked=checked; }catch(_){} }); }); } }catch(_){ }
-              try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
+              // Re-initialize DataTables with the same configuration as the main page
+              try{
+                if(window.jQuery && jQuery.fn && jQuery.fn.dataTable){
+                  const $table = jQuery('.summary-table');
+                  const tableEl = $table[0];
+
+                  // Ensure the tfoot exists on the raw table before DataTables
+                  // creates its scrolling clones. DataTables will clone the
+                  // tfoot into the visible scrollFoot; creating it beforehand
+                  // guarantees correct placement and column alignment.
+                  if (tableEl && typeof ensureFooter === 'function'){
+                    try{ ensureFooter(tableEl); }catch(_){ }
+                  }
+
+                  const dt = $table.DataTable({
+                    paging: true,
+                    scrollY: '55vh',
+                    scrollX: true,
+                    scrollCollapse: true,
+                    fixedHeader: { header: true, headerOffset: 0 },
+                    colReorder: true,
+                    autoWidth: false,
+                    columnDefs: [{ orderable: false, targets: 0 }],
+                    initComplete: (settings, json)=>{
+                      // After DataTables is fully initialized, compute totals
+                      // on the raw table and sync the cloned footer.
+                      try{
+                        const rawTable = tableEl || ($table && $table.length? $table[0] : null);
+                        if (typeof computeAndRenderTotals === 'function' && rawTable){
+                          try{ computeAndRenderTotals(rawTable); }catch(_){ }
+                        }
+
+                        // Lightweight runtime diagnostic logging to help debug
+                        // issues where the totals row appears under the header.
+                        try{
+                          const $tbl = jQuery(rawTable || '.summary-table');
+                          let dt = null;
+                          if ($tbl && $tbl.length && jQuery.fn.dataTable && jQuery.fn.dataTable.isDataTable($tbl[0])){
+                            dt = $tbl.DataTable();
+                          }
+                          const $wrap = $tbl.closest('.dataTables_wrapper');
+                          console.debug('FBP:initComplete raw tfoot:', rawTable && rawTable.tFoot ? rawTable.tFoot.innerHTML : null);
+                          console.debug('FBP:initComplete cloned tfoot HTML:', $wrap.find('.dataTables_scrollFoot table tfoot').html());
+                          if(dt){
+                            console.debug('FBP:initComplete visible headers:', dt.columns().header().toArray().map(h=> (h.innerText||h.textContent||'').trim()));
+                          }
+                          console.debug('FBP:initComplete cloned totals text:', $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]').text());
+                        }catch(e){ console.debug('FBP:initComplete logging failed', e); }
+
+                        // Do a tiny deferred sync/resize in case DataTables finishes
+                        // cloning/resizing slightly after initComplete.
+                        try{
+                          setTimeout(()=>{
+                            try{
+                              const rt = rawTable || ($table && $table.length? $table[0] : null);
+                              if(rt) syncCloneFooter(rt);
+                              if (window.jQuery && $table && $table.length){
+                                const _dt = $table.DataTable ? $table.DataTable() : null;
+                                if(_dt && _dt.columns && typeof _dt.columns.adjust === 'function'){
+                                  try{ _dt.columns.adjust(); _dt.draw(false); }catch(_){ }
+                                }
+                              }
+                            }catch(_){ }
+                          }, 60);
+                        }catch(_){ }
+
+                        // Also run the broader initializer which binds draw handlers
+                        if(window.FBP_INIT_TABLE) try{ window.FBP_INIT_TABLE(); }catch(_){ }
+                        else if(window.FBP_REINIT) try{ window.FBP_REINIT(); }catch(_){ }
+                      }catch(_){ }
+                    }
+                  });
+                  if(dt.colResize){
+                    dt.colResize({ resizeMode: 'flex' });
+                  }
+                  jQuery('#globalSearch').off('input._dtSearch').on('input._dtSearch', function(){ dt.search(this.value).draw(); });
+                  jQuery('#selectAll').off('change._selectAll').on('change._selectAll', function(){
+                    const checked = this.checked;
+                    jQuery('input[type="checkbox"][name="delete_mark"]').prop('checked', checked);
+                  });
+                }
+              }catch(_){ 
+                // If DataTables fails, still try to initialize the table
+                try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
+              }
             }
           }
         }

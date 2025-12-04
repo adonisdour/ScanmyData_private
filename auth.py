@@ -1066,6 +1066,37 @@ def api_login():
 
 @auth_bp.route('/api/logout', methods=['POST'])
 def api_logout():
+    """API endpoint for logout. Handles both JSON and FormData requests.
+    Optional 'reason' parameter can be 'manual', 'inactivity', or 'tab_close'.
+    """
+    # Extract reason if provided
+    reason = None
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            reason = data.get('reason', '').strip()
+        else:
+            reason = (request.form.get('reason') or '').strip()
+    except Exception:
+        pass
+
+    reason = reason or 'manual'
+
+    # Log logout activity if user is authenticated
+    try:
+        from utils import log_user_activity
+        if getattr(current_user, 'is_authenticated', False):
+            log_user_activity(
+                user_id=current_user.id,
+                group_name='system',
+                action='logout',
+                details={'reason': reason},
+                user_email=getattr(current_user, 'email', None),
+                user_username=getattr(current_user, 'username', None)
+            )
+    except Exception:
+        pass
+
     # Attempt to end DB-backed session if present
     try:
         from models import db as _db
@@ -1091,7 +1122,8 @@ def api_logout():
     session.pop('_remote_qr_owner', None)
     # also clear session_id from flask session
     session.pop('session_id', None)
-    return jsonify({'ok': True})
+    
+    return jsonify({'ok': True, 'reason': reason})
 
 
 @auth_bp.route('/api/user', methods=['GET'])

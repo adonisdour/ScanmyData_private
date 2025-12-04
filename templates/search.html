@@ -741,7 +741,7 @@ function katToPercent(k){
       if (!r.ok) return {};
       const j = await r.json();
       return normalizeMapping((j && j.repeat_entry && j.repeat_entry.mapping) || {});
-    } catch { return {}; }
+    } catch (_e) { return {}; }
   }
 
   async function fetchProfilesAndTags() {
@@ -769,7 +769,7 @@ function katToPercent(k){
         ...p, mapping: normalizeMapping(p.mapping || {})
       })) : [];
       return profiles;
-    } catch { return []; }
+    } catch (_e) { return []; }
   }
 
   // ---- DOM refs
@@ -929,7 +929,7 @@ function katToPercent(k){
     // Βάλε checked το switch & δείξε το κουμπί "Επεξεργασία"
     document.getElementById('repeatEntrySwitch')?.setAttribute('checked', 'checked');
     document.getElementById('editRepeatMappingBtn')?.classList.remove('hidden');
-  } catch {
+  } catch (_e) {
     setHint('Δικτυακό σφάλμα.');
   }
 });
@@ -1012,14 +1012,14 @@ function katToPercent(k){
           }
         }
         return (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-      } catch { return []; }
+      } catch (_e) { return []; }
     })(),
     (async () => {
       try {
         const r = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(VAT), {credentials:'same-origin'});
         const j = await r.json();
         return (j && j.repeat_entry && j.repeat_entry.mapping) || {};
-      } catch { return {}; }
+      } catch (_e) { return {}; }
     })(),
     fetchRepeatState(VAT) // <-- φέρνει defaultMap + savedName
   ]);
@@ -1100,7 +1100,7 @@ function katToPercent(k){
         renderMapping(m);
         setActiveProfileHint(savedName);
 
-      }catch{
+      } catch (_e) {
         renderMapping(defaultMap);
       }
     } else {
@@ -1144,7 +1144,7 @@ try {
       } catch(_){}
     }, 0);
   }
-} catch {}
+} catch (_e) {}
 
 })();
 </script>
@@ -1464,7 +1464,7 @@ try {
     if(!el) return;
     try {
       el.dispatchEvent(new Event('change', { bubbles:true }));
-    } catch {
+    } catch (_e) {
       const evt = document.createEvent('Event');
       evt.initEvent('change', true, true);
       el.dispatchEvent(evt);
@@ -1481,7 +1481,7 @@ try {
       if (q.has('use_receipts')) {
         localStorage.setItem(KEY, q.get('use_receipts') === '1' ? '1' : '0');
       }
-    } catch {}
+    } catch (_e) {}
 
     // Restore από localStorage
     const saved = localStorage.getItem(KEY);
@@ -1498,7 +1498,7 @@ try {
 
     // Persist σε κάθε αλλαγή χρήστη
     sw.addEventListener('change', () => {
-      try { localStorage.setItem(KEY, sw.checked ? '1' : '0'); } catch {}
+      try { localStorage.setItem(KEY, sw.checked ? '1' : '0'); } catch (_e) {}
       // Προαιρετικό: κρατάμε και ένα data-mode στο body αν το θες για CSS hooks
       document.body.dataset.mode = sw.checked ? 'receipts' : 'invoices';
     });
@@ -1517,7 +1517,7 @@ try {
         const isReceipt = s.is_receipt === true ||
                           /αποδει/i.test(`${s.type_name || ''} ${s.category || s.characteristic || ''}`);
         if (isReceipt) localStorage.setItem(KEY, '1');
-      } catch {}
+      } catch (_e) {}
     });
   });
 })();
@@ -7163,7 +7163,7 @@ document.addEventListener('DOMContentLoaded', () => {
 {% endblock %}
 
 <!-- === BEGIN: Injected fix (v2) for receipts auto-flow & afm_epsilon cleanup === -->
-<script><script>
+<script>
 /* RC-REPEAT-STATE bridge για Αποδείξεις & Τιμολόγια
    - Διαβάζει το state από backend (/api/repeat_state/get) στην εκκίνηση
    - Το περνάει και σε localStorage (REPEAT:enabled) & body dataset (data-repeat-enabled)

@@ -66,5 +66,35 @@
         "vat_category": "ΦΠΑ 24%"
       }
     ]
+  },
+  {
+    "mark": "400011829207852",
+    "issueDate": "02/12/2025",
+    "series": "ΤΙΠΕ",
+    "aa": "13432",
+    "AA": "13432",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "72,58",
+    "totalVatAmount": "17,42",
+    "totalValue": "90,00",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "997751666",
+    "Name_issuer": "K. & E. ΠΑΥΛΑΤΟΥ O.Ε.",
+    "AFM": "997751666",
+    "lines": [
+      {
+        "id": "400011829207852_inst0",
+        "description": "K. & E. ΠΑΥΛΑΤΟΥ O.Ε.",
+        "amount": "72,58",
+        "vat": "17,42",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
   }
 ]
