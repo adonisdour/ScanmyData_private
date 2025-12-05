@@ -21,8 +21,24 @@
     </div>
   </div>
 
-  <div class="flex items-center gap-3 mb-4">
-    <input id="globalSearch" type="search" placeholder="🔎 Αναζήτηση..." class="p-2 border border-gray-300 rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-blue-400">
+  <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+    <div class="flex items-center gap-3">
+      <input id="globalSearch" type="search" placeholder="🔎 Αναζήτηση..." class="p-2 border border-gray-300 rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <button id="deleteBtn" type="button" class="px-4 py-2 bg-red-600 text-white rounded-lg shadow hover:bg-red-700 transition">🗑️ Διαγραφή Επιλεγμένων</button>
+      <div id="deleteSpinner" class="ml-2 hidden text-gray-700">Αποστολή…</div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="tabulatorStatus" class="text-sm font-medium" style="color: #4b5563;"></span>
+      <label class="flex items-center gap-2 text-sm text-gray-700 font-medium">
+        Εγγραφές/σελίδα:
+        <select id="pageLengthSelect" class="p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400" style="min-width: 80px;">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+    </div>
           <style>
           /* HIGHEST PRIORITY - Light mode table text visibility */
           body .summary-table td,
@@ -127,8 +143,80 @@
             }
           }
           </style>
-    <button id="deleteBtn" type="button" class="px-4 py-2 bg-red-600 text-white rounded-lg shadow hover:bg-red-700 transition">🗑️ Διαγραφή Επιλεγμένων</button>
-    <div id="deleteSpinner" class="ml-2 hidden text-gray-700">Αποστολή…</div>
+    <style>
+    /* Ensure delete button stays clickable but below modals */
+    #deleteBtn{ position:relative; z-index:20; }
+    /* Make delete modal always above other UI (higher than #deleteBtn) */
+    #deleteModal{ z-index:99999 !important; }
+    #deleteModal > div { position: relative; z-index:100000; }
+    </style>
+
+    <script>
+    // Defensive fallback: attach a minimal click handler immediately so the
+    // delete button works even if other JS fails or DOMContentLoaded handlers
+    // didn't run. It collects selected marks and shows the modal; on confirm
+    // it posts the same payload shape the main handler expects.
+    (function(){
+      const btn = document.getElementById('deleteBtn');
+      if(!btn) return;
+      btn.addEventListener('click', function fallbackDeleteOpen(e){
+        try{
+          // prefer Tabulator helper if available
+          let marks = [];
+          try{ if(window && typeof window._fbp_collect_marks_from_tabulator === 'function') marks = window._fbp_collect_marks_from_tabulator() || []; }catch(_){ marks = []; }
+          // fallback to DOM checkboxes
+          if(!marks || !marks.length){
+            Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
+              try{
+                const v = (cb.value||'').toString().trim();
+                if(v && v.toLowerCase() !== 'on') { marks.push(v); return; }
+                if(cb.dataset && cb.dataset.mark){ marks.push(String(cb.dataset.mark).trim()); return; }
+                const tr = cb.closest && cb.closest('tr');
+                if(tr && typeof window.parseRowToData === 'function'){
+                  const thead = document.querySelector('.summary-table thead');
+                  const colCount = thead? thead.querySelectorAll('th').length||0 : 0;
+                  const markColIndex = thead? (typeof window.findMarkCol === 'function' ? window.findMarkCol(thead) : -1) : -1;
+                  const d = window.parseRowToData ? window.parseRowToData(tr, colCount, markColIndex) : null;
+                  if(d && d._mark) marks.push(String(d._mark).trim());
+                }
+              }catch(_){ }
+            });
+          }
+
+          if(!marks || !marks.length){
+            // keep behavior consistent with other UI: show a quick alert
+            try{ if(typeof showModalAlert === 'function') { showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.'); return; } }catch(_){ }
+            alert('Επίλεξε πρώτα γραμμές για διαγραφή.');
+            return;
+          }
+
+          const modal = document.getElementById('deleteModal');
+          const modalMsg = document.getElementById('deleteModalMessage');
+          if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;
+          if(modal) modal.classList.remove('hidden');
+
+          const confirmBtn = document.getElementById('deleteConfirm');
+          if(!confirmBtn) return;
+          // replace confirm handler with a safe submit that builds the same payload
+          confirmBtn.onclick = function fallbackConfirm(){
+            try{
+              confirmBtn.disabled = true;
+              const spinner = document.getElementById('deleteSpinner'); if(spinner) spinner.classList.remove('hidden');
+              const tdelete = (function(){ try{ return Array.isArray(marks)?marks.slice() : []; }catch(_){ return []; } })();
+              if(!tdelete.length){ if(modal) modal.classList.add('hidden'); confirmBtn.disabled=false; if(spinner) spinner.classList.add('hidden'); return; }
+              const form = document.createElement('form'); form.method='POST'; form.action = (window.DELETE_ENDPOINT || "{{ url_for('delete_invoices') }}");
+              const existingCsrf = document.querySelector('input[name="csrf_token"]');
+              if(existingCsrf){ const t = document.createElement('input'); t.type='hidden'; t.name='csrf_token'; t.value=existingCsrf.value; form.appendChild(t); }
+              tdelete.forEach(v=>{ const a=document.createElement('input'); a.type='hidden'; a.name='delete_mark'; a.value=v; form.appendChild(a); const b=document.createElement('input'); b.type='hidden'; b.name='delete_mark[]'; b.value=v; form.appendChild(b); });
+              const blob = document.createElement('input'); blob.type='hidden'; blob.name='delete_mark_json'; blob.value = JSON.stringify(tdelete); form.appendChild(blob);
+              const dbg = document.createElement('input'); dbg.type='hidden'; dbg.name='client_submitted_marks'; dbg.value = JSON.stringify(tdelete); form.appendChild(dbg);
+              document.body.appendChild(form); form.submit();
+            }catch(err){ console.warn('fallbackConfirm failed', err); confirmBtn.disabled=false; }
+          };
+        }catch(err){ console.warn('fallbackDeleteOpen failed', err); }
+      }, { passive:true });
+    })();
+    </script>
   </div>
 
   <div id="summary-container" class="overflow-x-auto">
@@ -300,6 +388,7 @@
               setTimeout(function(){ retrySync(attempts-1); }, delay);
             }
           })(6);
+          try{ if(window.FBP_INIT_TABULATOR) window.FBP_INIT_TABULATOR(); }catch(_){ }
           return; 
         }catch(_){ }
       }
@@ -530,101 +619,13 @@
     syncCloneFooter(table);
   }
 
-  // Main table initializer: extracted so it can be reused after partial refresh
+  // Main table initializer: Tabulator-only now; keep a no-op shim for legacy callers
   window.FBP_INIT_TABLE = function(){
-    try{
-      const table = document.querySelector('.summary-table');
-      if(!table) return;
-
-      hideServerTotalsRows(table);
-
-      if (window.jQuery && jQuery.fn && jQuery.fn.dataTable){
-        const $t = jQuery('.summary-table');
-
-        const bind = ()=>{
-          hideServerTotalsRows(table);
-          ensureFooter(table);
-          computeAndRenderTotals(table);
-          syncCloneFooter(table);
-
-          lockHeaderHeight($t);
-
-          $t.off('draw.dt._dynTotals').on('draw.dt._dynTotals', ()=>{
-            hideServerTotalsRows(table);
-            ensureFooter(table);
-            computeAndRenderTotals(table);
-            syncCloneFooter(table);
-            lockHeaderHeight($t);
-          });
-          $t.off('order.dt._hdr').on('order.dt._hdr', ()=> lockHeaderHeight($t));
-          $t.off('column-visibility.dt._hdr').on('column-visibility.dt._hdr', ()=> lockHeaderHeight($t));
-          $t.off('column-sizing.dt._hdr').on('column-sizing.dt._hdr', ()=> lockHeaderHeight($t));
-
-          let _hdrTO=null;
-          $(window).off('resize._hdr').on('resize._hdr', ()=>{
-            clearTimeout(_hdrTO); _hdrTO=setTimeout(()=>lockHeaderHeight($t), 60);
-          });
-        };
-
-        if (jQuery.fn.dataTable.isDataTable($t)) {
-          bind();
-        } else {
-          $t.off('init.dt._dynTotals').on('init.dt._dynTotals', () => {
-            bind();
-            // Extra sync after DataTables initialization completes
-            setTimeout(() => {
-              computeAndRenderTotals(table);
-              syncCloneFooter(table);
-            }, 100);
-
-            // MutationObserver: if DataTables rebuilds the scroll-foot clone later
-            // (race after partial reloads), detect it and run a final sync.
-            try{
-              const $wrap = $t.closest('.dataTables_wrapper');
-              const target = $wrap && $wrap.length ? $wrap[0] : null;
-              if (target){
-                const mo = new MutationObserver(function(mutations, observer){
-                  try{
-                    const $clone = $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]');
-                    if($clone.length){
-                      const hasContent = $clone.children().toArray().some(function(el){ return ($(el).text()||'').trim() !== ''; });
-                      if(hasContent){
-                        try{ computeAndRenderTotals(table); }catch(_){}
-                        try{ syncCloneFooter(table); }catch(_){}
-                        observer.disconnect();
-                      }
-                    }
-                  }catch(_){ }
-                });
-                mo.observe(target, { childList:true, subtree:true });
-                // Safety: stop observing after 2s to avoid leaks
-                setTimeout(()=>{ try{ mo.disconnect(); }catch(_){ } }, 2000);
-              }
-            }catch(_){ }
-          });
-        }
-      } else {
-        // Fallback without DataTables
-        ensureFooter(table);
-        computeAndRenderTotals(table);
-        const globalSearch = document.getElementById('globalSearch');
-        if (globalSearch){
-          const recalc = ()=>{
-            const q = (globalSearch.value||'').toLowerCase();
-            table.querySelectorAll('tbody tr').forEach(tr=>{
-              if (tr.getAttribute && tr.getAttribute('data-server-totals')==='1') { tr.style.display='none'; return; }
-              tr.style.display = (tr.innerText||tr.textContent||'').toLowerCase().includes(q) ? '' : 'none';
-            });
-            computeAndRenderTotals(table);
-          };
-          globalSearch.addEventListener('input', ()=>setTimeout(recalc,0));
-          globalSearch.addEventListener('keydown', e=>{ if(e.key==='Escape'){ globalSearch.value=''; setTimeout(recalc,0);} });
-        }
-      }
-    }catch(_){ }
+    // We rely on Tabulator instead of DataTables; ensure any old wrappers are removed
+    try{ document.querySelectorAll('.dataTables_wrapper').forEach(el=>el.remove()); }catch(_){ }
   };
 
-  // Run on initial load
+  // Run on initial load (Tabulator init happens separately)
   document.addEventListener('DOMContentLoaded', function(){ try{ window.FBP_INIT_TABLE(); }catch(_){ } });
 })();  
 
@@ -813,21 +814,22 @@
       const spinner=qs('#deleteSpinner');
       let toDelete=[];
       deleteBtn.addEventListener('click', async ()=>{
-        toDelete=qsa('input[name="delete_mark"]:checked').map(cb=>cb.value).filter(v=>v.trim()!=='');
+        // Prefer Tabulator selection if available
+        try{
+          if(window && typeof window._fbp_collect_marks_from_tabulator === 'function'){
+            toDelete = window._fbp_collect_marks_from_tabulator() || [];
+          }
+        }catch(_){ }
+        if(!toDelete || !toDelete.length){ toDelete = qsa('input[name="delete_mark"]:checked').map(cb=>cb.value).filter(v=>v.trim()!==''); }
         if(!toDelete.length){ await showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.'); return; }
         modalMsg.textContent=`Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
         modal.classList.remove('hidden');
       });
       
       cancelBtn?.addEventListener('click', ()=>modal.classList.add('hidden'));
-      confirmBtn?.addEventListener('click', ()=>{
-        confirmBtn.disabled=true; spinner?.classList.remove('hidden');
-        const form=document.createElement('form'); form.method='POST'; form.action="{{ url_for('delete_invoices') }}";
-        const existingCsrf=qs('input[name="csrf_token"]'); 
-        if(existingCsrf){ const t=document.createElement('input'); t.type='hidden'; t.name='csrf_token'; t.value=existingCsrf.value; form.appendChild(t); }
-        toDelete.forEach(v=>{ const inp=document.createElement('input'); inp.type='hidden'; inp.name='delete_mark'; inp.value=v; form.appendChild(inp); });
-        document.body.appendChild(form); form.submit();
-      });
+      // The actual submit is handled by the consolidated delete handler below.
+      // Keep this confirmBtn listener inert to avoid duplicate submissions.
+      confirmBtn?.addEventListener('click', ()=>{ /* noop - handled elsewhere */ });
     }
   });
 })();
@@ -837,24 +839,34 @@
 // --- DELETE HANDLER: δουλεύει ΚΑΙ με DataTables ΚΑΙ χωρίς ---
 (function(){
   const $ = window.jQuery;
-  function pickTable(){
-    let $t = $('.summary-table:visible').first();
-    if(!$t.length) $t = $('table.dataTable:visible').first();
-    if(!$t.length) $t = $('table:visible').first();
-    return $t;
-  }
-  function collectCheckedMarks($t){
+  function collectCheckedMarks(){
+    // Combine Tabulator live selection with any legacy DOM checkboxes and dedupe
     try{
-      if ($ && $.fn && $.fn.dataTable && $.fn.dataTable.isDataTable($t[0])) {
-        const dt = $t.DataTable();
-        const $checked = dt.$('input[name="delete_mark"]:checked', { page: 'all' });
-        return $checked.map(function(){ return this.value; }).get().filter(v => v && v.trim() !== '');
+      const set = new Set();
+      // Tabulator live selection
+      if (window && window.FBP_TABULATOR && typeof window._fbp_collect_marks_from_tabulator === 'function'){
+        const fromTab = window._fbp_collect_marks_from_tabulator() || [];
+        if(Array.isArray(fromTab)) fromTab.forEach(v=>{ if(v) set.add(String(v).trim()); });
       }
-    }catch(_){}
-    // Fallback: απλός DOM selector (χωρίς DataTables)
-    return Array.from(document.querySelectorAll('input[name="delete_mark"]:checked'))
-                .map(cb => cb.value)
-                .filter(v => v && v.trim() !== '');
+      // DOM checkbox fallback: resolve 'on' to real MARK using row parsing / data-mark
+      const origTable = document.querySelector('.summary-table');
+      const thead = origTable ? origTable.querySelector('thead') : null;
+      const colCount = thead ? thead.querySelectorAll('th').length || 0 : 0;
+      const markColIndex = thead ? findMarkCol(thead) : -1;
+      Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
+        try{
+          if(!cb) return;
+          const v = (cb.value||'').toString().trim();
+          if(v && v.toLowerCase() !== 'on') { set.add(v); return; }
+          if(cb.dataset && cb.dataset.mark){ set.add(String(cb.dataset.mark).trim()); return; }
+          const tr = cb.closest && cb.closest('tr');
+          if(tr){ const d = parseRowToData(tr, colCount, markColIndex); if(d && d._mark) set.add(String(d._mark).trim()); }
+        }catch(_){ }
+      });
+      return Array.from(set);
+    }catch(_){
+      return [];
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function(){
@@ -868,14 +880,16 @@
     if(!deleteBtn || !modal || !confirmBtn) return;
 
     deleteBtn.addEventListener('click', ()=>{
-      const $t = pickTable();
-      const toDelete = collectCheckedMarks($t);
+      const toDelete = collectCheckedMarks();
       if (!toDelete.length){  return; }
       if (modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
       modal.classList.remove('hidden');
 
       // override τυχόν προηγούμενα handlers για να μη διπλοστέλνει
       confirmBtn.onclick = ()=>{
+        // Re-collect marks at confirmation time (in case selection changed)
+        const tdelete = collectCheckedMarks() || [];
+        if(!tdelete.length){ modal.classList.add('hidden'); return; }
         confirmBtn.disabled = true;
         if (spinner) spinner.classList.remove('hidden');
 
@@ -894,15 +908,19 @@
         }
 
         // Προσθέτουμε ΟΛΑ τα IDs με τρεις safe τρόπους
-        toDelete.forEach(v=>{
+        tdelete.forEach(v=>{
           const a = document.createElement('input'); a.type='hidden'; a.name='delete_mark';   a.value=v; form.appendChild(a);
           const b = document.createElement('input'); b.type='hidden'; b.name='delete_mark[]'; b.value=v; form.appendChild(b);
         });
-        const blob = document.createElement('input');
-        blob.type  = 'hidden';
-        blob.name  = 'delete_marks_json';
-        blob.value = JSON.stringify(toDelete);
-        form.appendChild(blob);
+        // Provide multiple fallback payloads so server-side handlers accept the data
+        const blobA = document.createElement('input'); blobA.type='hidden'; blobA.name='delete_mark_json'; blobA.value = JSON.stringify(tdelete); form.appendChild(blobA);
+        const blobB = document.createElement('input'); blobB.type='hidden'; blobB.name='delete_marks_json'; blobB.value = JSON.stringify(tdelete); form.appendChild(blobB);
+        const blobC = document.createElement('input'); blobC.type='hidden'; blobC.name='delete_marks'; blobC.value = tdelete.join(','); form.appendChild(blobC);
+        const blobD = document.createElement('input'); blobD.type='hidden'; blobD.name='marks'; blobD.value = tdelete.join(','); form.appendChild(blobD);
+        // Debug field: server logs will include this exact JSON payload
+        const dbg = document.createElement('input'); dbg.type='hidden'; dbg.name='client_submitted_marks'; dbg.value = JSON.stringify(tdelete); form.appendChild(dbg);
+        // Log to console for developer visibility before submit
+        try{ console.info('delete submit, client marks=', JSON.stringify(tdelete)); }catch(_){ }
 
         document.body.appendChild(form);
         form.submit();
@@ -1104,90 +1122,27 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
         showToast(message);
       }
       // fetch updated table by requesting the full /list page and extracting
-      // the `#summary-container` fragment. This mirrors the initial render
-      // exactly and avoids subtle DOM shape differences from piecemeal fragments.
+      // the `#summary-container` fragment. Use Tabulator-only path (remove legacy DataTables wrappers).
       try{
         const listUrl = window.location.pathname.indexOf('/list')===0 ? window.location.href : '/list';
         const pageResp = await fetch(listUrl);
         if(pageResp && pageResp.ok){
           const text = await pageResp.text();
-          // Parse the returned HTML and extract #summary-container
           const parser = new DOMParser();
           const doc = parser.parseFromString(text, 'text/html');
           const newContainer = doc.getElementById('summary-container');
           const container = document.getElementById('summary-container');
           if(newContainer && container){
             const newHtml = newContainer.innerHTML;
-            // If DataTables is active, prefer in-place update via its API to
-            // preserve instance state (selections, modal overlays, event handlers).
-            const oldTable = container.querySelector('.summary-table');
-            try{
-              if (window.jQuery && jQuery.fn && jQuery.fn.dataTable && oldTable && jQuery.fn.dataTable.isDataTable(oldTable)){
-                const $old = jQuery(oldTable);
-                const dt = $old.DataTable();
-                // preserve checked marks and scroll
-                const checked = Array.from(container.querySelectorAll('input[name="delete_mark"]:checked')).map(cb=>cb.value);
-                const scrollTop = container.scrollTop || 0;
-
-                // parse new rows into arrays of HTML cell content
-                const tmp = document.createElement('div'); tmp.innerHTML = newHtml;
-                const newTableNode = tmp.querySelector('.summary-table');
-                if(newTableNode){
-                  const rowsData = [];
-                  newTableNode.querySelectorAll('tbody tr').forEach(tr=>{
-                    const cells = Array.from(tr.children).map(td=>td.innerHTML);
-                    rowsData.push(cells);
-                  });
-
-                  // replace data in DataTable (keeps the same table element)
-                  try{
-                    dt.clear();
-                    dt.rows.add(rowsData);
-                    dt.draw(false);
-                  }catch(_){
-                    // fallback: destroy and replace wrapper if API operation fails
-                    try{ dt.destroy(); }catch(_){ }
-                    const $wrap = $old.closest('.dataTables_wrapper');
-                    if($wrap && $wrap.length){ $wrap.replaceWith(newHtml); } else { container.innerHTML = newHtml; }
-                  }
-
-                  // restore checked marks
-                  try{ checked.forEach(v=>{ const cb = container.querySelector('input[name="delete_mark"][value="'+v+'"]'); if(cb) cb.checked = true; }); }catch(_){ }
-                  // restore scroll
-                  try{ container.scrollTop = scrollTop; }catch(_){ }
-                } else {
-                  // no table found in new HTML — replace container
-                  const $wrap = $old.closest('.dataTables_wrapper');
-                  if($wrap && $wrap.length){ $wrap.replaceWith(newHtml); } else { container.innerHTML = newHtml; }
-                }
-              } else {
-                // No DataTables active — safe to replace innerHTML
-                container.innerHTML = newHtml;
-              }
-            }catch(_){
-              container.innerHTML = newHtml;
-            }
-
-            // Reattach select-all checkbox behaviour if present
-            try{
-              const sel = document.getElementById('selectAll');
-              if(sel){
-                sel.addEventListener('change', function(){
-                  const checked = !!this.checked;
-                  const inputs = container.querySelectorAll('input[name="delete_mark"]');
-                  inputs.forEach(cb => { try{ cb.checked = checked; }catch(_){} });
-                });
-              }
-            }catch(_){ }
-
-            // Re-run full initializer to rebuild DataTables and layout
-            try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
+            try{ container.querySelectorAll('.dataTables_wrapper, .tabulator-wrapper').forEach(el=>el.remove()); }catch(_){ }
+            container.innerHTML = newHtml;
+            try{ setTimeout(()=>{ if(window.FBP_INIT_TABULATOR) window.FBP_INIT_TABULATOR(); }, 30); }catch(_){ }
             return;
           }
         }
       }catch(_){ /* fall through to fragment fallback */ }
 
-      // Fallback: fetch the fragment endpoint (older behaviour)
+      // Fallback: fetch the fragment endpoint (older behaviour) -> still Tabulator-only
       try{
         const frag = await fetch('/list/fragment');
         if(frag && frag.ok){
@@ -1195,107 +1150,9 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
           if(j && j.ok && j.table_html){
             const container = document.getElementById('summary-container');
             if(container){
-              // Destroy existing DataTables instance if present
-              try{
-                if (window.jQuery && jQuery.fn && jQuery.fn.dataTable && container.querySelector('.summary-table') && jQuery.fn.dataTable.isDataTable(container.querySelector('.summary-table'))){
-                  const $old = jQuery(container.querySelector('.summary-table'));
-                  try{ $old.DataTable().destroy(); }catch(_){ }
-                  const $wrap = $old.closest('.dataTables_wrapper');
-                  if($wrap && $wrap.length){
-                    $wrap.replaceWith(j.table_html);
-                  } else {
-                    container.innerHTML = j.table_html;
-                  }
-                } else {
-                  container.innerHTML = j.table_html;
-                }
-              }catch(_){ container.innerHTML = j.table_html; }
-
-              // Re-initialize DataTables with the same configuration as the main page
-              try{
-                if(window.jQuery && jQuery.fn && jQuery.fn.dataTable){
-                  const $table = jQuery('.summary-table');
-                  const tableEl = $table[0];
-
-                  // Ensure the tfoot exists on the raw table before DataTables
-                  // creates its scrolling clones. DataTables will clone the
-                  // tfoot into the visible scrollFoot; creating it beforehand
-                  // guarantees correct placement and column alignment.
-                  if (tableEl && typeof ensureFooter === 'function'){
-                    try{ ensureFooter(tableEl); }catch(_){ }
-                  }
-
-                  const dt = $table.DataTable({
-                    paging: true,
-                    scrollY: '55vh',
-                    scrollX: true,
-                    scrollCollapse: true,
-                    fixedHeader: { header: true, headerOffset: 0 },
-                    colReorder: true,
-                    autoWidth: false,
-                    columnDefs: [{ orderable: false, targets: 0 }],
-                    initComplete: (settings, json)=>{
-                      // After DataTables is fully initialized, compute totals
-                      // on the raw table and sync the cloned footer.
-                      try{
-                        const rawTable = tableEl || ($table && $table.length? $table[0] : null);
-                        if (typeof computeAndRenderTotals === 'function' && rawTable){
-                          try{ computeAndRenderTotals(rawTable); }catch(_){ }
-                        }
-
-                        // Lightweight runtime diagnostic logging to help debug
-                        // issues where the totals row appears under the header.
-                        try{
-                          const $tbl = jQuery(rawTable || '.summary-table');
-                          let dt = null;
-                          if ($tbl && $tbl.length && jQuery.fn.dataTable && jQuery.fn.dataTable.isDataTable($tbl[0])){
-                            dt = $tbl.DataTable();
-                          }
-                          const $wrap = $tbl.closest('.dataTables_wrapper');
-                          console.debug('FBP:initComplete raw tfoot:', rawTable && rawTable.tFoot ? rawTable.tFoot.innerHTML : null);
-                          console.debug('FBP:initComplete cloned tfoot HTML:', $wrap.find('.dataTables_scrollFoot table tfoot').html());
-                          if(dt){
-                            console.debug('FBP:initComplete visible headers:', dt.columns().header().toArray().map(h=> (h.innerText||h.textContent||'').trim()));
-                          }
-                          console.debug('FBP:initComplete cloned totals text:', $wrap.find('.dataTables_scrollFoot table tfoot tr[data-totals="1"]').text());
-                        }catch(e){ console.debug('FBP:initComplete logging failed', e); }
-
-                        // Do a tiny deferred sync/resize in case DataTables finishes
-                        // cloning/resizing slightly after initComplete.
-                        try{
-                          setTimeout(()=>{
-                            try{
-                              const rt = rawTable || ($table && $table.length? $table[0] : null);
-                              if(rt) syncCloneFooter(rt);
-                              if (window.jQuery && $table && $table.length){
-                                const _dt = $table.DataTable ? $table.DataTable() : null;
-                                if(_dt && _dt.columns && typeof _dt.columns.adjust === 'function'){
-                                  try{ _dt.columns.adjust(); _dt.draw(false); }catch(_){ }
-                                }
-                              }
-                            }catch(_){ }
-                          }, 60);
-                        }catch(_){ }
-
-                        // Also run the broader initializer which binds draw handlers
-                        if(window.FBP_INIT_TABLE) try{ window.FBP_INIT_TABLE(); }catch(_){ }
-                        else if(window.FBP_REINIT) try{ window.FBP_REINIT(); }catch(_){ }
-                      }catch(_){ }
-                    }
-                  });
-                  if(dt.colResize){
-                    dt.colResize({ resizeMode: 'flex' });
-                  }
-                  jQuery('#globalSearch').off('input._dtSearch').on('input._dtSearch', function(){ dt.search(this.value).draw(); });
-                  jQuery('#selectAll').off('change._selectAll').on('change._selectAll', function(){
-                    const checked = this.checked;
-                    jQuery('input[type="checkbox"][name="delete_mark"]').prop('checked', checked);
-                  });
-                }
-              }catch(_){ 
-                // If DataTables fails, still try to initialize the table
-                try{ if(window.FBP_INIT_TABLE) window.FBP_INIT_TABLE(); else if(window.FBP_REINIT) window.FBP_REINIT(); }catch(_){ }
-              }
+              try{ container.querySelectorAll('.dataTables_wrapper, .tabulator-wrapper').forEach(el=>el.remove()); }catch(_){ }
+              container.innerHTML = j.table_html;
+              try{ setTimeout(()=>{ if(window.FBP_INIT_TABULATOR) window.FBP_INIT_TABULATOR(); }, 30); }catch(_){ }
             }
           }
         }
@@ -1310,6 +1167,702 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 
   document.addEventListener('DOMContentLoaded', ()=>{
     startPolling();
+  });
+})();
+</script>
+
+<!-- Tabulator migration: include assets + init script -->
+<link href="https://unpkg.com/tabulator-tables@5.4.4/dist/css/tabulator.min.css" rel="stylesheet">
+<script src="https://unpkg.com/tabulator-tables@5.4.4/dist/js/tabulator.min.js"></script>
+
+<style>
+/* Make Tabulator headers/footers visually match existing summary-table styles */
+.tabulator .tabulator-header .tabulator-col {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+  border: 1px solid #ccc !important;
+  padding: 16px 10px !important;
+  min-height: 64px !important;
+  vertical-align: middle !important;
+}
+.tabulator .tabulator-cell { border: 1px solid #e2e8f0 !important; color: #111827 !important; }
+.tabulator .tabulator-row:hover { background-color: #e6f0ff !important; }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content { white-space: normal !important; }
+.tabulator .tabulator-tableHolder { overflow-x: auto; }
+.tabulator .tabulator-col .tabulator-col-title { font-weight: 600; }
+
+/* ROUNDED TABLE OUTLINE - apply to wrapper container */
+.tabulator-wrapper .tabulator {
+  border-radius: 14px !important;
+  overflow: hidden !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+}
+.tabulator-wrapper .tabulator-tableHolder {
+  border-radius: 0 !important;
+}
+.tabulator-wrapper .tabulator-header {
+  border-top-left-radius: 14px !important;
+  border-top-right-radius: 14px !important;
+  overflow: hidden !important;
+}
+/* Remove large gray background from table holders (DataTables / Tabulator) */
+.dataTables_wrapper .dataTables_scrollBody { background: transparent !important; }
+.tabulator-wrapper .tabulator-tableHolder { background: transparent !important; }
+.tabulator-wrapper .tabulator-tableHolder .tabulator-table { background: #ffffff !important; }
+.tabulator-wrapper .tabulator-footer { background: #f1f5f9 !important; }
+/* Ensure dark-mode Tabulator matches page dark background */
+[data-theme="dark"] .tabulator-wrapper .tabulator-table { background: #111827 !important; color: #e5e7eb !important; }
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer { background: #000103 !important; color: #b5f110 !important; border-top: 1px solid rgba(255,255,255,0.06) !important; }
+/* Darker Tabulator styling for clearer contrast in dark mode */
+[data-theme="dark"] .tabulator .tabulator-header .tabulator-col { background-color: #0b2540 !important; color: #f8fafc !important; border-color: rgba(255,255,255,0.04) !important; }
+[data-theme="dark"] .tabulator .tabulator-cell { border-color: rgba(255,255,255,0.04) !important; color: #e5e7eb !important; }
+[data-theme="dark"] .tabulator .tabulator-row:hover { background-color: rgba(255,255,255,0.03) !important; }
+[data-theme="dark"] .tabulator-wrapper .tabulator-table { background: #0b1320 !important; }
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer { background: #071124 !important; color: #cbd5e1 !important; }
+/* Make Tabulator rows and footer cells explicitly visible in dark mode */
+[data-theme="dark"] .tabulator .tabulator-row,
+[data-theme="dark"] .tabulator .tabulator-row .tabulator-cell {
+  background-color: transparent !important;
+  color: #e5e7eb !important;
+  opacity: 1 !important;
+}
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer { box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); }
+.tabulator-wrapper .tabulator-footer { display: block; background: #f1f5f9 !important; }
+/* Hide legacy DataTables controls (secondary search/length) if they linger */
+.dataTables_wrapper .dataTables_length,
+.dataTables_wrapper .dataTables_filter,
+.dataTables_wrapper .dataTables_info,
+.dataTables_wrapper .dataTables_paginate { display: none !important; }
+
+/* Ensure Tabulator cells/footers are visible in dark mode (not transparent) */
+.tabulator-wrapper .tabulator-table .tabulator-cell,
+.tabulator-wrapper .tabulator-table td,
+.tabulator-wrapper .tabulator-table th { color: inherit !important; opacity: 1 !important; }
+/* Summary footer base (light/dark adjusted further below) */
+.tabulator-wrapper .tabulator-footer .summary-table-footer td { color: #1f2937 !important; }
+
+/* Dark-mode footer/table visibility */
+[data-theme="dark"] .tabulator-wrapper .tabulator-table .tabulator-cell,
+[data-theme="dark"] .tabulator-wrapper .tabulator-table td,
+[data-theme="dark"] .tabulator-wrapper .tabulator-table th {
+  color: #e5e7eb !important;
+  opacity: 1 !important;
+}
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td {
+  color: #cbd5e1 !important;
+}
+
+/* Hide Tabulator's built-in page-size selector (we use the top control) */
+.tabulator-wrapper .tabulator-paginator select { display: none !important; }
+
+/* Footer visibility - LIGHT MODE */
+.tabulator-wrapper .tabulator-footer {
+  display: block !important;
+  background: #f8fafc !important;
+  border-top: 2px solid #0d6efd !important;
+  padding: 8px 0 !important;
+}
+.tabulator-wrapper .tabulator-footer .summary-table-footer {
+  width: 100% !important;
+  border-collapse: collapse !important;
+}
+.tabulator-wrapper .tabulator-footer .summary-table-footer td {
+  color: #1f2937 !important;
+  background: #f8fafc !important;
+  padding: 10px 8px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+/* Footer visibility - DARK MODE */
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer {
+  background: #1f2937 !important;
+  border-top: 2px solid #3b82f6 !important;
+}
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td {
+  color: #ffffff !important;
+  background: #1f2937 !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  opacity: 1 !important;
+}
+/* Ensure ΣΥΝΟΛΑ cell stands out */
+.tabulator-wrapper .tabulator-footer .summary-table-footer td.synola-cell {
+  font-weight: 700 !important;
+  color: #0d6efd !important;
+}
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td.synola-cell {
+  color: #60a5fa !important;
+}
+
+/* Dark mode for status text and controls */
+[data-theme="dark"] #tabulatorStatus {
+  color: #e5e7eb !important;
+}
+[data-theme="dark"] #pageLengthSelect {
+  background-color: #374151 !important;
+  color: #f3f4f6 !important;
+  border-color: #4b5563 !important;
+}
+</style>
+
+<script>
+// Tabulator migration: build a Tabulator instance from the server-rendered table
+(function(){
+  function buildColumnsFromThead(thead){
+    const ths = Array.from(thead.querySelectorAll('th'));
+    return ths.map((th, i) => ({ title: (th.innerText||th.textContent||'').trim(), field: 'c'+i, headerSort: true, headerFilter:false }));
+  }
+
+  function detectNumericHeader(txt){
+    const t = (txt||'').toString().toLowerCase();
+    return ['καθαρη','καθαρή','καθαρη αξια','καθαρή αξία','φπα','vat','συνολο','σύνολο','total','totalvalue','sum'].some(k=> t.includes(k));
+  }
+
+  function findMarkCol(thead){
+    try{
+      const ths = Array.from(thead.querySelectorAll('th'));
+      const names = ths.map(h => (h.innerText||h.textContent||'').trim().toLowerCase());
+      const candidates = ['mark','αριθμός μητρώου','αριθμος μητρωου','αριθμος','αα','aa','invoice_id','invoice id','id','αρ. μητρώου','αριθμός'];
+      for(let i=0;i<names.length;i++){
+        const n = names[i];
+        if(!n) continue;
+        for(const c of candidates){ if(n.includes(c)) return i; }
+      }
+      // last resort: look for any header that literally equals 'mark' or contains 'mark' (latin)
+      for(let i=0;i<names.length;i++){ if(names[i].includes('mark')) return i; }
+      return -1;
+    }catch(_){ return -1; }
+  }
+
+  function findDateCol(thead){
+    try{
+      const ths = Array.from(thead.querySelectorAll('th'));
+      const names = ths.map(h => (h.innerText||h.textContent||'').trim().toLowerCase());
+      const candidates = ['ημερομηνία','ημερομηνιa','ημερ','date','ημ.','ημ'];
+      for(let i=0;i<names.length;i++){
+        for(const c of candidates) if(names[i].includes(c)) return i;
+      }
+      return -1;
+    }catch(_){ return -1; }
+  }
+
+  function parseRowToData(tr, colCount, markCol){
+    const tds = Array.from(tr.children || []);
+    const obj = {};
+    for(let i=0;i<colCount;i++){
+      const td = tds[i];
+      const html = td ? td.innerHTML : '';
+      const text = td ? (td.innerText||td.textContent||'').trim() : '';
+      obj['c'+i] = text;
+      // also expose raw html if needed
+      obj['c'+i+'_html'] = html;
+    }
+    // 1) prefer explicit checkbox/input named delete_mark
+    try{
+      const cb = tr.querySelector('input[name="delete_mark"], input[name^="delete_mark"]');
+      if(cb){
+        const v = (cb.value||'').toString().trim();
+        if(v && v.toLowerCase() !== 'on') {
+          obj._mark = v;
+        } else {
+          try{ if(cb.dataset && cb.dataset.mark) obj._mark = String(cb.dataset.mark).trim(); }catch(_){ }
+        }
+      }
+    }catch(_){ }
+
+    // 2) try data-mark attribute on the row
+    if(!obj._mark){
+      try{ const dm = tr.getAttribute && tr.getAttribute('data-mark'); if(dm) obj._mark = String(dm).trim(); }catch(_){ }
+    }
+
+    // 3) try MARK column text (if markCol detected)
+    if(!obj._mark && markCol>=0){
+      const maybe = obj['c'+markCol];
+      if(maybe) obj._mark = String(maybe).trim();
+    }
+
+    // 4) fallback: scan cells for an id-like token (long numeric or alphanumeric)
+    if(!obj._mark){
+      for(let i=0;i<colCount;i++){
+        const v = obj['c'+i] || '';
+        if(!v) continue;
+        const digitsOnly = v.replace(/\D/g,'');
+        if(digitsOnly.length >= 8){ obj._mark = v.trim(); break; }
+        if(/mark/i.test(v)) { obj._mark = v.trim(); break; }
+      }
+    }
+
+    // final normalize
+    if(obj._mark) obj._mark = String(obj._mark).trim();
+    return obj;
+  }
+
+  // expose helpers for other scripts (fallbacks) to reuse
+  try{ window.parseRowToData = parseRowToData; }catch(_){ }
+  try{ window.findMarkCol = findMarkCol; }catch(_){ }
+  try{ window.findDateCol = findDateCol; }catch(_){ }
+
+  function toNumberLocalized(s){
+    if(s===undefined||s===null) return 0;
+    try{
+      let v = String(s).replace(/<[^>]*>/g,'').trim();
+      let neg=false; if(/\(.*\)/.test(v)){ neg=true; v=v.replace(/[()]/g,''); }
+      v = v.replace(/[^0-9\-,.]/g,'').trim(); if(!v) return 0;
+      v = v.replace(/\./g,'').replace(/,/g,'.');
+      const n = parseFloat(v); if(!isFinite(n)) return 0; return neg? -n : n;
+    }catch(_){return 0;}
+  }
+
+  function formatGreekNumberLocal(n){
+    const sign = n<0?'-':''; const absn = Math.abs(Number(n)||0);
+    const parts = absn.toFixed(2).split('.'); const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.'); const decPart = parts[1]||'00';
+    return sign+intPart+','+decPart;
+  }
+
+  // Extract Tabulator init into a re-usable function so partial reloads
+  // can reinitialize / restore selection reliably.
+  window.FBP_INIT_TABULATOR = function(){
+    try{
+      // Destroy previous instance if present
+      try{
+        if(window.FBP_TABULATOR && typeof window.FBP_TABULATOR.destroy === 'function'){
+          try{ window.FBP_TABULATOR.destroy(); }catch(_){ }
+          const oldWrap = document.querySelector('.tabulator-wrapper');
+          if(oldWrap) oldWrap.remove();
+          window.FBP_TABULATOR = null;
+        }
+      }catch(_){ }
+
+      const origTable = document.querySelector('.summary-table');
+      if(!origTable) return;
+
+      const thead = origTable.querySelector('thead');
+      if(!thead) return;
+      const colCount = thead.querySelectorAll('th').length || 0;
+      const markColIndex = findMarkCol(thead);
+      // attempt to restore user-set column widths from localStorage
+      let storedWidths = {};
+      try{ storedWidths = JSON.parse(localStorage.getItem('fbp_tab_col_widths') || '{}') || {}; }catch(_){ storedWidths = {}; }
+
+      const columns = buildColumnsFromThead(thead).map((col, i)=>{
+        const isNum = detectNumericHeader(col.title);
+        const colDef = Object.assign({}, col, { hozAlign: (i===0? 'left' : (isNum? 'right' : 'left')), headerSort: true, resizable:true });
+        // restore width if user previously resized this column
+        try{ const w = storedWidths[col.field]; if(w && Number(w)>0) colDef.width = Number(w); }catch(_){ }
+        // Hide second column (index 1) - usually checkmark/icon column
+        if(i===0){ colDef.visible = false; }
+        if(isNum){
+          colDef.bottomCalc = 'sum';
+          colDef.bottomCalcFormatter = function(cell){ return formatGreekNumberLocal(cell.getValue()); };
+          colDef.accessor = function(value, data, type, params){ if(type === 'mutate' || type === 'download') return value; return toNumberLocalized(value); };
+          colDef.formatter = function(cell){ const raw = cell.getValue(); return formatGreekNumberLocal(Number(raw)||0); };
+        } else {
+          if(i===0){
+            colDef.bottomCalc = function(values, data){ return ''; };
+            colDef.bottomCalcFormatter = function(cell){ return ''; };
+          }
+          colDef.formatter = function(cell){ return (cell.getValue()||''); };
+        }
+        return colDef;
+      });
+
+      // restore column order from localStorage (field names array) if present
+      try{
+        const storedOrder = JSON.parse(localStorage.getItem('fbp_tab_col_order') || '[]') || [];
+        if(Array.isArray(storedOrder) && storedOrder.length){
+          const remaining = columns.slice();
+          const ordered = [];
+          storedOrder.forEach(fld => {
+            const idx = remaining.findIndex(c=>c.field === fld);
+            if(idx >= 0) ordered.push(remaining.splice(idx,1)[0]);
+          });
+          // append any not in stored list
+          columns = ordered.concat(remaining);
+        }
+      }catch(_){ /* ignore */ }
+
+      // prepend a selection column for delete checkboxes similar to current UI
+      columns.unshift({
+        formatter:'rowSelection',
+        hozAlign:'center',
+        headerSort:false,
+        width:40,
+        frozen:true,
+        titleFormatter:function(cell){
+          const table = cell.getTable();
+          const box = document.createElement('input'); box.type='checkbox';
+          box.addEventListener('change', ()=>{
+            const rows = table.getRows('active');
+            if(box.checked){ table.selectRow(rows); }
+            else { table.deselectRow(rows); }
+          });
+          return box;
+        }
+      });
+
+      // parse tbody rows into data
+      const tbody = origTable.querySelector('tbody');
+      const rows = [];
+      if(tbody){
+        Array.from(tbody.querySelectorAll('tr')).forEach(tr=>{
+          if(tr.getAttribute && tr.getAttribute('data-server-totals')==='1') return; // skip server totals
+          const d = parseRowToData(tr, colCount, markColIndex);
+          // convert numeric fields to numbers for Tabulator sums
+          for(let i=0;i<colCount;i++){
+            const hdrText = (thead.querySelectorAll('th')[i]||{}).innerText || '';
+            if(detectNumericHeader(hdrText)){
+              d['c'+i] = toNumberLocalized(d['c'+i]);
+            }
+          }
+          rows.push(d);
+        });
+      }
+
+      // create wrapper and init Tabulator
+      const wrapper = document.createElement('div'); wrapper.className = 'tabulator-wrapper';
+      origTable.parentNode.insertBefore(wrapper, origTable);
+      // hide original table (keep in DOM for server-side expectations but hidden)
+      origTable.style.display = 'none';
+
+      // page length from localStorage
+      let pageSize = 10;
+      try{ const stored = localStorage.getItem('fbp_tab_page_len'); if(stored) pageSize = parseInt(stored,10) || 10; }catch(_){ }
+
+      const tab = new Tabulator(wrapper, {
+        data: rows,
+        layout: 'fitColumns',
+        columns: columns,
+        // Initial height -- will be adjusted dynamically below
+        height: 'auto',
+        movableColumns: true,
+        selectable: true,
+        tooltips: false,
+        resizableColumns: true,
+        placeholder: 'Δεν υπάρχουν εγγραφές προς εμφάνιση',
+        index: '_mark',
+        footerElement: null,
+        pagination: 'local',
+        paginationSize: pageSize,
+        paginationSizeSelector: [10,25,50,100],
+      });
+
+      // STATUS / PAGE-LENGTH UI: page label already in markup, just wire persistence
+      try{
+        const pageLabel = document.querySelector('#pageLengthSelect');
+        if(pageLabel){
+          const v = parseInt(pageLabel.value, 10) || 10;
+          try{ localStorage.setItem('fbp_tab_page_len', String(v)); }catch(_){ }
+        }
+      }catch(_){ }
+
+      // Persist column order when user moves columns
+      try{
+        tab.on('columnMoved', function(column){
+          try{
+            const cols = tab.getColumns();
+            const order = cols.map(c=> { try{ return c.getField(); }catch(_){ return null; } }).filter(x=>x);
+            try{ localStorage.setItem('fbp_tab_col_order', JSON.stringify(order)); }catch(_){}
+          }catch(_){ }
+        });
+      }catch(_){ }
+
+      // Dynamically compute Tabulator height based on page size (rows per page)
+      function setTabulatorHeight(tabInstance, pageSize){
+        try{
+          const rowHeight = 40; // approximate row height in px
+          const headerEl = wrapper.querySelector('.tabulator-header');
+          const footerEl = wrapper.querySelector('.tabulator-footer');
+          const headerH = headerEl ? headerEl.offsetHeight : 48;
+          const footerH = footerEl ? footerEl.offsetHeight : 42;
+          const pad = 24; // extra padding
+          const desired = headerH + footerH + (pageSize * rowHeight) + pad;
+          const max = Math.round(window.innerHeight * 0.72); // cap near viewport
+          const min = 180;
+          const h = Math.max(min, Math.min(desired, max));
+          tabInstance.setHeight(h);
+        }catch(_){ }
+      }
+
+      // set initial height according to page size
+      try{ setTabulatorHeight(tab, pageSize); }catch(_){ }
+
+      // adjust when page size selector changes
+      try{
+        const lenSel = document.getElementById('pageLengthSelect');
+        if(lenSel){
+          lenSel.addEventListener('change', ()=>{
+            const v = parseInt(lenSel.value,10) || 10;
+            try{ tab.setPageSize(v); }catch(_){ }
+            setTabulatorHeight(tab, v);
+          });
+        }
+      }catch(_){ }
+
+      // inject footer row 'ΣΥΝΟΛΑ' rendered below - Tabulator puts bottomCalc values in footer cells
+      const footer = document.createElement('div');
+      footer.className = 'tabulator-footer';
+      footer.style.display = 'block';
+      footer.style.background = '#f8fafc';
+      footer.style.borderTop = '2px solid #0d6efd';
+      footer.style.padding = '8px 0';
+      wrapper.appendChild(footer);
+
+      function renderFooter(){
+        try{
+          const colDefs = tab.getColumnDefinitions();
+          const cols = tab.getColumns();
+          const sums = {};
+          cols.forEach((c, idx)=>{
+            const def = colDefs[idx];
+            if(def && def.bottomCalc === 'sum'){
+              const key = 'c'+(idx-1);
+              const vals = tab.getData().map(r => (r[key]||0));
+              const s = vals.reduce((a,b)=>a + (Number(b)||0), 0);
+              sums[key] = s;
+            }
+          });
+
+          // build footer HTML to mimic DataTables scrollFoot tfoot
+          const tbl = document.createElement('table');
+          tbl.className = 'summary-table-footer';
+          tbl.style.width = '100%';
+          tbl.style.borderCollapse = 'collapse';
+          const tr = document.createElement('tr');
+          tr.setAttribute('data-totals','1');
+
+          // Build sums mapped by field name (e.g., 'c0', 'c1', ...)
+          const sumsByField = {};
+          try{
+            cols.forEach((c, idx)=>{
+              try{
+                const field = c.getField ? c.getField() : null;
+                if(field){
+                  const key = String(field);
+                  const vals = tab.getData().map(r => (r[key]||0));
+                  sumsByField[key] = vals.reduce((a,b)=>a + (Number(b)||0), 0);
+                }
+              }catch(_){ }
+            });
+          }catch(_){ }
+
+          // Decide target field for ΣΥΝΟΛΑ: prefer explicit 'c6', else try detect date-like field
+          let targetField = 'c6';
+          if(!(targetField in sumsByField)){
+            try{
+              const defs = tab.getColumnDefinitions() || [];
+              const titles = defs.map(d => (d.title||'').toString().toLowerCase());
+              const dateCandidates = ['ημερομηνία','ημερομηνιa','ημερ','date','ημ.','ημ'];
+              for(let k=0;k<titles.length;k++){
+                for(const cand of dateCandidates){ if(titles[k].includes(cand)) { targetField = defs[k] && defs[k].field ? defs[k].field : targetField; break; } }
+                if(targetField && targetField !== 'c6' && (targetField in sumsByField)) break;
+              }
+            }catch(_){ }
+          }
+
+          // Create footer cells matching the current visible column order
+          const visibleCols = tab.getColumns() || [];
+          for(let colIdx=0; colIdx<visibleCols.length; colIdx++){
+            const colObj = visibleCols[colIdx];
+            const f = colObj.getField ? colObj.getField() : null;
+            const td = document.createElement('td');
+            // Apply base styling to all footer cells
+            td.style.color = '#1f2937';
+            td.style.background = '#f8fafc';
+            td.style.padding = '10px 8px';
+            td.style.fontWeight = '600';
+            td.style.fontSize = '14px';
+            td.style.border = '1px solid #e2e8f0';
+
+            if(f && String(f) === String(targetField)){
+              // This is the ΣΥΝΟΛΑ cell
+              td.textContent = 'ΣΥΝΟΛΑ';
+              td.className = 'synola-cell';
+              td.style.textAlign = 'left';
+              td.style.paddingLeft = '8px';
+              td.style.fontWeight = '700';
+              td.style.color = '#0d6efd';
+            } else if(f && (f in sumsByField)){
+              // Numeric sum cell
+              td.textContent = formatGreekNumberLocal(sumsByField[f]);
+              td.style.textAlign = 'right';
+            } else {
+              // selection column or non-numeric column - leave blank
+              td.textContent = '';
+              td.style.textAlign = 'center';
+            }
+            tr.appendChild(td);
+          }
+          footer.innerHTML = '';
+          footer.appendChild(tbl);
+          tbl.appendChild(tr);
+
+          // Force visibility in dark mode if data-theme is set
+          try{
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            if(isDark){
+              footer.style.background = '#1f2937';
+              footer.style.borderTop = '2px solid #3b82f6';
+              Array.from(tbl.querySelectorAll('td')).forEach(td => {
+                td.style.color = '#ffffff';
+                td.style.background = '#1f2937';
+                td.style.borderColor = 'rgba(255,255,255,0.1)';
+                if(td.classList.contains('synola-cell')){
+                  td.style.color = '#60a5fa';
+                }
+              });
+            }
+          }catch(_){ }
+        }catch(err){ console.warn('renderFooter failed', err); }
+      }
+
+      // initial footer render and on data change
+      renderFooter();
+
+      // Wire up dynamic status text showing total/filtered/selected counts
+      const statusSpan = document.getElementById('tabulatorStatus');
+      function updateStatus(){
+        try{
+          if(!statusSpan) return;
+          const total = (tab && typeof tab.getData === 'function') ? (tab.getData()||[]).length : 0;
+          const visible = (tab && typeof tab.getDataCount === 'function') ? tab.getDataCount('active') : total;
+          let selected = 0;
+          try{ selected = (tab && typeof tab.getSelectedData === 'function') ? (tab.getSelectedData()||[]).length : 0; }catch(_){ selected = 0; }
+          const q = (document.getElementById('globalSearch')||{}).value || '';
+          let txt = '';
+          if(selected && selected>0){
+            txt = `Επιλεγμένες: ${selected} από ${total}`;
+          } else if(q && q.trim() !== '' && visible !== total){
+            txt = `Εμφανίζονται ${visible} από ${total} εγγραφές`;
+          } else {
+            txt = `Σύνολο εγγραφών: ${total}`;
+          }
+          statusSpan.textContent = txt;
+          console.info('[Status]', txt);
+        }catch(err){ console.warn('updateStatus failed', err); }
+      }
+
+      // Wire updates to Tabulator events
+      try{ tab.on('dataLoaded', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
+      try{ tab.on('dataFiltered', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
+      try{ tab.on('dataChanged', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
+      try{ tab.on('pageLoaded', ()=>{ updateStatus(); }); }catch(_){ }
+      try{ tab.on('rowSelectionChanged', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
+
+      // Global search updates
+      try{
+        const searchInput = document.getElementById('globalSearch');
+        if(searchInput){
+          searchInput.addEventListener('input', function(){
+            setTimeout(()=>{ updateStatus(); }, 100);
+          });
+        }
+      }catch(_){ }
+
+      // Initial status update
+      setTimeout(()=>{ updateStatus(); }, 200);
+
+      // localize and translate paginator controls to Greek
+      function localizePaginator(){
+        try{
+          const pag = wrapper.querySelector('.tabulator-paginator');
+          if(!pag) return;
+          // Translate buttons by class
+          const first = pag.querySelector('.tabulator-page-first'); if(first) first.textContent = 'Πρώτη';
+          const prev  = pag.querySelector('.tabulator-page-previous'); if(prev) prev.textContent = 'Προηγ.';
+          const next  = pag.querySelector('.tabulator-page-next'); if(next) next.textContent = 'Επόμενη';
+          const last  = pag.querySelector('.tabulator-page-last'); if(last) last.textContent = 'Τελευταία';
+          // page number buttons keep numeric labels
+        }catch(_){ }
+      }
+      try{ localizePaginator(); }catch(_){ }
+      // re-localize when pagination updates
+      try{ tab.on && tab.on('dataLoaded', localizePaginator); tab.on && tab.on('pageLoaded', localizePaginator); }catch(_){ }
+      // Watch for paginator DOM changes (Tabulator may re-render controls)
+      try{
+        const mo = new MutationObserver((m)=>{ localizePaginator(); });
+        mo.observe(wrapper, { childList:true, subtree:true });
+      }catch(_){ }
+      tab.on('dataChanged', renderFooter);
+      tab.on('rowSelectionChanged', function(data, rows){
+        // Do NOT persist selection to localStorage to avoid stale selections
+        // and accidental deletions after partial reloads. Only use live selection.
+        try{ /* noop: intentionally not saving selection */ }catch(_){ }
+        renderFooter();
+      });
+
+      // Persist column widths when user resizes columns
+      try{
+        tab.on('columnResized', function(column){
+          try{
+            const cols = tab.getColumns();
+            const mapping = {};
+            cols.forEach(c => {
+              try{ const f = c.getField(); if(f) mapping[f] = c.getWidth(); }catch(_){ }
+            });
+            try{ localStorage.setItem('fbp_tab_col_widths', JSON.stringify(mapping)); }catch(_){ }
+          }catch(_){ }
+        });
+      }catch(_){ }
+
+      // Wire page length selector (top control)
+      try{
+        const lenSel = document.getElementById('pageLengthSelect');
+        if(lenSel){
+          // set initial value
+          lenSel.value = String(pageSize);
+          lenSel.addEventListener('change', ()=>{
+            const v = parseInt(lenSel.value, 10) || 10;
+            try{ localStorage.setItem('fbp_tab_page_len', String(v)); }catch(_){ }
+            try{ tab.setPageSize(v); }catch(_){ }
+          });
+        }
+      }catch(_){ }
+
+      // Do NOT auto-restore selection after reload/delete to avoid unintended selections
+      // User will manually select items again if needed
+
+      // wire global search to Tabulator filter (search across all fields)
+      const globalSearch = document.getElementById('globalSearch');
+      if(globalSearch){
+        let searchTO = null;
+        globalSearch.addEventListener('input', function(){ clearTimeout(searchTO); searchTO = setTimeout(()=>{
+          const q = (globalSearch.value||'').toLowerCase();
+          if(!q){ tab.clearFilter(true); return; }
+          tab.setFilter(function(data, filterParams){
+            return Object.keys(data).some(k=>{
+              if(k.startsWith('c')){
+                const v = data[k];
+                if(v===null||v===undefined) return false;
+                return String(v).toLowerCase().includes(q);
+              }
+              return false;
+            });
+          });
+        }, 150); });
+      }
+
+      // expose tabulator instance for other code
+      window.FBP_TABULATOR = tab;
+
+      // Helper to collect selected marks from Tabulator
+      window._fbp_collect_marks_from_tabulator = function(){
+        try{
+          if(window.FBP_TABULATOR){
+            const sel = window.FBP_TABULATOR.getSelectedData();
+            const marks = sel.map(r=> r._mark ).filter(v=>v);
+            return Array.isArray(marks) ? marks : [];
+          }
+        }catch(_){ }
+        return [];
+      };
+
+    }catch(e){ console.debug('Tabulator migration failed', e); }
+  };
+
+  document.addEventListener('DOMContentLoaded', function(){
+    try{ document.querySelectorAll('.dataTables_wrapper').forEach(el=>el.remove()); }catch(_){ }
+    try{ window.FBP_INIT_TABULATOR(); }catch(_){ }
   });
 })();
 </script>

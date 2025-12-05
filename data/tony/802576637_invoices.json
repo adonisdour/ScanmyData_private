@@ -1308,9 +1308,10 @@
     "totalValue": "86,01",
     "classification": "αχαρακτηριστο",
     "AFM_issuer": "800916954",
-    "Name_issuer": "",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
     "paymentMethodType": "5",
-    "AFM_counterpart": "802576637"
+    "AFM_counterpart": "802576637",
+    "Name": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ"
   },
   {
     "mark": "400011823705209",
@@ -1359,8 +1360,9 @@
     "totalValue": "189,00",
     "classification": "αχαρακτηριστο",
     "AFM_issuer": "800916954",
-    "Name_issuer": "",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
     "paymentMethodType": "5",
-    "AFM_counterpart": "802576637"
+    "AFM_counterpart": "802576637",
+    "Name": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ"
   }
 ]
