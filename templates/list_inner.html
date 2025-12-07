@@ -127,19 +127,24 @@
           }
 
           [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
-            color: #ffffff !important;
+            color: #f8fafc !important;
           }
-          /* Dark-mode styling for the dynamic totals row */
+          /* Dark-mode styling for the dynamic totals row (stronger contrast) */
           [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
-            background-color: #111827 !important; /* match page bg */
-            color: #e5e7eb !important;
-            border-top: 1px solid rgba(255,255,255,0.06) !important;
+            background-color: #0f172a !important; /* dark slate */
+            color: #f8fafc !important;
+            border-top: 1px solid rgba(255,255,255,0.18) !important;
+            border-left: 1px solid rgba(255,255,255,0.08) !important;
           }
           @media (prefers-color-scheme: dark) {
             .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
-              background-color: #111827 !important;
-              color: #e5e7eb !important;
-              border-top: 1px solid rgba(255,255,255,0.06) !important;
+              background-color: #0f172a !important;
+              color: #f8fafc !important;
+              border-top: 1px solid rgba(255,255,255,0.18) !important;
+              border-left: 1px solid rgba(255,255,255,0.08) !important;
+            }
+            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+              color: #f8fafc !important;
             }
           }
           </style>

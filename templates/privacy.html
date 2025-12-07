@@ -2,7 +2,62 @@
 {% block title %}Πολιτική Απορρήτου - ScanmyData{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto p-6">
+<style>
+/* Light mode defaults for legal pages */
+.prose, .prose * { color: #111827 !important; }
+.prose a { color: #0d6efd !important; }
+
+.page-legal h1, .page-legal h2, .page-legal h3 {
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+
+@media (prefers-color-scheme: light), :root:not([data-theme="dark"]) {
+  .page-legal h1 {
+    color: #0b1220 !important;
+    -webkit-text-fill-color: #0b1220 !important;
+    font-weight: 700 !important;
+  }
+  .page-legal h2, .page-legal h3 {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+    font-weight: 600 !important;
+  }
+}
+
+/* Dark mode overrides */
+@media (prefers-color-scheme: dark) {
+  .prose, .prose * { color: #e5e7eb !important; }
+  .prose a { color: #93c5fd !important; }
+  .page-legal h1, .page-legal h2, .page-legal h3 {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+  }
+}
+
+[data-theme="dark"] .prose, [data-theme="dark"] .prose * { color: #e5e7eb !important; }
+[data-theme="dark"] .prose a { color: #93c5fd !important; }
+[data-theme="dark"] .page-legal h1, [data-theme="dark"] .page-legal h2, [data-theme="dark"] .page-legal h3 {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Force full-contrast text in light mode (Windows) */
+:root:not([data-theme="dark"]) .page-legal,
+:root:not([data-theme="dark"]) .page-legal * {
+  color: #0b1220 !important;
+  -webkit-text-fill-color: #0b1220 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+:root:not([data-theme="dark"]) .page-legal .bg-white {
+  background: #ffffff !important;
+  opacity: 1 !important;
+}
+:root:not([data-theme="dark"]) .page-legal a { color: #0d6efd !important; }
+</style>
+
+<div class="max-w-4xl mx-auto p-6 page-legal">
   <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
     <h1 class="text-3xl font-bold mb-6 text-gray-900 dark:text-white">Πολιτική Απορρήτου & GDPR</h1>
     
