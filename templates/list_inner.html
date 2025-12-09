@@ -39,124 +39,112 @@
         </select>
       </label>
     </div>
-          <style>
-          /* HIGHEST PRIORITY - Light mode table text visibility */
-          body .summary-table td,
-          body .summary-table tbody tr td,
-          body .summary-table tbody td,
-          body table.summary-table td {
-            color: #111827 !important;
-          }
-          
-          /* Light mode - explicit dark text for readability */
-          .summary-table thead th {
-            background-color: #0d6efd !important;
-            color: #ffffff !important;
-          }
-          
-          .summary-table tr td,
-          .summary-table tr th {
-            color: #111827 !important;
-            border-color: #e2e8f0 !important;
-          }
-          
-          .summary-table tr:nth-child(even) {
-            background-color: #f9fafb !important;
-          }
-          
-          .summary-table tr:hover {
-            background-color: #e6f0ff !important;
-          }
-          
-          @media (prefers-color-scheme: dark) {
-            /* Ensure XLSX download button remains blue in dark mode */
-            #downloadToggle {
-              background-color: #0d6efd !important;
-              color: #ffffff !important;
+    <style>
+            /* Base text color for table cells in light mode */
+            body .summary-table td,
+            body .summary-table tbody tr td,
+            body .summary-table tbody td,
+            body table.summary-table td {
+              color: #111827 !important;
             }
-            #downloadToggle:hover { background-color: #0b5ed7 !important; }
 
-            /* Keep table header color same as light mode */
+            /* Light mode - explicit colors and backgrounds */
             .summary-table thead th {
               background-color: #0d6efd !important;
               color: #ffffff !important;
             }
+            .summary-table,
+            .dataTables_wrapper,
+            .dataTables_wrapper .dataTables_scrollBody,
+            .dataTables_wrapper .dataTables_scroll {
+              background-color: #ffffff !important;
+            }
+            .dataTables_wrapper .dataTables_scrollBody table { background-color: transparent !important; }
+            .summary-table tr td,
+            .summary-table tr th {
+              color: #111827 !important;
+              border-color: #e2e8f0 !important;
+            }
+            .summary-table tr:nth-child(even) { background-color: #f9fafb !important; }
+            .summary-table tr:hover { background-color: #e6f0ff !important; }
 
-            /* Make even rows visible and readable in dark mode */
-            .summary-table tr:nth-child(even) {
-              background-color: rgba(255,255,255,0.03) !important;
+            /* Totals row (light) */
+            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td {
+              background-color: #f1f5f9 !important;
+              color: #1f2937 !important;
+              border-top: 1px solid #e2e8f0 !important;
+            }
+            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+              color: #1f2937 !important;
             }
 
-            .summary-table tr td, .summary-table tr th {
-              color: #e5e7eb !important; /* text-gray-200 */
+            /* Dark mode overrides (prefers-color-scheme) */
+            @media (prefers-color-scheme: dark) {
+              #downloadToggle {
+                background-color: #0d6efd !important;
+                color: #ffffff !important;
+              }
+              #downloadToggle:hover { background-color: #0b5ed7 !important; }
+
+              .summary-table thead th {
+                background-color: #0d6efd !important;
+                color: #ffffff !important;
+              }
+              .summary-table,
+              .dataTables_wrapper,
+              .dataTables_wrapper .dataTables_scrollBody,
+              .dataTables_wrapper .dataTables_scroll {
+                background-color: transparent !important;
+              }
+              .summary-table tr:nth-child(even) { background-color: rgba(255,255,255,0.03) !important; }
+              .summary-table tr td, .summary-table tr th {
+                color: #e5e7eb !important;
+                border-color: rgba(255,255,255,0.06) !important;
+              }
+              .summary-table tr:hover { background-color: rgba(59,130,246,0.06) !important; }
+              .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
+                background-color: #0f172a !important;
+                color: #ffffff !important;
+                border-top: 1px solid rgba(255,255,255,0.18) !important;
+                border-left: 1px solid rgba(255,255,255,0.08) !important;
+              }
+              .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+                color: #ffffff !important;
+              }
+            }
+
+            /* Same rules when site theme is toggled via data-theme="dark" */
+            [data-theme="dark"] #downloadToggle { background-color: #0d6efd !important; color: #ffffff !important; }
+            [data-theme="dark"] #downloadToggle:hover { background-color: #0b5ed7 !important; }
+            [data-theme="dark"] .summary-table thead th { background-color: #0d6efd !important; color: #ffffff !important; }
+            [data-theme="dark"] .summary-table,
+            [data-theme="dark"] .dataTables_wrapper,
+            [data-theme="dark"] .dataTables_wrapper .dataTables_scrollBody,
+            [data-theme="dark"] .dataTables_wrapper .dataTables_scroll { background-color: transparent !important; }
+            [data-theme="dark"] .summary-table tr:nth-child(even) { background-color: rgba(255,255,255,0.03) !important; }
+            [data-theme="dark"] .summary-table tr td, [data-theme="dark"] .summary-table tr th {
+              color: #e5e7eb !important;
               border-color: rgba(255,255,255,0.06) !important;
             }
-
-            .summary-table tr:hover {
-              background-color: rgba(59,130,246,0.06) !important; /* subtle blue hover */
-            }
-
-            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
-              color: #ffffff !important;
-            }
-          }
-
-          /* Same rules when the site theme is set via the page toggle (data-theme="dark") */
-          [data-theme="dark"] #downloadToggle {
-            background-color: #0d6efd !important;
-            color: #ffffff !important;
-          }
-          [data-theme="dark"] #downloadToggle:hover { background-color: #0b5ed7 !important; }
-
-          [data-theme="dark"] .summary-table thead th {
-            background-color: #0d6efd !important;
-            color: #ffffff !important;
-          }
-
-          [data-theme="dark"] .summary-table tr:nth-child(even) {
-            background-color: rgba(255,255,255,0.03) !important;
-          }
-
-          [data-theme="dark"] .summary-table tr td, [data-theme="dark"] .summary-table tr th {
-            color: #e5e7eb !important;
-            border-color: rgba(255,255,255,0.06) !important;
-          }
-
-          [data-theme="dark"] .summary-table tr:hover {
-            background-color: rgba(59,130,246,0.06) !important;
-          }
-
-          [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
-            color: #f8fafc !important;
-          }
-          /* Dark-mode styling for the dynamic totals row (stronger contrast) */
-          [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
-            background-color: #0f172a !important; /* dark slate */
-            color: #f8fafc !important;
-            border-top: 1px solid rgba(255,255,255,0.18) !important;
-            border-left: 1px solid rgba(255,255,255,0.08) !important;
-          }
-          @media (prefers-color-scheme: dark) {
-            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
+            [data-theme="dark"] .summary-table tr:hover { background-color: rgba(59,130,246,0.06) !important; }
+            [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
               background-color: #0f172a !important;
-              color: #f8fafc !important;
+              color: #ffffff !important;
               border-top: 1px solid rgba(255,255,255,0.18) !important;
               border-left: 1px solid rgba(255,255,255,0.08) !important;
             }
-            .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
-              color: #f8fafc !important;
+            [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+              color: #ffffff !important;
             }
-          }
-          </style>
-    <style>
-    /* Ensure delete button stays clickable but below modals */
-    #deleteBtn{ position:relative; z-index:20; }
-    /* Make delete modal always above other UI (higher than #deleteBtn) */
-    #deleteModal{ z-index:99999 !important; }
-    #deleteModal > div { position: relative; z-index:100000; }
-    </style>
 
-    <script>
+            /* Ensure delete button stays clickable but below modals */
+            #deleteBtn{ position:relative; z-index:20; }
+            /* Make delete modal always above other UI (higher than #deleteBtn) */
+            #deleteModal{ z-index:99999 !important; }
+            #deleteModal > div { position: relative; z-index:100000; }
+              </style>
+
+            <script>
     // Defensive fallback: attach a minimal click handler immediately so the
     // delete button works even if other JS fails or DOMContentLoaded handlers
     // didn't run. It collects selected marks and shows the modal; on confirm
@@ -329,6 +317,7 @@
 /* μικρό οπτικό φινίρισμα στη γραμμή συνολικών */
 .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
   border-top: 1px solid #e2e8f0;
+  background-color: #f1f5f9 !important;
 }
 .summary-table thead th {
   white-space: normal !important;     /* επιτρέπει 2η γραμμή (π.χ. Καθαρή Αξία) */
@@ -1193,7 +1182,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 .tabulator .tabulator-cell { border: 1px solid #e2e8f0 !important; color: #111827 !important; }
 .tabulator .tabulator-row:hover { background-color: #e6f0ff !important; }
 .tabulator .tabulator-header .tabulator-col .tabulator-col-content { white-space: normal !important; }
-.tabulator .tabulator-tableHolder { overflow-x: auto; }
+.tabulator .tabulator-tableHolder { overflow-x: auto; background: transparent !important; }
 .tabulator .tabulator-col .tabulator-col-title { font-weight: 600; }
 
 /* ROUNDED TABLE OUTLINE - apply to wrapper container */
@@ -1213,101 +1202,64 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 /* Remove large gray background from table holders (DataTables / Tabulator) */
 .dataTables_wrapper .dataTables_scrollBody { background: transparent !important; }
 .tabulator-wrapper .tabulator-tableHolder { background: transparent !important; }
-.tabulator-wrapper .tabulator-tableHolder .tabulator-table { background: #ffffff !important; }
+.tabulator-wrapper .tabulator-tableHolder .tabulator-table { background: transparent !important; }
+.tabulator-wrapper .tabulator-tableHolder .tabulator-table .tabulator-row { background: transparent !important; }
 .tabulator-wrapper .tabulator-footer { background: #f1f5f9 !important; }
-/* Ensure dark-mode Tabulator matches page dark background */
-[data-theme="dark"] .tabulator-wrapper .tabulator-table { background: #111827 !important; color: #e5e7eb !important; }
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer { background: #000103 !important; color: #b5f110 !important; border-top: 1px solid rgba(255,255,255,0.06) !important; }
-/* Darker Tabulator styling for clearer contrast in dark mode */
-[data-theme="dark"] .tabulator .tabulator-header .tabulator-col { background-color: #0b2540 !important; color: #f8fafc !important; border-color: rgba(255,255,255,0.04) !important; }
-[data-theme="dark"] .tabulator .tabulator-cell { border-color: rgba(255,255,255,0.04) !important; color: #e5e7eb !important; }
-[data-theme="dark"] .tabulator .tabulator-row:hover { background-color: rgba(255,255,255,0.03) !important; }
-[data-theme="dark"] .tabulator-wrapper .tabulator-table { background: #0b1320 !important; }
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer { background: #071124 !important; color: #cbd5e1 !important; }
-/* Make Tabulator rows and footer cells explicitly visible in dark mode */
-[data-theme="dark"] .tabulator .tabulator-row,
-[data-theme="dark"] .tabulator .tabulator-row .tabulator-cell {
-  background-color: transparent !important;
-  color: #e5e7eb !important;
-  opacity: 1 !important;
-}
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer { box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); }
-.tabulator-wrapper .tabulator-footer { display: block; background: #f1f5f9 !important; }
-/* Hide legacy DataTables controls (secondary search/length) if they linger */
+[data-theme="dark"] .tabulator-wrapper .tabulator-footer { background: #0b1320 !important; color: #cbd5e1 !important; }
+
+/* Final overrides for DataTables empty areas and totals visibility */
+  /* Make every scroll container inherit parent background (no gray gaps) */
+  .dataTables_wrapper,
+  .dataTables_wrapper .dataTables_scroll,
+  .dataTables_wrapper .dataTables_scrollHead,
+  .dataTables_wrapper .dataTables_scrollBody,
+  .dataTables_wrapper .dataTables_scrollFoot,
+  .dataTables_wrapper .dataTables_scrollHead table,
+  .dataTables_wrapper .dataTables_scrollBody table,
+  .dataTables_wrapper .dataTables_scrollFoot table {
+    background: transparent !important;
+  }
+  .dataTables_wrapper .dataTables_scrollBody td,
+  .dataTables_wrapper .dataTables_scrollBody th { background: transparent !important; }
+
+  /* Light totals row */
+  .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td,
+  .summary-table tfoot tr[data-totals="1"] td {
+    background-color: #f1f5f9 !important;
+    color: #1f2937 !important;
+    border-top: 1px solid #e2e8f0 !important;
+  }
+  .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before,
+  .summary-table tfoot tr[data-totals="1"] td:first-child::before { color: #1f2937 !important; }
+
+  /* Dark totals row */
+  @media (prefers-color-scheme: dark) {
+    .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td,
+    .summary-table tfoot tr[data-totals="1"] td {
+      background-color: #0f172a !important;
+      color: #ffffff !important;
+      border-top: 1px solid rgba(255,255,255,0.18) !important;
+      border-left: 1px solid rgba(255,255,255,0.08) !important;
+    }
+    .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before,
+    .summary-table tfoot tr[data-totals="1"] td:first-child::before { color: #ffffff !important; }
+  }
+  [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td,
+  [data-theme="dark"] .summary-table tfoot tr[data-totals="1"] td {
+    background-color: #0f172a !important;
+    color: #ffffff !important;
+    border-top: 1px solid rgba(255,255,255,0.18) !important;
+    border-left: 1px solid rgba(255,255,255,0.08) !important;
+  }
+  [data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before,
+  [data-theme="dark"] .summary-table tfoot tr[data-totals="1"] td:first-child::before { color: #ffffff !important; }
+
+/* Hide legacy DataTables controls (secondary search/length) */
 .dataTables_wrapper .dataTables_length,
 .dataTables_wrapper .dataTables_filter,
 .dataTables_wrapper .dataTables_info,
-.dataTables_wrapper .dataTables_paginate { display: none !important; }
-
-/* Ensure Tabulator cells/footers are visible in dark mode (not transparent) */
-.tabulator-wrapper .tabulator-table .tabulator-cell,
-.tabulator-wrapper .tabulator-table td,
-.tabulator-wrapper .tabulator-table th { color: inherit !important; opacity: 1 !important; }
-/* Summary footer base (light/dark adjusted further below) */
-.tabulator-wrapper .tabulator-footer .summary-table-footer td { color: #1f2937 !important; }
-
-/* Dark-mode footer/table visibility */
-[data-theme="dark"] .tabulator-wrapper .tabulator-table .tabulator-cell,
-[data-theme="dark"] .tabulator-wrapper .tabulator-table td,
-[data-theme="dark"] .tabulator-wrapper .tabulator-table th {
-  color: #e5e7eb !important;
-  opacity: 1 !important;
-}
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td {
-  color: #cbd5e1 !important;
-}
-
-/* Hide Tabulator's built-in page-size selector (we use the top control) */
-.tabulator-wrapper .tabulator-paginator select { display: none !important; }
-
-/* Footer visibility - LIGHT MODE */
-.tabulator-wrapper .tabulator-footer {
-  display: block !important;
-  background: #f8fafc !important;
-  border-top: 2px solid #0d6efd !important;
-  padding: 8px 0 !important;
-}
-.tabulator-wrapper .tabulator-footer .summary-table-footer {
-  width: 100% !important;
-  border-collapse: collapse !important;
-}
-.tabulator-wrapper .tabulator-footer .summary-table-footer td {
-  color: #1f2937 !important;
-  background: #f8fafc !important;
-  padding: 10px 8px !important;
-  font-weight: 600 !important;
-  font-size: 14px !important;
-  border: 1px solid #e2e8f0 !important;
-}
-
-/* Footer visibility - DARK MODE */
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer {
-  background: #1f2937 !important;
-  border-top: 2px solid #3b82f6 !important;
-}
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td {
-  color: #ffffff !important;
-  background: #1f2937 !important;
-  border-color: rgba(255,255,255,0.1) !important;
-  opacity: 1 !important;
-}
-/* Ensure ΣΥΝΟΛΑ cell stands out */
-.tabulator-wrapper .tabulator-footer .summary-table-footer td.synola-cell {
-  font-weight: 700 !important;
-  color: #0d6efd !important;
-}
-[data-theme="dark"] .tabulator-wrapper .tabulator-footer .summary-table-footer td.synola-cell {
-  color: #60a5fa !important;
-}
-
-/* Dark mode for status text and controls */
-[data-theme="dark"] #tabulatorStatus {
-  color: #e5e7eb !important;
-}
-[data-theme="dark"] #pageLengthSelect {
-  background-color: #374151 !important;
-  color: #f3f4f6 !important;
-  border-color: #4b5563 !important;
+.dataTables_wrapper .dataTables_paginate {
+  display: none !important;
 }
 </style>
 
@@ -1871,3 +1823,136 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
   });
 })();
 </script>
+<style>
+/* HIGHEST PRIORITY - Light mode table text visibility */
+body .summary-table td,
+body .summary-table tbody tr td,
+body .summary-table tbody td,
+body table.summary-table td {
+  color: #111827 !important;
+}
+
+/* Light mode - explicit dark text for readability */
+.summary-table thead th {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+
+.summary-table {
+  background-color: white !important;
+}
+
+.dataTables_wrapper {
+  background-color: white !important;
+}
+
+.summary-table tr td,
+.summary-table tr th {
+  color: #111827 !important;
+  border-color: #e2e8f0 !important;
+}
+
+.summary-table tr:nth-child(even) {
+  background-color: #f9fafb !important;
+}
+
+.summary-table tr:hover {
+  background-color: #e6f0ff !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Ensure XLSX download button remains blue in dark mode */
+  #downloadToggle {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+  }
+  #downloadToggle:hover { background-color: #0b5ed7 !important; }
+
+  /* Keep table header color same as light mode */
+  .summary-table thead th {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+  }
+
+  .summary-table {
+    background-color: transparent !important;
+  }
+
+  .dataTables_wrapper {
+    background-color: transparent !important;
+  }
+
+  /* Make even rows visible and readable in dark mode */
+  .summary-table tr:nth-child(even) {
+    background-color: rgba(255,255,255,0.03) !important;
+  }
+
+  .summary-table tr td, .summary-table tr th {
+    color: #e5e7eb !important; /* text-gray-200 */
+    border-color: rgba(255,255,255,0.06) !important;
+  }
+
+  .summary-table tr:hover {
+    background-color: rgba(59,130,246,0.06) !important; /* subtle blue hover */
+  }
+
+  .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+    color: #ffffff !important;
+  }
+}
+
+/* Same rules when the site theme is set via the page toggle (data-theme="dark") */
+[data-theme="dark"] #downloadToggle {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+[data-theme="dark"] #downloadToggle:hover { background-color: #0b5ed7 !important; }
+
+[data-theme="dark"] .summary-table thead th {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+
+[data-theme="dark"] .summary-table {
+  background-color: transparent !important;
+}
+
+[data-theme="dark"] .dataTables_wrapper {
+  background-color: transparent !important;
+}
+
+[data-theme="dark"] .summary-table tr:nth-child(even) {
+  background-color: rgba(255,255,255,0.03) !important;
+}
+
+[data-theme="dark"] .summary-table tr td, [data-theme="dark"] .summary-table tr th {
+  color: #e5e7eb !important;
+  border-color: rgba(255,255,255,0.06) !important;
+}
+
+[data-theme="dark"] .summary-table tr:hover {
+  background-color: rgba(59,130,246,0.06) !important;
+}
+
+[data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+  color: #ffffff !important;
+}
+/* Dark-mode styling for the dynamic totals row (stronger contrast) */
+[data-theme="dark"] .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
+  background-color: #0f172a !important; /* dark slate */
+  color: #ffffff !important;
+  border-top: 1px solid rgba(255,255,255,0.18) !important;
+  border-left: 1px solid rgba(255,255,255,0.08) !important;
+}
+@media (prefers-color-scheme: dark) {
+  .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td{
+    background-color: #0f172a !important;
+    color: #ffffff !important;
+    border-top: 1px solid rgba(255,255,255,0.18) !important;
+    border-left: 1px solid rgba(255,255,255,0.08) !important;
+  }
+  .dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+    color: #ffffff !important;
+  }
+}
+</style>

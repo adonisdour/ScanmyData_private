@@ -27,6 +27,8 @@
       this.usePreprocessing = this.config.usePreprocessing !== false; // default true
       this.focusCenter = this.config.focusCenter !== false; // default true (crop to center for speed)
       this.cropFactor = this.config.cropFactor || 0.6; // use center 60% of image
+      this.mode = this.config.mode || 'mark'; // 'mark' or 'receipt'
+      this.activeYear = this.config.activeYear || null;
     }
 
     /**
@@ -220,62 +222,70 @@
         const text = result?.data?.text || '';
         const words = result?.data?.words || [];
 
-        if (text) {
-          const match = this.extractMARKFromText(text);
-          if (match) {
-            // Try to locate bounding box in recognized words
-            let bbox = null;
+        if (this.mode === 'mark') {
+          if (text) {
+            const match = this.extractMARKFromText(text);
+            if (match) {
+              // Try to locate bounding box in recognized words
+              let bbox = null;
 
-            // Helper to clean a word's text to digits-only
-            const cleanDigits = s => (s || '').replace(/\D/g, '');
+              // Helper to clean a word's text to digits-only
+              const cleanDigits = s => (s || '').replace(/\D/g, '');
 
-            for (let i = 0; i < words.length && !bbox; i++) {
-              let joined = '';
-              for (let j = i; j < Math.min(i + 4, words.length); j++) {
-                joined += words[j].text || '';
-                const joinedDigits = cleanDigits(joined);
-                if (joinedDigits === match.mark) {
-                  // Combine bounding boxes from words i..j
-                  const boxes = words.slice(i, j + 1).map(w => w.bbox || w);
-                  let x0 = Math.min(...boxes.map(b => b.x0 ?? b.x0));
-                  let y0 = Math.min(...boxes.map(b => b.y0 ?? b.y0));
-                  let x1 = Math.max(...boxes.map(b => b.x1 ?? b.x1));
-                  let y1 = Math.max(...boxes.map(b => b.y1 ?? b.y1));
-                  
-                  // Adjust bbox coordinates back to full video dimensions if cropped
-                  if (this.focusCenter && this.cropFactor < 1.0) {
-                    const scaleBack = sourceW / canvas.width;
-                    x0 = (x0 * scaleBack) + sourceX;
-                    y0 = (y0 * scaleBack) + sourceY;
-                    x1 = (x1 * scaleBack) + sourceX;
-                    y1 = (y1 * scaleBack) + sourceY;
-                  } else {
-                    const scaleBack = vw / canvas.width;
-                    x0 *= scaleBack;
-                    y0 *= scaleBack;
-                    x1 *= scaleBack;
-                    y1 *= scaleBack;
+              for (let i = 0; i < words.length && !bbox; i++) {
+                let joined = '';
+                for (let j = i; j < Math.min(i + 4, words.length); j++) {
+                  joined += words[j].text || '';
+                  const joinedDigits = cleanDigits(joined);
+                  if (joinedDigits === match.mark) {
+                    // Combine bounding boxes from words i..j
+                    const boxes = words.slice(i, j + 1).map(w => w.bbox || w);
+                    let x0 = Math.min(...boxes.map(b => b.x0 ?? b.x0));
+                    let y0 = Math.min(...boxes.map(b => b.y0 ?? b.y0));
+                    let x1 = Math.max(...boxes.map(b => b.x1 ?? b.x1));
+                    let y1 = Math.max(...boxes.map(b => b.y1 ?? b.y1));
+                    
+                    // Adjust bbox coordinates back to full video dimensions if cropped
+                    if (this.focusCenter && this.cropFactor < 1.0) {
+                      const scaleBack = sourceW / canvas.width;
+                      x0 = (x0 * scaleBack) + sourceX;
+                      y0 = (y0 * scaleBack) + sourceY;
+                      x1 = (x1 * scaleBack) + sourceX;
+                      y1 = (y1 * scaleBack) + sourceY;
+                    } else {
+                      const scaleBack = vw / canvas.width;
+                      x0 *= scaleBack;
+                      y0 *= scaleBack;
+                      x1 *= scaleBack;
+                      y1 *= scaleBack;
+                    }
+                    
+                    bbox = { x0, y0, x1, y1 };
+                    break;
                   }
-                  
-                  bbox = { x0, y0, x1, y1 };
-                  break;
                 }
               }
-            }
 
-            // If overlay is enabled, draw highlight
-            if (this.showOverlay && bbox && this.videoElement) {
-              this._drawHighlight(bbox, vw, vh);
-            }
+              // If overlay is enabled, draw highlight
+              if (this.showOverlay && bbox && this.videoElement) {
+                this._drawHighlight(bbox, vw, vh);
+              }
 
-            // Log / notify prefix detection
-            if (match.prefixDetected) {
-              this.onStatusChange('Εντοπίστηκε επισημασμένο MARK', 'info');
-            }
+              // Log / notify prefix detection
+              if (match.prefixDetected) {
+                this.onStatusChange('Εντοπίστηκε επισημασμένο MARK', 'info');
+              }
 
-            // Call onSuccess with extra metadata as third param
-            this.onSuccess(match.mark, text, { prefixDetected: match.prefixDetected, bbox });
+              // Call onSuccess with extra metadata as third param
+              this.onSuccess(match.mark, text, { prefixDetected: match.prefixDetected, bbox });
+            }
           }
+        } else if (this.mode === 'receipt') {
+          // For receipts, OCR is done only on snapshot, not live
+          // const fields = this.extractReceiptFieldsFromText(text, this.activeYear);
+          // if (fields && (fields.issuer_vat || fields.issue_date || fields.issuer_name || fields.total_amount || fields.MARK)) {
+          //   this.onSuccess(fields, text, {});
+          // }
         }
       } catch (err) {
         console.warn('OCR processing error:', err);
@@ -323,10 +333,12 @@
 
         this.onStatusChange('OCR σάρωση ενεργή. Κατέθεσε το έγγραφο στη φωτογραφική μηχανή.', 'success');
 
-        // Start processing frames at regular intervals
-        this.intervalId = setInterval(() => {
-          this.processFrame();
-        }, this.scanInterval);
+        // Start processing frames at regular intervals only for mark mode
+        if (this.mode === 'mark') {
+          this.intervalId = setInterval(() => {
+            this.processFrame();
+          }, this.scanInterval);
+        }
 
         return this.videoElement;
       } catch (err) {
@@ -555,6 +567,149 @@
      */
     getVideoElement() {
       return this.videoElement;
+    }
+
+    /**
+     * Extract receipt fields from text
+     * - issuer_vat: 9-digit VAT number
+     * - issue_date: date in dd/mm/yyyy
+     * - issuer_name: issuer name
+     * - progressive_aa: progressive number
+     * - total_amount: total amount with comma decimal
+     * - MARK: 15-digit MARK if present
+     */
+    extractReceiptFieldsFromText(text, activeYear) {
+      if (!text) return null;
+
+      const out = {
+        issuer_vat: null,
+        issue_date: null,
+        issuer_name: null,
+        progressive_aa: null,
+        total_amount: null,
+        MARK: null
+      };
+
+      // VAT: look for ΑΦΜ followed by 9 digits
+      const vatPatterns = [
+        /ΑΦΜ[:\s]*([0-9]{9})/i,
+        /Α\.Φ\.Μ\.[:\s]*([0-9]{9})/i,
+        /ΑΦΜ ΕΚΔΟΤΗ[:\s]*([0-9]{9})/i,
+        /VAT[:\s]*([0-9]{9})/i,
+        /\b([0-9]{9})\b/  // fallback to any 9 digits
+      ];
+      for (const pattern of vatPatterns) {
+        const match = text.match(pattern);
+        if (match) {
+          out.issuer_vat = match[1] || match[0];
+          break;
+        }
+      }
+
+      // Date patterns: dd/mm/yyyy, yyyy-mm-dd, etc.
+      const datePatterns = [
+        /Ημερομηνία[:\s]*(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/i,
+        /Ημ\/νία[:\s]*(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/i,
+        /Ημερομηνία έκδοσης[:\s]*(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/i,
+        /Date[:\s]*(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/i,
+        /(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/g,
+        /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/g
+      ];
+      for (const pattern of datePatterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          let d, m, y;
+          if (match[1].length === 4) {
+            // yyyy-mm-dd
+            y = match[1];
+            m = match[2];
+            d = match[3];
+          } else {
+            // dd/mm/yyyy
+            d = match[1];
+            m = match[2];
+            y = match[3];
+          }
+          d = parseInt(d, 10);
+          m = parseInt(m, 10);
+          y = parseInt(y, 10);
+          if (d >= 1 && d <= 31 && m >= 1 && m <= 12 && y >= 1900 && y <= 2100) {
+            // Check if year matches active year
+            if (activeYear && y !== activeYear) {
+              continue; // Skip dates not in active year
+            }
+            out.issue_date = `${d.toString().padStart(2, '0')}/${m.toString().padStart(2, '0')}/${y}`;
+            break;
+          }
+        }
+        if (out.issue_date) break;
+      }
+
+      // Issuer name: look for common patterns like "Εκδόθηκε από" or company names
+      // This is tricky, perhaps look for text after "Εκδόθηκε από" or similar
+      const namePatterns = [
+        /Εκδόθηκε από[:\s]*([^\n\r]{3,50})/i,
+        /Εκδότη[:\s]*([^\n\r]{3,50})/i,
+        /Όνομα εκδότη[:\s]*([^\n\r]{3,50})/i,
+        /Επωνυμία[:\s]*([^\n\r]{3,50})/i,
+        /Supplier[:\s]*([^\n\r]{3,50})/i,
+        /Issuer[:\s]*([^\n\r]{3,50})/i
+      ];
+      for (const pattern of namePatterns) {
+        const match = text.match(pattern);
+        if (match) {
+          out.issuer_name = match[1].trim();
+          break;
+        }
+      }
+
+      // Progressive AA: look for "ΑΑ" or "Αριθμός" followed by number
+      const aaPatterns = [
+        /ΑΑ[:\s]*(\d+)/i,
+        /Αριθμός[:\s]*(\d+)/i,
+        /Αριθμός Παραστατικού[:\s]*(\d+)/i,
+        /Αριθμός Απόδειξης[:\s]*(\d+)/i,
+        /Sequential[:\s]*(\d+)/i,
+        /Προοδευτικός[:\s]*(\d+)/i
+      ];
+      for (const pattern of aaPatterns) {
+        const match = text.match(pattern);
+        if (match) {
+          out.progressive_aa = match[1];
+          break;
+        }
+      }
+
+      // Total amount: look for amounts with € or EUR
+      const amountPatterns = [
+        /Σύνολο[:\s]*([\d.,]+)\s*[€]/i,
+        /Σύνολο προς πληρωμή[:\s]*([\d.,]+)\s*[€]/i,
+        /Καθαρή αξία[:\s]*([\d.,]+)\s*[€]/i,
+        /Total[:\s]*([\d.,]+)\s*[€]/i,
+        /([€]\s*[\d.,]+)/,
+        /([\d.,]+\s*[€])/,
+        /([\d.,]+)\s*EUR/i
+      ];
+      for (const pattern of amountPatterns) {
+        const match = text.match(pattern);
+        if (match) {
+          let amount = match[1].replace(/[^\d.,]/g, '');
+          // Convert to comma decimal
+          if (amount.includes('.')) {
+            amount = amount.replace('.', ',');
+          }
+          out.total_amount = amount;
+          break;
+        }
+      }
+
+      // MARK: 15 digits starting with 400
+      const markMatch = text.match(/\b400\d{12}\b/);
+      if (markMatch) {
+        out.MARK = markMatch[0];
+      }
+
+      return out;
     }
   }
 

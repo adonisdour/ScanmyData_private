@@ -5521,6 +5521,7 @@ def mobile_qr_scanner():
                 expires_at="",
                 repeat_enabled=False,
                 auto_submit_enabled=False,
+                active_year=None,
                 error="Η συνεδρία δεν είναι διαθέσιμη.",
             ),
             400,
@@ -5540,6 +5541,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Η συνεδρία δεν βρέθηκε ή έληξε.",
                 ),
                 404,
@@ -5554,6 +5556,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Ο σύνδεσμος δεν είναι πλέον έγκυρος.",
                 ),
                 403,
@@ -5571,6 +5574,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Η συνεδρία έληξε. Δημιούργησε νέο σύνδεσμο από τον υπολογιστή.",
                 ),
                 410,
@@ -5584,6 +5588,10 @@ def mobile_qr_scanner():
         expires_iso = expires_at.isoformat() if expires_at else ""
         repeat_enabled = bool(entry.get("repeat_enabled"))
 
+        # Get active fiscal year
+        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        active_year = _read_active_fiscal_year("data")
+
     return render_template(
         "mobile_qr_scanner.html",
         session_id=session_id,
@@ -5592,6 +5600,7 @@ def mobile_qr_scanner():
         expires_at=expires_iso,
         repeat_enabled=repeat_enabled,
         auto_submit_enabled=bool(entry.get("auto_submit_enabled")),
+        active_year=active_year,
         error=None,
     )
 

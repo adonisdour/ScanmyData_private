@@ -117,5 +117,35 @@
         "vat_category": ""
       }
     ]
+  },
+  {
+    "mark": "400011830437903",
+    "issueDate": "24/07/2024",
+    "series": "ΑΛΠ",
+    "aa": "215770",
+    "AA": "215770",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "7,12",
+    "totalVatAmount": "",
+    "totalValue": "7,12",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "121160800",
+    "Name_issuer": "ΔΕΛΛΗΣ ΔΗΜΗΤ",
+    "AFM": "121160800",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "7,12",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
   }
 ]
