@@ -1261,6 +1261,25 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 .dataTables_wrapper .dataTables_paginate {
   display: none !important;
 }
+
+/* Status/pagination alignment & dark-mode visibility */
+#tabulatorStatus {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  min-height: 38px;
+  line-height: 1.25;
+}
+[data-theme="dark"] #tabulatorStatus { color: #e5e7eb !important; }
+
+#pageLengthSelect { height: 38px; }
+[data-theme="dark"] #pageLengthSelect {
+  background-color: #374151 !important;
+  color: #f3f4f6 !important;
+  border-color: #4b5563 !important;
+}
 </style>
 
 <script>
@@ -1524,8 +1543,8 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
         });
       }catch(_){ }
 
-      // Dynamically compute Tabulator height based on page size (rows per page)
-      function setTabulatorHeight(tabInstance, pageSize){
+      // Dynamically compute Tabulator height based on visible rows (avoid needless empty space)
+      function setTabulatorHeight(tabInstance){
         try{
           const rowHeight = 40; // approximate row height in px
           const headerEl = wrapper.querySelector('.tabulator-header');
@@ -1533,16 +1552,29 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
           const headerH = headerEl ? headerEl.offsetHeight : 48;
           const footerH = footerEl ? footerEl.offsetHeight : 42;
           const pad = 24; // extra padding
-          const desired = headerH + footerH + (pageSize * rowHeight) + pad;
+          const pageSizeNow = (tabInstance && typeof tabInstance.getPageSize === 'function') ? tabInstance.getPageSize() : pageSize;
+          const activeCount = (tabInstance && typeof tabInstance.getDataCount === 'function') ? tabInstance.getDataCount('active') : rows.length;
+          const rowsToShow = Math.max(1, Math.min(pageSizeNow || pageSize, activeCount || pageSize));
           const max = Math.round(window.innerHeight * 0.72); // cap near viewport
-          const min = 180;
+
+          // For few visible rows, fit to data to avoid tall empty body
+          if(rowsToShow <= Math.min(pageSizeNow || pageSize, 8)){
+            tabInstance.setMaxHeight(max);
+            tabInstance.setHeight('fitData');
+            try{ tabInstance.redraw(true); }catch(_){ }
+            return;
+          }
+
+          const desired = headerH + footerH + (rowsToShow * rowHeight) + pad;
+          const min = headerH + footerH + (Math.min(rowsToShow, 3) * rowHeight);
           const h = Math.max(min, Math.min(desired, max));
+          tabInstance.setMaxHeight(max);
           tabInstance.setHeight(h);
         }catch(_){ }
       }
 
-      // set initial height according to page size
-      try{ setTabulatorHeight(tab, pageSize); }catch(_){ }
+      // set initial height after a tick so Tabulator DOM is ready
+      try{ setTimeout(()=>{ setTabulatorHeight(tab); }, 50); }catch(_){ }
 
       // adjust when page size selector changes
       try{
@@ -1551,7 +1583,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
           lenSel.addEventListener('change', ()=>{
             const v = parseInt(lenSel.value,10) || 10;
             try{ tab.setPageSize(v); }catch(_){ }
-            setTabulatorHeight(tab, v);
+            setTabulatorHeight(tab);
           });
         }
       }catch(_){ }
@@ -1700,11 +1732,11 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
       }
 
       // Wire updates to Tabulator events
-      try{ tab.on('dataLoaded', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
-      try{ tab.on('dataFiltered', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
-      try{ tab.on('dataChanged', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
-      try{ tab.on('pageLoaded', ()=>{ updateStatus(); }); }catch(_){ }
-      try{ tab.on('rowSelectionChanged', ()=>{ updateStatus(); renderFooter(); }); }catch(_){ }
+      try{ tab.on('dataLoaded', ()=>{ updateStatus(); renderFooter(); setTabulatorHeight(tab); }); }catch(_){ }
+      try{ tab.on('dataFiltered', ()=>{ updateStatus(); renderFooter(); setTabulatorHeight(tab); }); }catch(_){ }
+      try{ tab.on('dataChanged', ()=>{ updateStatus(); renderFooter(); setTabulatorHeight(tab); }); }catch(_){ }
+      try{ tab.on('pageLoaded', ()=>{ updateStatus(); setTabulatorHeight(tab); }); }catch(_){ }
+      try{ tab.on('rowSelectionChanged', ()=>{ updateStatus(); renderFooter(); setTabulatorHeight(tab); }); }catch(_){ }
 
       // Global search updates
       try{
@@ -1760,6 +1792,11 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
             try{ localStorage.setItem('fbp_tab_col_widths', JSON.stringify(mapping)); }catch(_){ }
           }catch(_){ }
         });
+      }catch(_){ }
+
+      // Recompute height on window resize to keep viewport fit
+      try{
+        window.addEventListener('resize', function(){ setTabulatorHeight(tab); });
       }catch(_){ }
 
       // Wire page length selector (top control)
