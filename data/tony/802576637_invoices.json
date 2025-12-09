@@ -336,9 +336,10 @@
     "totalValue": "102,01",
     "classification": "αχαρακτηριστο",
     "AFM_issuer": "095736139",
-    "Name_issuer": "",
+    "Name_issuer": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ",
     "paymentMethodType": "1",
-    "AFM_counterpart": "802576637"
+    "AFM_counterpart": "802576637",
+    "Name": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ"
   },
   {
     "mark": "400011615024455",

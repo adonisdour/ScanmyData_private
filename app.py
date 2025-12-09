@@ -7800,6 +7800,7 @@ def search():
                                 else:
                                     # Invoice flow (κανονικά)
                                     invoice_lines = []
+                                    seen_vat_categories = set()
                                     for idx, inst in enumerate(docs_for_mark):
                                         line_id = inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}"
                                         description = pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx+1}"
@@ -7807,6 +7808,14 @@ def search():
                                         vat_rate = pick(inst, "vat", "vatRate", "vatPercent", "totalVatAmount", default="")
                                         raw_vatcat = pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat", default="")
                                         mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
+                                        
+                                        # Για Γ κατηγορία: αποφυγή διπλών γραμμών (κρατάμε μόνο την πρώτη εμφάνιση κάθε vatCategory)
+                                        # Αυτό αποφεύγει τις επιπλέον γραμμές ΦΠΑ που εμφανίζονται σε τιμολόγια με πολλές γραμμές
+                                        if mapped_vatcat and mapped_vatcat in seen_vat_categories:
+                                            continue
+                                        if mapped_vatcat:
+                                            seen_vat_categories.add(mapped_vatcat)
+                                        
                                         invoice_lines.append({
                                             "id": line_id,
                                             "description": description,

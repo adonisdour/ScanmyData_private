@@ -1845,6 +1845,10 @@ if (typeof window !== 'undefined') {
     const table = document.createElement('table');
     table.className = 'w-full border-collapse';
     
+    // Check if Γ Category (για MTYPE column)
+    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
+    const isReceiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked);
+    
     const thead = document.createElement('thead');
     thead.className = 'bg-gray-100 sticky top-0';
     thead.innerHTML = '<tr>' +
@@ -1853,6 +1857,7 @@ if (typeof window !== 'undefined') {
       '<th class="p-2 border text-right">Ποσό</th>' +
       '<th class="p-2 border text-right">ΦΠΑ</th>' +
       '<th class="p-2 border text-left">Κατηγορία Εξόδου</th>' +
+      (isGCategory && isReceiptsMode ? '<th class="p-2 border text-left">MTYPE</th>' : '') +
       '</tr>';
     table.appendChild(thead);
 
@@ -1867,7 +1872,8 @@ if (typeof window !== 'undefined') {
         '<td class="p-2 border break-words">' + escapeHtml(ln.vatCategory || '') + '</td>' +
         '<td class="p-2 border text-right">' + escapeHtml(String(ln.amount || '')) + '</td>' +
         '<td class="p-2 border text-right">' + escapeHtml(String(ln.vat || '')) + '</td>' +
-        '<td class="p-2 border"></td>';
+        '<td class="p-2 border"></td>' +
+        (isGCategory && isReceiptsMode ? '<td class="p-2 border"></td>' : '');
 
       // create category select
       const select = document.createElement('select');
@@ -1883,7 +1889,34 @@ if (typeof window !== 'undefined') {
         select.appendChild(o);
       });
 
-      tr.querySelector('td:last-child').appendChild(select);
+      const categoryCell = tr.querySelectorAll('td')[4];
+      categoryCell.appendChild(select);
+      
+      // Add MTYPE dropdown if Γ Category and receipts mode
+      if (isGCategory && isReceiptsMode) {
+        const mtypeCell = tr.querySelectorAll('td')[5];
+        const mtypeSelect = document.createElement('select');
+        mtypeSelect.className = 'line-mtype p-1 border rounded w-full';
+        mtypeSelect.dataset.lineId = ln.id || ('l' + idx);
+        mtypeSelect.name = `mtype[${mtypeSelect.dataset.lineId}]`;
+        
+        const mtypeEmptyOpt = document.createElement('option');
+        mtypeEmptyOpt.value = '';
+        mtypeEmptyOpt.innerText = '-- επίλεξε --';
+        mtypeSelect.appendChild(mtypeEmptyOpt);
+        
+        const mtypeOptions = window.G_CATEGORY_DATA.mtype_options || [];
+        mtypeOptions.forEach(mt => {
+          const mtOpt = document.createElement('option');
+          mtOpt.value = mt.value;
+          mtOpt.textContent = mt.label + ' (' + mt.value + ')';
+          if (mt.value === ln.mtype) mtOpt.selected = true;
+          mtypeSelect.appendChild(mtOpt);
+        });
+        
+        mtypeCell.appendChild(mtypeSelect);
+      }
+
       tbody.appendChild(tr);
     });
 
@@ -2045,22 +2078,15 @@ if (typeof window !== 'undefined') {
     // Check if Γ Category
     const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
     
-    // Check if repeat is enabled
-    let repeatEnabled = false;
-    try {
-      repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
-    } catch (e) {
-      repeatEnabled = false;
-    }
-    
     // Get saved MTYPE from localStorage or summary
     const savedMtype = summary.mtype || summary.receipt_mtype || localStorage.getItem('saved_receipt_mtype') || '';
     
     // Show dropdown if:
-    // 1. The summary represents a receipt OR we're in receipts mode OR repeat is enabled
+    // 1. The summary represents a receipt OR we're in receipts mode
     // 2. Is Γ Category
+    // Note: Αφαιρέθηκε η απαίτηση για repeatEnabled - το MTYPE εμφανίζεται πάντα για αποδείξεις Γ κατηγορίας
     const isSummaryReceipt = summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || '')));
-    const shouldShow = (isSummaryReceipt || isReceiptsMode || repeatEnabled) && isGCategory;
+    const shouldShow = (isSummaryReceipt || isReceiptsMode) && isGCategory;
     
     if (shouldShow) {
       mtypeContainer.style.display = 'block';
@@ -2143,6 +2169,13 @@ if (typeof window !== 'undefined') {
   function wireInteractions(){
     // remove old handlers by cloning nodes if necessary (to avoid duplicate attachments)
     document.querySelectorAll('select.expense-category').forEach(sel => {
+      sel.addEventListener('change', function(){
+        updateSummaryFromDom();
+      });
+    });
+    
+    // MTYPE dropdowns (line-level for receipts)
+    document.querySelectorAll('select.line-mtype').forEach(sel => {
       sel.addEventListener('change', function(){
         updateSummaryFromDom();
       });
@@ -4220,7 +4253,7 @@ function prefillSummaryModal(){
       try { data = JSON.parse(input.value || '{}'); } catch(e){ data = {}; }
       data.lines = Array.isArray(data.lines) ? data.lines.slice() : [];
 
-      // For every element that has data-line-id inside the modal container, read category
+      // For every element that has data-line-id inside the modal container, read category and mtype
       const container = document.getElementById('summaryLinesContainer') || document;
       const __seen = new Set();
       container.querySelectorAll('[data-line-id]').forEach(el => {
@@ -4244,6 +4277,12 @@ function prefillSummaryModal(){
           data.lines.push(found);
         }
         found.category = chosen || '';
+        
+        // Συλλογή MTYPE ανά γραμμή (για αποδείξεις Γ κατηγορίας)
+        const mtypeSel = container.querySelector('select.line-mtype[data-line-id="'+lid+'"]');
+        if(mtypeSel && mtypeSel.value) {
+          found.mtype = mtypeSel.value;
+        }
       });
       
       // Συλλογή invoice-level MTYPE (για Γ Category)
