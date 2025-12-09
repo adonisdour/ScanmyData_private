@@ -7796,7 +7796,7 @@ def search():
                                     # Αυτές δημιουργούνται από τα epsilon_bridge modules για λογιστικούς λόγους
                                     # και δεν πρέπει να εμφανίζονται στο modal summary
                                     
-                                    # Βήμα 1: Εντοπισμός κύριων γραμμών (exclude Instance #, ΦΠΑ accounts, προμηθευτή)
+                                    # Εντοπισμός κύριων γραμμών (exclude Instance #, ΦΠΑ accounts, προμηθευτή)
                                     main_docs = []
                                     for inst in docs_for_mark:
                                         desc = str(inst.get("description", ""))
@@ -7814,24 +7814,8 @@ def search():
                                         if not (is_generated or is_vat_account or is_supplier):
                                             main_docs.append(inst)
                                     
-                                    # Βήμα 2: Deduplication βάσει VAT category + amount + vat
-                                    # Αν υπάρχουν πολλαπλές γραμμές με ίδια VAT/amount/vat, κρατάμε μόνο την πρώτη
-                                    seen_combinations = set()
-                                    deduplicated_docs = []
-                                    for inst in main_docs:
-                                        vat_cat = str(inst.get("vatCategory", "") or inst.get("vat_category", "")).strip()
-                                        amount = str(inst.get("totalNetValue", "") or inst.get("amount", "")).strip()
-                                        vat_amt = str(inst.get("totalVatAmount", "") or inst.get("vat", "")).strip()
-                                        
-                                        # Δημιουργία unique key
-                                        combo_key = f"{vat_cat}|{amount}|{vat_amt}"
-                                        
-                                        if combo_key not in seen_combinations:
-                                            seen_combinations.add(combo_key)
-                                            deduplicated_docs.append(inst)
-                                    
-                                    # Χρήση deduplicated γραμμών
-                                    docs_to_process = deduplicated_docs if deduplicated_docs else main_docs if main_docs else docs_for_mark
+                                    # Χρήση κύριων γραμμών αν υπάρχουν, αλλιώς όλες
+                                    docs_to_process = main_docs if main_docs else docs_for_mark
                                     
                                     # Δημιουργούμε invoice_lines από τις φιλτραρισμένες γραμμές
                                     for idx, inst in enumerate(docs_to_process):

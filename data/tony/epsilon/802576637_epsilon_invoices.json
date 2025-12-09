@@ -1,34 +1,5 @@
 [
   {
-    "mark": "400011823705209",
-    "issueDate": "01/12/2025",
-    "series": "ΤΔΑ",
-    "aa": "4653",
-    "AA": "4653",
-    "type": "1.1",
-    "vatCategory": "",
-    "totalNetValue": "24,06",
-    "totalVatAmount": "5,77",
-    "totalValue": "29,83",
-    "classification": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "AFM_issuer": "800470153",
-    "Name_issuer": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
-    "AFM": "800470153",
-    "lines": [
-      {
-        "id": "400011823705209_inst0",
-        "description": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
-        "amount": "24,06",
-        "vat": "5,77",
-        "category": "αγορες_εμπορευματων",
-        "vat_category": "ΦΠΑ 24%"
-      }
-    ],
-    "_updated_at": "2025-12-05T13:11:46.263146+00:00"
-  },
-  {
     "mark": "400011830437903",
     "issueDate": "24/07/2024",
     "series": "ΑΛΠ",
@@ -59,6 +30,37 @@
     ]
   },
   {
+    "mark": "400011823705209",
+    "issueDate": "01/12/2025",
+    "series": "ΤΔΑ",
+    "aa": "4653",
+    "AA": "4653",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "24,06",
+    "totalVatAmount": "5,77",
+    "totalValue": "29,83",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "800470153",
+    "Name_issuer": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
+    "AFM": "800470153",
+    "lines": [
+      {
+        "id": "400011823705209_inst0",
+        "description": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
+        "amount": "24,06",
+        "vat": "5,77",
+        "category": "γενικες_δαπανες",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ],
+    "_updated_at": "2025-12-09T20:36:00.384111+00:00"
+  },
+  {
     "mark": "400011615024455",
     "issueDate": "11/11/2025",
     "series": "TΔA",
@@ -83,7 +85,7 @@
         "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
         "amount": "97,83",
         "vat": "23,48",
-        "category": "αγορες_εμπορευματων",
+        "category": "αγορες_α_υλων",
         "vat_category": "ΦΠΑ 24%"
       },
       {
@@ -91,9 +93,10 @@
         "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
         "amount": "7,16",
         "vat": "0,43",
-        "category": "γενικες_δαπανες",
+        "category": "δαπανες_χωρις_φπα",
         "vat_category": "ΦΠΑ 6%"
       }
-    ]
+    ],
+    "_updated_at": "2025-12-09T20:45:45.810595+00:00"
   }
 ]
