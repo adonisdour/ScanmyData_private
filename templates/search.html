@@ -1923,16 +1923,22 @@ if (typeof window !== 'undefined') {
 
       // Για Γ Κατηγορία: απόκρυψη διπλότυπων γραμμών
       if (isGCategory) {
-        // Δημιουργούμε key από vatCategory + amount + vat
-        const lineKey = `${ln.vatCategory || ''}_${ln.amount || ''}_${ln.vat || ''}`;
-        
-        if (seenLines.has(lineKey)) {
-          // Διπλότυπη γραμμή - κρύψε την
+        // Χρήση του _is_duplicate flag από το backend αν υπάρχει
+        if (ln._is_duplicate) {
           tr.style.display = 'none';
           tr.dataset.duplicate = 'true';
         } else {
-          // Πρώτη φορά που βλέπουμε αυτή τη γραμμή
-          seenLines.set(lineKey, true);
+          // Αν δεν υπάρχει flag, χρήσιμοποίησε το παλιό σύστημα detection
+          const lineKey = `${ln.vatCategory || ''}_${ln.amount || ''}_${ln.vat || ''}`;
+          
+          if (seenLines.has(lineKey)) {
+            // Διπλότυπη γραμμή - κρύψε την
+            tr.style.display = 'none';
+            tr.dataset.duplicate = 'true';
+          } else {
+            // Πρώτη φορά που βλέπουμε αυτή τη γραμμή
+            seenLines.set(lineKey, true);
+          }
         }
       }
 
@@ -2189,6 +2195,33 @@ if (typeof window !== 'undefined') {
     // remove old handlers by cloning nodes if necessary (to avoid duplicate attachments)
     document.querySelectorAll('select.expense-category').forEach(sel => {
       sel.addEventListener('change', function(){
+        // Όταν αλλάζει μια category, ενημέρωσε και τις hidden duplicate lines με το ίδιο VAT
+        const lineId = this.dataset.lineId || '';
+        const tr = document.querySelector(`[data-line-id="${lineId}"]`);
+        const vatCat = tr ? tr.dataset.vat : '';
+        const newCat = this.value;
+        
+        console.log('📝 Category changed:', {lineId, vatCat, newCat, trFound: !!tr});
+        
+        if (vatCat && newCat) {
+          // Βρες όλες τις γραμμές με το ίδιο VAT και ενημέρωσε τις
+          const allRows = document.querySelectorAll(`[data-line-id][data-vat="${vatCat}"]`);
+          console.log(`  Found ${allRows.length} rows with VAT="${vatCat}"`);
+          
+          allRows.forEach(row => {
+            const rowLid = row.dataset.lineId;
+            if (rowLid && rowLid !== lineId) {
+              // Αυτή είναι duplicate line με ίδιο VAT - ενημέρωσέ της
+              const dupSel = row.querySelector(`select.expense-category[data-line-id="${rowLid}"]`);
+              console.log(`  → Updating duplicate ${rowLid} to ${newCat}:`, {dupSelFound: !!dupSel, currentValue: dupSel ? dupSel.value : 'N/A'});
+              if (dupSel && dupSel.value !== newCat) {
+                dupSel.value = newCat;
+                console.log(`    ✓ Updated`);
+              }
+            }
+          });
+        }
+        
         updateSummaryFromDom();
       });
     });
@@ -4275,6 +4308,9 @@ function prefillSummaryModal(){
       // For every element that has data-line-id inside the modal container, read category and mtype
       const container = document.getElementById('summaryLinesContainer') || document;
       const __seen = new Set();
+      
+      // ΣΗΜΑΝΤΙΚΟ: χρησιμοποιούμε querySelectorAll(*) χωρίς display filter
+      // ώστε να πάρουμε και τις hidden (duplicate) γραμμές
       container.querySelectorAll('[data-line-id]').forEach(el => {
         const lid = String(el.dataset.lineId || '').trim();
         if(!lid || __seen.has(lid)) return;

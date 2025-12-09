@@ -7817,31 +7817,21 @@ def search():
                                         # Χρήση κύριων γραμμών αν υπάρχουν, αλλιώς όλες
                                         docs_to_process = main_docs if main_docs else docs_for_mark
                                     
-                                    # Δημιουργούμε invoice_lines από ΌΛΕΣ τις γραμμές (συμπ. duplicates)
-                                    # αλλά σημειώνουμε ποιες είναι duplicates για να τις κρύψει το frontend
-                                    for idx, inst in enumerate(docs_for_mark):
+                                    for idx, inst in enumerate(docs_to_process):
                                         line_id = inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}"
                                         description = pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx+1}"
                                         amount = pick(inst, "amount", "lineTotal", "totalNetValue", "totalValue", "value", default="")
                                         vat_rate = pick(inst, "vat", "vatRate", "vatPercent", "totalVatAmount", default="")
                                         raw_vatcat = pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat", default="")
                                         mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
-                                        
-                                        # Ελέγχουμε αν αυτή η γραμμή είναι στο docs_to_process (κύρια)
-                                        is_duplicate = inst not in docs_to_process
-                                        
-                                        line_obj = {
+                                        invoice_lines.append({
                                             "id": line_id,
                                             "description": description,
                                             "amount": amount,
                                             "vat": vat_rate,
                                             "category": "",
                                             "vatCategory": mapped_vatcat
-                                        }
-                                        if is_duplicate:
-                                            line_obj["_is_duplicate"] = True
-                                        
-                                        invoice_lines.append(line_obj)
+                                        })
 
                                     first = docs_for_mark[0]
                                     # Υπολογισμός totals από τις κύριες γραμμές (όχι από ΦΠΑ/προμηθευτή)
@@ -9145,28 +9135,11 @@ def save_summary():
         try:
             existing = epsilon_cache[existing_index]
             existing_lines = existing.get("lines", []) or []
-            
-            # ΚΑΘΑΡΙΣΜΟΣ: Αφαίρεση Instance #N γραμμών από existing_lines
-            # (αν υπάρχουν από παλαιότερη λανθασμένη αποθήκευση)
-            original_count = len(existing_lines)
-            existing_lines = [
-                l for l in existing_lines 
-                if not str(l.get("description", "")).strip().startswith("Instance #")
-            ]
-            if len(existing_lines) < original_count:
-                log.info("save_summary: Cleaned %d Instance lines from existing entry", 
-                        original_count - len(existing_lines))
-            
             by_id = {str(l.get("id","")): l for l in existing_lines if l.get("id") is not None}
             
             # Δημιουργία map από vatCategory σε category για να συμπληρώσουμε τις κενές
             vat_to_category = {}
             for ln in summary["lines"]:
-                # Αγνόησε Instance #N γραμμές κατά τη δημιουργία του map
-                desc = str(ln.get("description", "")).strip()
-                if desc.startswith("Instance #"):
-                    continue
-                    
                 vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
                 cat = ln.get("category", "")
                 if vat_cat and cat:
@@ -9174,33 +9147,17 @@ def save_summary():
                     if vat_cat not in vat_to_category:
                         vat_to_category[vat_cat] = cat
             
-            log.info("save_summary: vat_to_category map (reclassification): %s", vat_to_category)
-            log.info("save_summary: existing_lines count: %d, by_id count: %d", len(existing_lines), len(by_id))
-            
             updated = False
             for ln in summary["lines"]:
-                # Αγνόησε Instance #N γραμμές κατά την ενημέρωση
-                desc = str(ln.get("description", "")).strip()
-                if desc.startswith("Instance #"):
-                    log.info("save_summary: Skipping Instance line in reclassification: %s", desc)
-                    continue
-                
                 lid = str(ln.get("id","")); 
                 if not lid: 
                     continue
                 if lid in by_id:
                     el = by_id[lid]
                     new_cat = ln.get("category","") or ""
-                    log.info("save_summary: Updating line %s from summary: category=%s", lid, new_cat)
-                    
-                    # Αν δεν έχει category, ψάξε από το vat_to_category map
-                    if not new_cat:
-                        vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-                        if vat_cat and vat_cat in vat_to_category:
-                            new_cat = vat_to_category[vat_cat]
-                        elif is_receipt:
-                            new_cat = "αποδειξακια"
-                    
+                    # Για αποδείξεις, αν λείπει στο υπάρχον -> γράψε "αποδειξακια"
+                    if not new_cat and is_receipt:
+                        new_cat = "αποδειξακια"
                     if new_cat and str(el.get("category","")) != new_cat:
                         el["category"] = new_cat; updated = True
                     if ln.get("vatCategory") and str(el.get("vat_category","")) != ln.get("vatCategory"):
@@ -9221,26 +9178,6 @@ def save_summary():
                         "category": line_cat,
                         "vat_category": ln.get("vatCategory","") or ""
                     }); updated = True
-
-            # Δεύτερο pass: ενημέρωση γραμμών που δεν ήταν στο summary (Instance #N γραμμές)
-            # βασιζόμενο στο vat_to_category map
-            summary_ids = {str(ln.get("id","")) for ln in summary["lines"] if ln.get("id")}
-            log.info("save_summary: summary_ids (lines in summary): %s", summary_ids)
-            
-            for el in existing_lines:
-                el_id = str(el.get("id",""))
-                # Αν η γραμμή δεν ήταν στο summary (δηλ. δεν ενημερώθηκε ακόμα)
-                if el_id not in summary_ids:
-                    vat_cat = el.get("vat_category","")
-                    current_cat = el.get("category","")
-                    # Αν έχει VAT και το vat_to_category map έχει mapping
-                    if vat_cat and vat_cat in vat_to_category:
-                        mapped_cat = vat_to_category[vat_cat]
-                        log.info("save_summary: Updating %s: VAT=%s, current_cat=%s -> mapped_cat=%s", el_id, vat_cat, current_cat, mapped_cat)
-                        if str(current_cat) != mapped_cat:
-                            el["category"] = mapped_cat; updated = True
-                    else:
-                        log.info("save_summary: NOT updating %s: VAT=%s not in vat_to_category map or no VAT", el_id, vat_cat)
 
             # Ενημέρωση MTYPE στο top-level του παραστατικού (αν υπάρχει στο summary)
             new_mtype = summary.get("mtype","") or ""
@@ -9415,14 +9352,6 @@ def save_summary():
                     vat_to_category[vat_cat] = cat
         
         for ln in summary["lines"]:
-            # ΦΙΛΤΡΑΡΙΣΜΑ: Αγνόησε Instance #N γραμμές (VAT accounts, supplier lines)
-            # που δημιουργούνται από το epsilon_bridge για λογιστικούς λόγους
-            # και δεν πρέπει να αποθηκευτούν στο epsilon cache
-            desc = str(ln.get("description", "")).strip()
-            if desc.startswith("Instance #"):
-                log.info("save_summary: Skipping Instance line: %s", desc)
-                continue
-            
             line_category = ln.get("category", "")
             
             # Αν η γραμμή δεν έχει category αλλά έχει vatCategory, ψάξε από το map
