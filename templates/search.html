@@ -1863,6 +1863,10 @@ if (typeof window !== 'undefined') {
 
     const tbody = document.createElement('tbody');
     tbody.id = 'renderedLinesTableBody';
+    
+    // Για Γ Κατηγορία: εντοπισμός διπλότυπων γραμμών
+    const seenLines = new Map();
+    
     lines.forEach((ln, idx) => {
       const tr = document.createElement('tr');
       tr.dataset.lineId = ln.id || ('l' + idx);
@@ -1915,6 +1919,21 @@ if (typeof window !== 'undefined') {
         });
         
         mtypeCell.appendChild(mtypeSelect);
+      }
+
+      // Για Γ Κατηγορία: απόκρυψη διπλότυπων γραμμών
+      if (isGCategory) {
+        // Δημιουργούμε key από vatCategory + amount + vat
+        const lineKey = `${ln.vatCategory || ''}_${ln.amount || ''}_${ln.vat || ''}`;
+        
+        if (seenLines.has(lineKey)) {
+          // Διπλότυπη γραμμή - κρύψε την
+          tr.style.display = 'none';
+          tr.dataset.duplicate = 'true';
+        } else {
+          // Πρώτη φορά που βλέπουμε αυτή τη γραμμή
+          seenLines.set(lineKey, true);
+        }
       }
 
       tbody.appendChild(tr);
@@ -5819,6 +5838,9 @@ function readMappingFromUI(){
   }
 })();
 
+/*
+ * DISABLED: Modal is now always present in HTML, no need for injection
+ *
 (function RC_AUTO_INJECT_SUMMARY_MODAL(){
   try {
     console.log('[RC-DEBUG] periodic-dom-check starting');
@@ -5906,6 +5928,8 @@ function readMappingFromUI(){
     console.error('[RC-DEBUG] auto-inject error', e);
   }
 })();
+*/
+
 (function RC_POPULATE_SUMMARY_MODAL(){
   try {
     console.log('[RC-DEBUG] summary-populate init');
@@ -5950,11 +5974,11 @@ function readMappingFromUI(){
       // Χρησιμοποιούμε τα ίδια functions που χρησιμοποιεί το server-rendered modal
       const categories = window.CUSTOMER_CATEGORIES || [];
       
-      // Αν υπάρχει το buildTableHTML function (από το server-rendered modal), χρησιμοποίησέ το
-      if (typeof window.buildTableHTML === 'function') {
-        linesContainer.appendChild(window.buildTableHTML(lines, categories));
-      } else if (typeof window.buildSingleLineHTML === 'function' && lines.length === 1) {
+      // Πρώτα check για 1 γραμμή - εμφάνισε tabs με κουμπιά
+      if (lines.length === 1 && typeof window.buildSingleLineHTML === 'function') {
         linesContainer.appendChild(window.buildSingleLineHTML(lines[0], categories));
+      } else if (typeof window.buildTableHTML === 'function') {
+        linesContainer.appendChild(window.buildTableHTML(lines, categories));
       } else {
         // Fallback: απλό table χωρίς κατηγορίες (μόνο για εμφάνιση)
         const tbl = document.createElement('table');

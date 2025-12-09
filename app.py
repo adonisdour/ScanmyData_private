@@ -5521,7 +5521,6 @@ def mobile_qr_scanner():
                 expires_at="",
                 repeat_enabled=False,
                 auto_submit_enabled=False,
-                active_year=None,
                 error="Η συνεδρία δεν είναι διαθέσιμη.",
             ),
             400,
@@ -5541,7 +5540,6 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
-                    active_year=None,
                     error="Η συνεδρία δεν βρέθηκε ή έληξε.",
                 ),
                 404,
@@ -5556,7 +5554,6 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
-                    active_year=None,
                     error="Ο σύνδεσμος δεν είναι πλέον έγκυρος.",
                 ),
                 403,
@@ -5574,7 +5571,6 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
-                    active_year=None,
                     error="Η συνεδρία έληξε. Δημιούργησε νέο σύνδεσμο από τον υπολογιστή.",
                 ),
                 410,
@@ -5588,10 +5584,6 @@ def mobile_qr_scanner():
         expires_iso = expires_at.isoformat() if expires_at else ""
         repeat_enabled = bool(entry.get("repeat_enabled"))
 
-        # Get active fiscal year
-        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
-        active_year = _read_active_fiscal_year("data")
-
     return render_template(
         "mobile_qr_scanner.html",
         session_id=session_id,
@@ -5600,7 +5592,6 @@ def mobile_qr_scanner():
         expires_at=expires_iso,
         repeat_enabled=repeat_enabled,
         auto_submit_enabled=bool(entry.get("auto_submit_enabled")),
-        active_year=active_year,
         error=None,
     )
 
@@ -7800,22 +7791,39 @@ def search():
                                 else:
                                     # Invoice flow (κανονικά)
                                     invoice_lines = []
-                                    seen_vat_categories = set()
-                                    for idx, inst in enumerate(docs_for_mark):
+                                    
+                                    # Για Γ Κατηγορία: φιλτράρισμα docs_for_mark για να αποκλείσουμε
+                                    # τις γραμμές ΦΠΑ και προμηθευτή που δημιουργήθηκαν από το build_preview_rows_for_ui_g()
+                                    docs_to_process = docs_for_mark
+                                    if modal_summary and not modal_summary.get("is_receipt"):
+                                        # Εντοπισμός κύριων γραμμών (exclude ΦΠΑ accounts και προμηθευτή)
+                                        main_docs = []
+                                        for inst in docs_for_mark:
+                                            desc = str(inst.get("description", ""))
+                                            lcode = str(inst.get("lcode", "") or inst.get("LCODE", "") or "")
+                                            cat = str(inst.get("category", ""))
+                                            
+                                            # Αποκλείουμε:
+                                            # 1. Λογαριασμούς ΦΠΑ (lcode που ξεκινάει με 54)
+                                            # 2. Λογαριασμό προμηθευτή (cat = "προμηθευτής")
+                                            # 3. Γραμμές με "Instance #" (generated data)
+                                            is_vat_account = lcode.startswith("54")
+                                            is_supplier = "προμηθευτής" in cat.lower()
+                                            is_generated = "Instance #" in desc
+                                            
+                                            if not (is_vat_account or is_supplier or is_generated):
+                                                main_docs.append(inst)
+                                        
+                                        # Χρήση κύριων γραμμών αν υπάρχουν, αλλιώς όλες
+                                        docs_to_process = main_docs if main_docs else docs_for_mark
+                                    
+                                    for idx, inst in enumerate(docs_to_process):
                                         line_id = inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}"
                                         description = pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx+1}"
                                         amount = pick(inst, "amount", "lineTotal", "totalNetValue", "totalValue", "value", default="")
                                         vat_rate = pick(inst, "vat", "vatRate", "vatPercent", "totalVatAmount", default="")
                                         raw_vatcat = pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat", default="")
                                         mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
-                                        
-                                        # Για Γ κατηγορία: αποφυγή διπλών γραμμών (κρατάμε μόνο την πρώτη εμφάνιση κάθε vatCategory)
-                                        # Αυτό αποφεύγει τις επιπλέον γραμμές ΦΠΑ που εμφανίζονται σε τιμολόγια με πολλές γραμμές
-                                        if mapped_vatcat and mapped_vatcat in seen_vat_categories:
-                                            continue
-                                        if mapped_vatcat:
-                                            seen_vat_categories.add(mapped_vatcat)
-                                        
                                         invoice_lines.append({
                                             "id": line_id,
                                             "description": description,
@@ -7826,8 +7834,9 @@ def search():
                                         })
 
                                     first = docs_for_mark[0]
-                                    total_net = sum(float_from_comma(pick(d, "totalNetValue", "totalNet", "lineTotal", default=0)) for d in docs_for_mark)
-                                    total_vat = sum(float_from_comma(pick(d, "totalVatAmount", "totalVat", default=0)) for d in docs_for_mark)
+                                    # Υπολογισμός totals από τις κύριες γραμμές (όχι από ΦΠΑ/προμηθευτή)
+                                    total_net = sum(float_from_comma(pick(d, "totalNetValue", "totalNet", "lineTotal", default=0)) for d in docs_to_process)
+                                    total_vat = sum(float_from_comma(pick(d, "totalVatAmount", "totalVat", default=0)) for d in docs_to_process)
                                     total_value = total_net + total_vat
 
                                     NEGATIVE_TYPES = {"5.1", "5.2", "11.4"}
@@ -7925,12 +7934,17 @@ def search():
                                                         "lines": []
                                                     }
                                                     for ln in invoice_lines:
+                                                        # Προεπιλογή category από τις διαθέσιμες κατηγορίες πελάτη
+                                                        line_category = ln.get("category", "") or ""
+                                                        if not line_category and customer_categories:
+                                                            line_category = customer_categories[0]
+                                                        
                                                         epsilon_entry["lines"].append({
                                                             "id": ln.get("id", ""),
                                                             "description": ln.get("description", ""),
                                                             "amount": ln.get("amount", ""),
                                                             "vat": ln.get("vat", ""),
-                                                            "category": ln.get("category", "") or "",
+                                                            "category": line_category,
                                                             "vat_category": ln.get("vatCategory", "") or ""
                                                         })
                                                     eps_list.append(epsilon_entry)
@@ -9306,13 +9320,34 @@ def save_summary():
             "AFM": summary.get("AFM","") or vat,
             "lines": []
         }
+        
+        # Δημιουργία map από vatCategory σε category για να συμπληρώσουμε τις κενές
+        vat_to_category = {}
         for ln in summary["lines"]:
+            vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
+            cat = ln.get("category", "")
+            if vat_cat and cat:
+                # Κρατάμε την πρώτη μη-κενή category για κάθε VAT category
+                if vat_cat not in vat_to_category:
+                    vat_to_category[vat_cat] = cat
+        
+        for ln in summary["lines"]:
+            line_category = ln.get("category", "")
+            
+            # Αν η γραμμή δεν έχει category αλλά έχει vatCategory, ψάξε από το map
+            if not line_category:
+                vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
+                if vat_cat and vat_cat in vat_to_category:
+                    line_category = vat_to_category[vat_cat]
+                elif is_receipt:
+                    line_category = "αποδειξακια"
+            
             epsilon_entry["lines"].append({
                 "id": ln.get("id",""),
                 "description": ln.get("description",""),
                 "amount": ln.get("amount",""),
                 "vat": ln.get("vat",""),
-                "category": (ln.get("category","") or ("αποδειξακια" if is_receipt else "")),
+                "category": line_category,
                 "vat_category": ln.get("vatCategory","") or ""
             })
 

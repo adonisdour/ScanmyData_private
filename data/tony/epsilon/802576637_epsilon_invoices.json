@@ -163,7 +163,7 @@
     "category": "",
     "χαρακτηρισμός": "",
     "characteristic": "",
-    "mtype": "",
+    "mtype": "12",
     "AFM_issuer": "800916954",
     "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
     "AFM": "800916954",
@@ -173,10 +173,93 @@
         "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
         "amount": "33,06",
         "vat": "7,93",
-        "category": "αγορες_α_υλων",
+        "category": "αγορες_εμπορευματων",
         "vat_category": "ΦΠΑ 24%"
       }
-    ],
-    "_updated_at": "2025-12-09T12:51:48.483818+00:00"
+    ]
+  },
+  {
+    "mark": "400011622878368",
+    "issueDate": "12/11/2025",
+    "series": "11Μ0ΤΔΑ",
+    "aa": "9480",
+    "AA": "9480",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "69,29",
+    "totalVatAmount": "16,63",
+    "totalValue": "85,92",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "094439854",
+    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+    "AFM": "094439854",
+    "lines": [
+      {
+        "id": "400011622878368_inst0",
+        "description": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+        "amount": "69,29",
+        "vat": "16,63",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
+  },
+  {
+    "mark": "400011615024455",
+    "issueDate": "11/11/2025",
+    "series": "TΔA",
+    "aa": "60984",
+    "AA": "60984",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "209,98",
+    "totalVatAmount": "47,82",
+    "totalValue": "257,80",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "15",
+    "AFM_issuer": "800916954",
+    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+    "AFM": "800916954",
+    "lines": [
+      {
+        "id": "400011615024455_inst0",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "97,83",
+        "vat": "23,48",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011615024455_inst1",
+        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
+        "amount": "7,16",
+        "vat": "0,43",
+        "category": "δαπανες_χωρις_φπα",
+        "vat_category": "ΦΠΑ 6%"
+      },
+      {
+        "id": "400011615024455_inst2",
+        "description": "Instance #3",
+        "amount": "97,83",
+        "vat": "23,48",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      },
+      {
+        "id": "400011615024455_inst3",
+        "description": "Instance #4",
+        "amount": "7,16",
+        "vat": "0,43",
+        "category": "δαπανες_χωρις_φπα",
+        "vat_category": "ΦΠΑ 6%"
+      }
+    ]
   }
 ]

@@ -671,7 +671,6 @@
         <select id="cameraSelect" aria-label="Επιλογή κάμερας" disabled></select>
         <button id="startStopButton" class="primary" type="button" disabled>Εκκίνηση σάρωσης</button>
         <button id="torchToggle" type="button" disabled>Φλας μη διαθέσιμο</button>
-        <button id="snapshotButton" type="button" disabled style="display: none;">Τράβηξε Φωτογραφία</button>
       </div>
 
       <div class="mode-toggle" role="group" aria-label="Επιλογή λειτουργίας αποστολής" id="modeToggle">
@@ -786,11 +785,9 @@
       "sessionId": session_id,
       "token": token,
       "mode": mode,
-      "scanMode": "ocr" if mode == "receipts" else "qr",
       "expiresAt": expires_at,
       "repeatEnabled": repeat_enabled,
       "autoSubmit": auto_submit_enabled,
-      "activeYear": active_year,
       "error": error
     } | tojson | safe }};
   </script>
@@ -915,7 +912,6 @@
           name: 'Επωνυμία',
           issue_date: 'Ημερομηνία',
           type: 'Τύπος',
-          mark: 'MARK'
         };
         items.forEach(item => {
           const card = document.createElement('div');
@@ -1199,11 +1195,6 @@
           const active = target === CFG.scanMode;
           btn.classList.toggle('active', active);
         });
-        // Show snapshot button only in OCR mode
-        const snapshotBtn = document.getElementById('snapshotButton');
-        if (snapshotBtn) {
-          snapshotBtn.style.display = CFG.scanMode === 'ocr' ? '' : 'none';
-        }
       }
 
       async function sendSessionUpdate(payload, options){
@@ -1434,7 +1425,7 @@
         if (!ensureSecureContext()) return;
         
         // Check scan mode and start appropriate scanner
-        if (CFG.scanMode === 'ocr') {
+        if (CFG.scanMode === 'ocr' && CFG.mode === 'invoices') {
           await startOCRScanner(preferredId);
         } else {
           await startQRScanner(preferredId);
@@ -1588,22 +1579,13 @@
               usePreprocessing: true, // Enable image enhancement
               focusCenter: true, // Crop to center area for speed
               cropFactor: 0.65, // Use center 65% of frame
-              mode: CFG.mode === 'receipts' ? 'receipt' : 'mark',
-              activeYear: CFG.activeYear,
-              // Called when data is recognized by OCR
-              onSuccess: (data, text, meta) => {
+              // Called when a MARK is recognized by OCR
+              onSuccess: (mark, text, meta) => {
                 try {
                   if (sendingInProgress) return; // avoid queuing multiple sends
-                  if (CFG.mode === 'receipts') {
-                    // For receipts, data is fields object
-                    if (data && JSON.stringify(data) !== lastSentText) {
-                      pushReceiptPayload(data);
-                    }
-                  } else {
-                    // For invoices, data is mark string
-                    if (data && data !== lastSentText) {
-                      pushPayload(data);
-                    }
+                  if (mark && mark !== lastSentText) {
+                    // rely on MobileOCRScanner overlay (yellow) for immediate visual feedback
+                    pushPayload(mark);
                   }
                 } catch (e) { console.warn('ocr onSuccess handler error', e); }
               },
@@ -1677,17 +1659,10 @@
           
           scanning = true;
           
-          if (CFG.mode === 'receipts') {
-            setStatus('Κάμερα ενεργή. Τράβηξε φωτογραφία της απόδειξης για OCR.', 'success');
-          } else {
-            setStatus('OCR σάρωση ενεργή. Κατέθεσε το έγγραφο στη φωτογραφική μηχανή.', 'success');
-          }
-          
           if (startStopBtn) {
             startStopBtn.disabled = false;
             startStopBtn.textContent = 'Παύση σάρωσης';
           }
-          if (snapshotButton) snapshotButton.disabled = false;
           
         } catch (err) {
           console.error('startOCRScanner failed', err);
@@ -1741,7 +1716,6 @@
           startStopBtn.textContent = 'Εκκίνηση σάρωσης';
           startStopBtn.disabled = false;
         }
-        if (snapshotButton) snapshotButton.disabled = true;
       }
 
       async function evaluateTorchSupport(){
@@ -1898,8 +1872,6 @@
         if (startStopBtn) startStopBtn.disabled = true;
         if (cameraSelect) cameraSelect.disabled = true;
         if (torchBtn) torchBtn.disabled = true;
-        if (snapshotButton) snapshotButton.disabled = true;
-        if (snapshotButton) snapshotButton.disabled = true;
         // also disable mode/toggle buttons while sending to avoid races
         try { scanModeButtons.forEach(b => { if (b) b.disabled = true; }); modeButtons.forEach(b => { if (b) b.disabled = true; }); autoButtons.forEach(b => { if (b) b.disabled = true; }); repeatToggle && (repeatToggle.disabled = true); } catch(e){}
         try {
@@ -1954,36 +1926,9 @@
           if (startStopBtn) startStopBtn.disabled = false;
           if (cameraSelect) cameraSelect.disabled = false;
           if (torchBtn) torchBtn.disabled = !torchSupported;
-          if (snapshotButton) snapshotButton.disabled = false;
           try { scanModeButtons.forEach(b => { if (b) b.disabled = false; }); modeButtons.forEach(b => { if (b) b.disabled = false; }); autoButtons.forEach(b => { if (b) b.disabled = false; }); repeatToggle && (repeatToggle.disabled = false); } catch(e){}
           setTimeout(() => { lastOcrHighlight = null; }, 1200);
         }
-      }
-
-      async function pushReceiptPayload(fields){
-        // For receipts, populate the summary modal with OCR fields
-        const summaryData = {
-          lines: [],
-          totals: {
-            total: fields.total_amount || '0,00',
-            vat: '0,00', // Not extracted yet
-            net: fields.total_amount || '0,00'
-          },
-          details: {
-            afm: fields.issuer_vat || '',
-            name: fields.issuer_name || '',
-            issue_date: fields.issue_date || '',
-            aa: fields.progressive_aa || '',
-            mark: fields.MARK || ''
-          },
-          warnings: [],
-          version: CFG.summaryVersion + 1
-        };
-        CFG.summaryVersion = summaryData.version;
-        applySummaryState(summaryData, summaryData.version);
-        setStatus('Αναγνωρίστηκαν στοιχεία απόδειξης. Ελέγξτε και επιβεβαιώστε.', 'success');
-        updateResultBox(`<strong>Αναγνωρίστηκε:</strong> ${escapeHtml(fields.issuer_name || 'Άγνωστο')}`, 'success');
-        pulseFrame('success');
       }
 
       function onScanSuccess(decodedText){
@@ -2093,42 +2038,9 @@
         sendControlCommand({ type: 'summary_close' });
       });
 
-      snapshotButton?.addEventListener('click', async () => {
-        if (!ocrScanner || !ocrScanner.getVideoElement()) return;
-        setStatus('Τράβηγμα φωτογραφίας και επεξεργασία OCR…', 'info');
-        try {
-          const video = ocrScanner.getVideoElement();
-          const canvas = document.createElement('canvas');
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0);
-          // Apply preprocessing if available
-          if (ocrScanner.config.usePreprocessing) {
-            ocrScanner.preprocessImage(canvas);
-          }
-          // Run OCR on the snapshot
-          const result = await Tesseract.recognize(canvas, ocrScanner.config.languages || 'eng');
-          const text = result?.data?.text || '';
-          if (ocrScanner.config.mode === 'receipt') {
-            const fields = ocrScanner.extractReceiptFieldsFromText(text, ocrScanner.config.activeYear);
-            if (fields && (fields.issuer_vat || fields.issue_date || fields.issuer_name || fields.total_amount || fields.MARK)) {
-              pushReceiptPayload(fields);
-            } else {
-              setStatus('Δεν βρέθηκαν πεδία στην φωτογραφία.', 'error');
-            }
-          } else {
-            const match = ocrScanner.extractMARKFromText(text);
-            if (match) {
-              pushPayload(match.mark);
-            } else {
-              setStatus('Δεν βρέθηκε MARK στην φωτογραφία.', 'error');
-            }
-          }
-        } catch (err) {
-          console.warn('Snapshot OCR failed', err);
-          setStatus('Σφάλμα επεξεργασίας φωτογραφίας.', 'error');
-        }
+      summaryConfirmBtn?.addEventListener('click', () => {
+        setSummaryStatus('Αποστολή επιβεβαίωσης επαναχαρακτηρισμού…', null);
+        sendControlCommand({ type: 'summary_confirm' });
       });
 
       updateModeBadge();
