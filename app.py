@@ -7792,43 +7792,55 @@ def search():
                                     # Invoice flow (κανονικά)
                                     invoice_lines = []
                                     
-                                    # Για Γ Κατηγορία: φιλτράρισμα docs_for_mark για να αποκλείσουμε
-                                    # τις γραμμές ΦΠΑ και προμηθευτή που δημιουργήθηκαν από το build_preview_rows_for_ui_g()
-                                    docs_to_process = docs_for_mark
-                                    if modal_summary and not modal_summary.get("is_receipt"):
-                                        # Εντοπισμός κύριων γραμμών (exclude ΦΠΑ accounts και προμηθευτή)
-                                        main_docs = []
-                                        for inst in docs_for_mark:
-                                            desc = str(inst.get("description", ""))
-                                            lcode = str(inst.get("lcode", "") or inst.get("LCODE", "") or "")
-                                            cat = str(inst.get("category", ""))
-                                            
-                                            # Αποκλείουμε:
-                                            # 1. Λογαριασμούς ΦΠΑ (lcode που ξεκινάει με 54)
-                                            # 2. Λογαριασμό προμηθευτή (cat = "προμηθευτής")
-                                            # 3. Γραμμές με "Instance #" (generated data)
-                                            is_vat_account = lcode.startswith("54")
-                                            is_supplier = "προμηθευτής" in cat.lower()
-                                            is_generated = "Instance #" in desc
-                                            
-                                            if not (is_vat_account or is_supplier or is_generated):
-                                                main_docs.append(inst)
-                                        
-                                        # Χρήση κύριων γραμμών αν υπάρχουν, αλλιώς όλες
-                                        docs_to_process = main_docs if main_docs else docs_for_mark
+                                    # ΦΙΛΤΡΑΡΙΣΜΑ: Αποκλεισμός "Instance #" γραμμών (ΚΑΙ ΓΙΑ Β ΚΑΙ ΓΙΑ Γ ΚΑΤΗΓΟΡΙΑ)
+                                    # Αυτές δημιουργούνται από τα epsilon_bridge modules για λογιστικούς λόγους
+                                    # και δεν πρέπει να εμφανίζονται στο modal summary
                                     
-                                    # Δημιουργούμε invoice_lines από ΌΛΕΣ τις γραμμές (συμπ. duplicates)
-                                    # αλλά σημειώνουμε ποιες είναι duplicates για να τις κρύψει το frontend
-                                    for idx, inst in enumerate(docs_for_mark):
+                                    # Βήμα 1: Εντοπισμός κύριων γραμμών (exclude Instance #, ΦΠΑ accounts, προμηθευτή)
+                                    main_docs = []
+                                    for inst in docs_for_mark:
+                                        desc = str(inst.get("description", ""))
+                                        lcode = str(inst.get("lcode", "") or inst.get("LCODE", "") or "")
+                                        cat = str(inst.get("category", ""))
+                                        
+                                        # Αποκλείουμε:
+                                        # 1. Γραμμές με "Instance #" (generated/duplicate data) - ΓΙΑ ΟΛΟΥΣ
+                                        # 2. Λογαριασμούς ΦΠΑ (lcode που ξεκινάει με 54) - Γ Κατηγορία
+                                        # 3. Λογαριασμό προμηθευτή (cat = "προμηθευτής") - Γ Κατηγορία
+                                        is_generated = "Instance #" in desc
+                                        is_vat_account = lcode.startswith("54")
+                                        is_supplier = "προμηθευτής" in cat.lower()
+                                        
+                                        if not (is_generated or is_vat_account or is_supplier):
+                                            main_docs.append(inst)
+                                    
+                                    # Βήμα 2: Deduplication βάσει VAT category + amount + vat
+                                    # Αν υπάρχουν πολλαπλές γραμμές με ίδια VAT/amount/vat, κρατάμε μόνο την πρώτη
+                                    seen_combinations = set()
+                                    deduplicated_docs = []
+                                    for inst in main_docs:
+                                        vat_cat = str(inst.get("vatCategory", "") or inst.get("vat_category", "")).strip()
+                                        amount = str(inst.get("totalNetValue", "") or inst.get("amount", "")).strip()
+                                        vat_amt = str(inst.get("totalVatAmount", "") or inst.get("vat", "")).strip()
+                                        
+                                        # Δημιουργία unique key
+                                        combo_key = f"{vat_cat}|{amount}|{vat_amt}"
+                                        
+                                        if combo_key not in seen_combinations:
+                                            seen_combinations.add(combo_key)
+                                            deduplicated_docs.append(inst)
+                                    
+                                    # Χρήση deduplicated γραμμών
+                                    docs_to_process = deduplicated_docs if deduplicated_docs else main_docs if main_docs else docs_for_mark
+                                    
+                                    # Δημιουργούμε invoice_lines από τις φιλτραρισμένες γραμμές
+                                    for idx, inst in enumerate(docs_to_process):
                                         line_id = inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}"
                                         description = pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx+1}"
                                         amount = pick(inst, "amount", "lineTotal", "totalNetValue", "totalValue", "value", default="")
                                         vat_rate = pick(inst, "vat", "vatRate", "vatPercent", "totalVatAmount", default="")
                                         raw_vatcat = pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat", default="")
                                         mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
-                                        
-                                        # Ελέγχουμε αν αυτή η γραμμή είναι στο docs_to_process (κύρια)
-                                        is_duplicate = inst not in docs_to_process
                                         
                                         line_obj = {
                                             "id": line_id,
@@ -7838,8 +7850,6 @@ def search():
                                             "category": "",
                                             "vatCategory": mapped_vatcat
                                         }
-                                        if is_duplicate:
-                                            line_obj["_is_duplicate"] = True
                                         
                                         invoice_lines.append(line_obj)
 
