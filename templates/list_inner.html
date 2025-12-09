@@ -1185,6 +1185,25 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 .tabulator .tabulator-tableHolder { overflow-x: auto; background: transparent !important; }
 .tabulator .tabulator-col .tabulator-col-title { font-weight: 600; }
 
+/* Dark mode: slightly darker headers and rows for lower contrast */
+[data-theme="dark"] .tabulator .tabulator-header .tabulator-col {
+  background-color: #0a2e5c !important;
+  color: #e8eef9 !important;
+  border-color: rgba(255,255,255,0.08) !important;
+}
+[data-theme="dark"] .tabulator .tabulator-row,
+[data-theme="dark"] .tabulator .tabulator-row .tabulator-cell {
+  background-color: #0f172a !important;
+  color: #e5e7eb !important;
+  border-color: rgba(255,255,255,0.06) !important;
+}
+[data-theme="dark"] .tabulator .tabulator-row:nth-child(even) {
+  background-color: #111827 !important;
+}
+[data-theme="dark"] .tabulator .tabulator-row:hover {
+  background-color: #1b2942 !important;
+}
+
 /* ROUNDED TABLE OUTLINE - apply to wrapper container */
 .tabulator-wrapper .tabulator {
   border-radius: 14px !important;
