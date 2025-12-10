@@ -1212,6 +1212,44 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
   border: none !important;
   background: transparent !important;
 }
+/* Remove focus/outline and any residual borders so Tabulator blends with page */
+.tabulator-wrapper .tabulator:focus,
+.tabulator-wrapper .tabulator *:focus,
+.tabulator .tabulator-tableHolder:focus {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+/* Stronger overrides: remove any borders/outline from Tabulator child elements */
+.tabulator, .tabulator *,
+.tabulator .tabulator-tableHolder,
+.tabulator .tabulator-table,
+.tabulator .tabulator-header,
+.tabulator .tabulator-footer,
+.tabulator .tabulator-row,
+.tabulator .tabulator-col,
+.tabulator .tabulator-row .tabulator-cell,
+.tabulator .tabulator-header .tabulator-col {
+  border: none !important;
+  border-left: none !important;
+  border-right: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+
+/* Hide the thin gray separators around the table holder if present */
+.tabulator .tabulator-tableHolder {
+  border-top: none !important;
+  border-bottom: none !important;
+}
+
+/* If Tabulator injects an inner wrapper with background/border, neutralize it */
+.tabulator-wrapper, .tabulator-wrapper > .tabulator, .tabulator-wrapper > .tabulator * {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
 .tabulator-wrapper .tabulator-tableHolder {
   border-radius: 0 !important;
 }
@@ -1219,6 +1257,53 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
   border-top-left-radius: 14px !important;
   border-top-right-radius: 14px !important;
   overflow: hidden !important;
+}
+/* Restore visible header styling while keeping the table frame-free */
+.tabulator .tabulator-header {
+  background-color: #0d6efd !important; /* blue header */
+  color: #ffffff !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.tabulator .tabulator-header .tabulator-col {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+  border-right: 1px solid rgba(255,255,255,0.06) !important;
+}
+.tabulator .tabulator-header .tabulator-col .tabulator-col-title {
+  color: #ffffff !important;
+}
+.tabulator .tabulator-tableHolder {
+  background: transparent !important;
+}
+
+/* Sort indicators: default show neutral up/down glyph; when Tabulator sets aria-sort use arrow */
+.tabulator .tabulator-header .tabulator-col .tabulator-col-title::after{
+  content: '⇅';
+  margin-left: 8px;
+  font-size: 12px;
+  opacity: 0.8;
+  color: rgba(255,255,255,0.9);
+}
+.tabulator .tabulator-header .tabulator-col[aria-sort="ascending"] .tabulator-col-title::after{
+  content: '▴';
+}
+.tabulator .tabulator-header .tabulator-col[aria-sort="descending"] .tabulator-col-title::after{
+  content: '▾';
+}
+
+/* Thicker vertical separators between columns for better contrast in light mode */
+.tabulator .tabulator-row .tabulator-cell {
+  border-right: 2px solid #e6eef9 !important; /* light subtle divider */
+}
+.tabulator .tabulator-row .tabulator-cell:last-child {
+  border-right: none !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tabulator .tabulator-row .tabulator-cell {
+    border-right: 2px solid rgba(255,255,255,0.04) !important;
+  }
 }
 /* Remove large gray background from table holders (DataTables / Tabulator) */
 .dataTables_wrapper .dataTables_scrollBody { background: transparent !important; }
@@ -1541,7 +1626,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
         footerElement: null,
         pagination: 'local',
         paginationSize: pageSize,
-        paginationSizeSelector: [10,25,50,100],
+        // paginationSizeSelector removed to hide Tabulator's built-in page-size menu
       });
 
       // STATUS / PAGE-LENGTH UI: page label already in markup, just wire persistence
