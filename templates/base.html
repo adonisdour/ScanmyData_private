@@ -1133,7 +1133,9 @@
     [data-theme="dark"] #sideMenu a.side-logout { background-color: #7f1d1d; color: #fff; }
 
     #sideMenu a.side-manage-groups { background-color: #e0f2fe; color: #075985; }
-    [data-theme="dark"] #sideMenu a.side-manage-groups { background-color: #0ea5e9; color: #fff; }
+    /* Ensure the Manage Groups link is always readable in dark theme */
+    [data-theme="dark"] #sideMenu a.side-manage-groups { background-color: #0ea5e9; color: #fff !important; }
+    [data-theme="dark"] #sideMenu a.side-manage-groups, [data-theme="dark"] #sideMenu a.side-manage-groups * { color: #fff !important; }
     /* Quick Links hover should match header hover intensity */
     #sideMenu .space-y-2 a:hover {
       transform: translateY(-1px);
