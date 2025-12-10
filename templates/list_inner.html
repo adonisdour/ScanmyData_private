@@ -5,7 +5,7 @@
     <div class="flex gap-2 items-center flex-wrap">
       {% if file_exists %}
       <div class="relative">
-        <button id="downloadToggle" class="px-4 py-2 bg-[#0d6efd] text-white rounded-lg shadow hover:bg-[#0b5ed7] transition flex items-center gap-2" type="button" aria-haspopup="true" aria-expanded="false">
+        <button id="downloadToggle" class="px-4 py-2 bg-[#0284c7] text-white rounded-lg shadow hover:bg-[#0369a1] transition flex items-center gap-2" type="button" aria-haspopup="true" aria-expanded="false">
           ⬇️ Κατέβασμα .xlsx
           <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clip-rule="evenodd" />
@@ -79,12 +79,12 @@
             }
 
             /* Dark mode overrides (prefers-color-scheme) */
-            @media (prefers-color-scheme: dark) {
+              @media (prefers-color-scheme: dark) {
               #downloadToggle {
-                background-color: #0d6efd !important;
+                background-color: #0284c7 !important;
                 color: #ffffff !important;
               }
-              #downloadToggle:hover { background-color: #0b5ed7 !important; }
+              #downloadToggle:hover { background-color: #0369a1 !important; }
 
               .summary-table thead th {
                 background-color: #0d6efd !important;
@@ -1208,7 +1208,9 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 .tabulator-wrapper .tabulator {
   border-radius: 14px !important;
   overflow: hidden !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+  box-shadow: none !important;
+  border: none !important;
+  background: transparent !important;
 }
 .tabulator-wrapper .tabulator-tableHolder {
   border-radius: 0 !important;
@@ -1917,12 +1919,12 @@ body table.summary-table td {
 }
 
 @media (prefers-color-scheme: dark) {
-  /* Ensure XLSX download button remains blue in dark mode */
+  /* Ensure XLSX download button remains sky-600 in dark mode */
   #downloadToggle {
-    background-color: #0d6efd !important;
+    background-color: #0284c7 !important;
     color: #ffffff !important;
   }
-  #downloadToggle:hover { background-color: #0b5ed7 !important; }
+  #downloadToggle:hover { background-color: #0369a1 !important; }
 
   /* Keep table header color same as light mode */
   .summary-table thead th {
@@ -1959,10 +1961,28 @@ body table.summary-table td {
 
 /* Same rules when the site theme is set via the page toggle (data-theme="dark") */
 [data-theme="dark"] #downloadToggle {
-  background-color: #0d6efd !important;
+  background-color: #0284c7 !important;
   color: #ffffff !important;
 }
-[data-theme="dark"] #downloadToggle:hover { background-color: #0b5ed7 !important; }
+[data-theme="dark"] #downloadToggle:hover { background-color: #0369a1 !important; }
+
+/* Make toggle switches (receipt/repeat/other) use same sky-600 background in both light and dark */
+input[type="checkbox"]#useReceiptsSwitch,
+input[type="checkbox"]#repeatEntrySwitch,
+input[type="checkbox"].rc-switch {
+  accent-color: #0284c7 !important;
+}
+.switch-track, .rc-switch-track, .toggle-track, .rc-toggle-track {
+  background-color: #0284c7 !important;
+  border-color: #0284c7 !important;
+}
+
+/* Ensure the 'ΣΥΝΟΛΑ' pseudo-label is present and visible in all themes */
+.dataTables_wrapper .dataTables_scrollFoot table tfoot tr[data-totals="1"] td:first-child::before{
+  content: 'ΣΥΝΟΛΑ';
+  color: inherit !important;
+  font-weight: 600 !important;
+}
 
 [data-theme="dark"] .summary-table thead th {
   background-color: #0d6efd !important;
