@@ -131,8 +131,7 @@
 
 
 
-{% if modal_summary and (request.args.get('force_edit') == '1' or not allow_edit_existing) %}
-<!-- SUMMARY MODAL -->
+<!-- SUMMARY MODAL (always in DOM for AJAX receipt flows) -->
 <div id="summaryModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 overflow-auto p-4" style="display:none;">
     <div class="bg-white rounded-lg shadow-lg w-full max-w-6xl p-6">
 
@@ -196,7 +195,6 @@
 
     </div>
 </div>
-{% endif %}
 
 
 {# --- Repeat mapping modal (dynamic, populated by JS) --- #}
@@ -4811,15 +4809,20 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     removeForceEditParamFromUrl();
   }));
 
+  // Server-side modal auto-open for initial page loads with modal_summary
   {% if modal_summary and (request.args.get('force_edit') == '1' or not allow_edit_existing) %}
   setTimeout(()=>{
   const m = document.getElementById('summaryModal');
   if (!m) return;
 
   // Αν είμαστε σε mode αποδείξεων ΚΑΙ είναι ενεργό το repeat, μην ανοίγεις modal
-  // ΕΞΑΙΡΕΣΗ: αν είναι reclassification (force_edit=1), τότε άνοιξέ το για να αλλάξουμε χαρακτηρισμούς.
+  // ΕΞΑΙΡΕΣΗ: αν είναι reclassification (force_edit=1) ή manual search (υπάρχει mark στο URL), τότε άνοιξέ το.
   const receiptsOn = !!(document.getElementById('useReceiptsSwitch') && document.getElementById('useReceiptsSwitch').checked);
   const repeatOn   = !!(document.getElementById('repeatEntrySwitch') && document.getElementById('repeatEntrySwitch').checked);
+  
+  // Check if this is a manual action (user searched by MARK or clicked reclassify)
+  const hasMarkInUrl = !!(new URLSearchParams(location.search).get('mark'));
+  const isManualOpen = FORCE_EDIT || hasMarkInUrl;
 
   // Επιπλέον έλεγχος: αν το summary είναι σαφώς Απόδειξη, αντιμετώπισέ το ως receipts flow
   let isReceiptSummary = false;
@@ -4834,8 +4837,8 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   } catch(_){}
 
 
-  if ((receiptsOn || isReceiptSummary) && repeatOn && !FORCE_EDIT) {
-    // auto-flow αποδείξεων όταν είναι ενεργό το "Επαναληψιμη εισαγωγή"
+  if ((receiptsOn || isReceiptSummary) && repeatOn && !isManualOpen) {
+    // auto-flow αποδείξεων όταν είναι ενεργό το "Επαναληψιμη εισαγωγή" και ΔΕΝ είναι manual open
     try {
       let raw = (document.getElementById('summaryJsonInput')?.value || '').trim();
       if (!raw || raw === '{}' || raw === 'null') {
@@ -5291,7 +5294,13 @@ try {
         if (window.RC_forcePopulateSummaryModal) {
           try { window.RC_forcePopulateSummaryModal(); } catch(e){ console.warn('RC_forcePopulateSummaryModal failed', e); }
         }
-        if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { modal.style.display = 'flex'; }
+        if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) {
+          // Set bypass flag to allow modal open even in repeat mode
+          window.__RC_ALLOW_MODAL_OPEN = true;
+          modal.style.display = 'flex';
+          // Clear the flag after a short delay (modal is already open)
+          setTimeout(() => { window.__RC_ALLOW_MODAL_OPEN = false; }, 200);
+        }
         if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { showFlash('Λήφθηκε απόδειξη — ελέγξτε τα στοιχεία και πατήστε "Αποθήκευση στο Cache".', 'success', 5000); }
       }
 
@@ -6431,10 +6440,16 @@ document.addEventListener('submit', function(ev){
   }
 
   function shouldOpenSummaryModal(obj){
+    // Check for explicit bypass flag (set by scrape or manual actions)
+    if (window.__RC_ALLOW_MODAL_OPEN) return true;
+    
     const receiptsOn = !!(qs('useReceiptsSwitch') && qs('useReceiptsSwitch').checked);
     const repeatOn   = !!(qs('repeatEntrySwitch') && qs('repeatEntrySwitch').checked);
-    // Αν είμαστε σε αποδείξεις (ή το summary είναι απόδειξη) και repeat ON και ΔΕΝ είναι reclassification -> ΜΗΝ ανοίξεις modal
-    if ((receiptsOn || isReceiptSummary(obj)) && repeatOn && !forceEdit()) return false;
+    // Check if manual action (user searched by MARK or clicked reclassify)
+    const hasMarkInUrl = !!(new URLSearchParams(location.search).get('mark'));
+    const isManualOpen = forceEdit() || hasMarkInUrl;
+    // Αν είμαστε σε αποδείξεις (ή το summary είναι απόδειξη) και repeat ON και ΔΕΝ είναι manual -> ΜΗΝ ανοίξεις modal
+    if ((receiptsOn || isReceiptSummary(obj)) && repeatOn && !isManualOpen) return false;
     return true;
   }
 
