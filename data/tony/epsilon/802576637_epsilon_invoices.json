@@ -98,5 +98,127 @@
       }
     ],
     "_updated_at": "2025-12-10T13:43:22.070015+00:00"
+  },
+  {
+    "mark": "400011605611275",
+    "issueDate": "10/11/2025",
+    "series": "00ΤΔΓ",
+    "aa": "4885",
+    "AA": "4885",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "82,27",
+    "totalVatAmount": "19,74",
+    "totalValue": "102,01",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "095736139",
+    "Name_issuer": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ",
+    "AFM": "095736139",
+    "lines": [
+      {
+        "id": "400011605611275_inst0",
+        "description": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ",
+        "amount": "82,27",
+        "vat": "19,74",
+        "category": "γενικες_δαπανες",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ],
+    "_updated_at": "2025-12-11T10:30:01.887653+00:00"
+  },
+  {
+    "mark": "400011830437904",
+    "issueDate": "25/09/2025",
+    "series": "ΑΛΠ",
+    "aa": "165",
+    "AA": "165",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "9,4",
+    "totalVatAmount": "",
+    "totalValue": "9,4",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094386010",
+    "Name_issuer": "PREMIER CAPITAL ΕΛΛΑΣ-ΔΙΑΧΕΙΡΙΣΗ ΚΑΙ ΛΕΙΤΟΥΡΓΙΑ ΕΣΤΙΑΤΟΡΙΩΝ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094386010",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,4",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "400011622878368",
+    "issueDate": "12/11/2025",
+    "series": "11Μ0ΤΔΑ",
+    "aa": "9480",
+    "AA": "9480",
+    "type": "Τιμολόγιο Πώλησης",
+    "vatCategory": "",
+    "totalNetValue": "69,29",
+    "totalVatAmount": "16,63",
+    "totalValue": "85,92",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "094439854",
+    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+    "AFM": "094439854",
+    "lines": [
+      {
+        "id": "400011622878368_inst0",
+        "description": "ΤΡΑΚΑΔΑΣ Α.Ε.",
+        "amount": "69,29",
+        "vat": "16,63",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
+  },
+  {
+    "mark": "400011830437905",
+    "issueDate": "25/09/2025",
+    "series": "ΑΛΠ",
+    "aa": "165",
+    "AA": "165",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "9,4",
+    "totalVatAmount": "",
+    "totalValue": "9,4",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "16",
+    "AFM_issuer": "094386010",
+    "Name_issuer": "PREMIER CAPITAL ΕΛΛΑΣ-ΔΙΑΧΕΙΡΙΣΗ ΚΑΙ ΛΕΙΤΟΥΡΓΙΑ ΕΣΤΙΑΤΟΡΙΩΝ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094386010",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,4",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ],
+    "_updated_at": "2025-12-11T10:30:11.958472+00:00"
   }
 ]

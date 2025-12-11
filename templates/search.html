@@ -4863,17 +4863,21 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   }
 
 
-  // Αλλιώς, άνοιξέ το κανονικά
-  try {
-    const summaryInputEl = document.getElementById('summaryJsonInput');
-    if (summaryInputEl && (!summaryInputEl.value || summaryInputEl.value === '{}')) {
-      summaryInputEl.value = {{ modal_summary | tojson | safe }};
-    }
-    const obj = JSON.parse(document.getElementById('summaryJsonInput').value || '{}');
-    renderSummaryLinesFromObject(obj);
-  } catch(e) { console.warn('renderSummaryLinesFromObject error', e); }
+  // Αλλιώς, άνοιξέ το κανονικά (μόνο για invoices, όχι για receipts)
+  // Για invoices με force_edit=1: ανοίξε το modal
+  // Για receipts: μη το ανοίξεις εδώ (θα ανοίξει μέσα από AJAX scrape)
+  if (!(isReceiptSummary || receiptsOn)) {
+    try {
+      const summaryInputEl = document.getElementById('summaryJsonInput');
+      if (summaryInputEl && (!summaryInputEl.value || summaryInputEl.value === '{}')) {
+        summaryInputEl.value = {{ modal_summary | tojson | safe }};
+      }
+      const obj = JSON.parse(document.getElementById('summaryJsonInput').value || '{}');
+      renderSummaryLinesFromObject(obj);
+    } catch(e) { console.warn('renderSummaryLinesFromObject error', e); }
 
-  m.style.display = 'flex';
+    m.style.display = 'flex';
+  }
   removeForceEditParamFromUrl();
 }, 80);
 {% endif %}
@@ -6175,6 +6179,21 @@ function readMappingFromUI(){
       return nonEmpty.length > 1;
     }
 
+    // Check if we're in the "already exists" scenario (yellow box should show, not modal)
+    // But ONLY for invoices, NOT for receipts
+    function isYellowBoxScenario() {
+      const banner = document.getElementById('existingBanner');
+      if (!banner || banner.style.display === 'none') return false;
+      
+      // Check if this is a receipt summary - if so, don't treat as yellow box scenario
+      const obj = parseSummary();
+      if (obj && (obj.is_receipt || (obj.type_name && String(obj.type_name).toLowerCase().includes('απόδει')))) {
+        return false; // receipts are not subject to yellow box
+      }
+      
+      return true; // invoices with banner visible = yellow box scenario
+    }
+
     function ensureModalHiddenUnlessMeaningful() {
       const modal = document.getElementById('summaryModal');
       const summaryEl = document.getElementById('summaryJsonInput');
@@ -6183,9 +6202,17 @@ function readMappingFromUI(){
       // Force-hide now (neutralize server/client auto-show)
       hideSummaryModal();
 
-      // If summary becomes meaningful, show it (and populate watcher should fill fields)
+      // If summary becomes meaningful, show it ONLY if NOT in yellow box scenario
       const checkAndMaybeShow = () => {
         const obj = parseSummary();
+        
+        // If yellow box is showing (already-characterized invoice), keep modal hidden
+        if (isYellowBoxScenario()) {
+          dbg('yellow box scenario detected -> keep modal hidden');
+          hideSummaryModal();
+          return;
+        }
+        
         if (hasMeaningfulSummary(obj)) {
           dbg('summary meaningful -> showing modal', obj);
           try {
@@ -6228,6 +6255,12 @@ function readMappingFromUI(){
       try {
         const mo = new MutationObserver(muts => {
           try {
+            // Always respect yellow box scenario - keep modal hidden
+            if (isYellowBoxScenario()) {
+              hideSummaryModal();
+              return;
+            }
+            
             const obj = parseSummary();
             if (!hasMeaningfulSummary(obj)) {
               const modalEl = document.getElementById('summaryModal');
