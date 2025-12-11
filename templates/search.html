@@ -1522,6 +1522,7 @@ try {
 // --- Reclass guard (yellow box -> ?force_edit=1) ---
 const URL_PARAMS = (function(){ try { return new URL(window.location.href).searchParams; } catch(_) { return new URLSearchParams(''); } })();
 const FORCE_EDIT = (function(){ try { return URL_PARAMS.get('force_edit') === '1'; } catch(_) { return false; } })();
+const ALLOW_EDIT_EXISTING = {{ 'true' if allow_edit_existing else 'false' }};
 const CATEGORY_LABELS = (function(){
   try { return {{ (customer_category_labels or {}) | tojson | safe }} || {}; }
   catch(e){ return {}; }
@@ -4715,7 +4716,10 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         // If repeat enabled and mapping exists and modal_summary present -> auto apply mapping now
         if (enabled && mapping && Object.keys(mapping).length && summaryInput) {
         const receiptsOn = !!(useReceiptsSwitch && useReceiptsSwitch.checked);
-          if (!receiptsOn && !FORCE_EDIT) {
+          // ΝΕΟ: Αν υπάρχει το yellow box (ALLOW_EDIT_EXISTING = true και όχι force_edit), μην κάνε αυτόματη καταχώρηση
+          // Περίμενε τον χρήστη να επιλέξει (Επιβεβαίωση ή Άκυρο)
+          const hasYellowBox = ALLOW_EDIT_EXISTING && !FORCE_EDIT;
+          if (!receiptsOn && !FORCE_EDIT && !hasYellowBox) {
             const did = applyMappingToSummaryAndSubmitUsingMapping(mapping);
           if (did) {
             const sm = document.getElementById('summaryModal');
@@ -6750,6 +6754,12 @@ document.addEventListener('submit', function(ev){
       return false;
     }
 
+    function yellowBoxVisibleForExistingMark(){
+      // Ανιχνεύει αν το yellow box για ύπαρχον MARK είναι ορατό (και ο χρήστης δεν έχει επιβεβαιώσει ακόμα)
+      const banner = document.getElementById('existingBanner');
+      return !!(banner && isVisible(banner));
+    }
+
     const normMark = v => (v||'').replace(/\D/g,'');
     const isMark   = v => normMark(v).length === 15;
     const isUrl    = v => {
@@ -6882,6 +6892,16 @@ document.addEventListener('submit', function(ev){
     function trySubmit(){
       if (!form || !getAuto()) return;
       if (warningOpen()) return;
+      
+      // Νέος έλεγχος: Αν είναι ενεργή η επαναληπτική εισαγωγή ΚΑΙ υπάρχει yellow box για ύπαρχο MARK,
+      // μην κάνε auto-submit - περίμενε το χρήστη να κάνει κλικ "Επιβεβαίωση"
+      const repeatSwitch = document.getElementById('repeatEntrySwitch');
+      const isRepeatEnabled = !!(repeatSwitch && repeatSwitch.checked);
+      if (isRepeatEnabled && yellowBoxVisibleForExistingMark()) {
+        // Μην κάνε auto-submit όταν υπάρχει yellow box για επιβεβαίωση
+        return;
+      }
+      
       const info = currentKey();
       if (!info || !info.primary) return;
       const keys = info.keys || [info.primary];
