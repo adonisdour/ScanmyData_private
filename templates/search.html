@@ -2859,6 +2859,8 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
     let summaryWatcherTimer = null;
     let lastSummaryPayload = '';
     let lastSummaryVersion = 0;
+    let summaryVisibilityObserver = null;
+    let lastSummaryVisible = null;
     let resumeAttempted = false;
 
     const STORAGE_KEY = 'remoteQrSessionState';
@@ -2922,6 +2924,14 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         clearInterval(summaryWatcherTimer);
         summaryWatcherTimer = null;
       }
+      stopSummaryVisibilityWatcher();
+    }
+
+    function stopSummaryVisibilityWatcher(){
+      if (summaryVisibilityObserver){
+        try { summaryVisibilityObserver.disconnect(); } catch(_) {}
+        summaryVisibilityObserver = null;
+      }
     }
 
     async function pushSummaryState(force){
@@ -2942,10 +2952,28 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
     function startSummaryWatcher(){
       stopSummaryWatcher();
       if (!sessionId) return;
+      startSummaryVisibilityWatcher();
       summaryWatcherTimer = setInterval(() => {
         pushSummaryState(false);
       }, 2500);
       pushSummaryState(true);
+    }
+
+    function startSummaryVisibilityWatcher(){
+      const modal = document.getElementById('summaryModal');
+      if (!modal) return;
+      stopSummaryVisibilityWatcher();
+      lastSummaryVisible = isElementVisible(modal);
+      try {
+        summaryVisibilityObserver = new MutationObserver(() => {
+          const nowVisible = isElementVisible(modal);
+          if (nowVisible !== lastSummaryVisible){
+            lastSummaryVisible = nowVisible;
+            pushSummaryState(true);
+          }
+        });
+        summaryVisibilityObserver.observe(modal, { attributes: true, attributeFilter: ['class','style'] });
+      } catch(_) {}
     }
 
     function collectSummaryState(){
@@ -3709,6 +3737,9 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
         }
         if (Object.prototype.hasOwnProperty.call(data, 'repeat_enabled')){
           setRemoteRepeat(data.repeat_enabled, { syncPage: true });
+        }
+        if (Object.prototype.hasOwnProperty.call(data, 'auto_submit_enabled')){
+          setRemoteAutoSubmit(data.auto_submit_enabled, { syncPage: false });
         }
 
         if (data.expires_at){

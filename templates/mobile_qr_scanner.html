@@ -512,6 +512,36 @@
       border: none;
     }
 
+    /* Processing overlay when desktop is saving */
+    .processing-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.65);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9997;
+      color: #f8fafc;
+      text-align: center;
+    }
+    .processing-overlay.show { display: flex; }
+    .processing-box {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 16px;
+      padding: 16px 18px;
+      max-width: 90%;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    .processing-spinner {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.35);
+      border-top-color: #22c55e;
+      animation: spin 1s linear infinite; margin: 0 auto 10px;
+    }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
     .warning-panel {
       margin-top: 24px;
       padding: 18px 16px;
@@ -716,6 +746,13 @@
             <span class="ocr-guide-corner br"></span>
           </div>
         </div>
+        <div id="processingOverlay" class="processing-overlay" aria-live="polite" aria-busy="true">
+          <div class="processing-box">
+            <div class="processing-spinner" aria-hidden="true"></div>
+            <div style="font-weight:700;margin-bottom:4px">Παρακαλώ περιμένετε…</div>
+            <div style="font-size:0.92rem;opacity:0.9">Ο υπολογιστής ενημερώνει τα δεδομένα.</div>
+          </div>
+        </div>
       </div>
 
       <div id="mobileResult">Η τελευταία τιμή που θα σαρωθεί θα εμφανίζεται εδώ.</div>
@@ -782,13 +819,13 @@
 
   <script>
     window.__REMOTE_QR_CONFIG__ = {{ {
-      "sessionId": session_id,
-      "token": token,
-      "mode": mode,
-      "expiresAt": expires_at,
-      "repeatEnabled": repeat_enabled,
-      "autoSubmit": auto_submit_enabled,
-      "error": error
+      "sessionId": session_id|default(''),
+      "token": token|default(''),
+      "mode": mode|default('invoices'),
+      "expiresAt": expires_at|default(''),
+      "repeatEnabled": repeat_enabled|default(false),
+      "autoSubmit": auto_submit_enabled|default(false),
+      "error": error|default('')
     } | tojson | safe }};
   </script>
   <script>
@@ -803,6 +840,7 @@
       const startStopBtn = document.getElementById('startStopButton');
       const torchBtn = document.getElementById('torchToggle');
       const readerId = 'qr-reader';
+      const processingOverlay = document.getElementById('processingOverlay');
       const resultEl = document.getElementById('mobileResult');
       const expiresEl = document.getElementById('expiresInfo');
       const modeBadge = document.getElementById('modeBadge');
@@ -840,7 +878,7 @@
       let scanning = false;
       let torchSupported = false;
       let torchOn = false;
-      const HEARTBEAT_INTERVAL = 200; // Πιο συχνό heartbeat (5000 → 2000ms) για καλύτερη ανίχνευση αποσύνδεσης
+      const HEARTBEAT_INTERVAL = 500; // Heartbeat κάθε 0.5s για γρήγορο συγχρονισμό
       let heartbeatTimer = null;
       let lastSentText = '';
       let countdownTimer = null;
@@ -1074,8 +1112,13 @@
         const warnings = state && Array.isArray(state.warnings) ? state.warnings : [];
         renderWarnings(warnings);
 
-        const hasSummaryContent = state && (state.visible || (state.lines && state.lines.length) || (state.reclassification_banner && state.reclassification_banner.visible));
-        if (!hasSummaryContent){
+        // Show whenever desktop marks modal visible, or when we have content but no explicit visibility flag
+        const hasContent = !!(state && (
+          (Array.isArray(state.lines) && state.lines.length > 0) ||
+          state.totals || state.details || state.mark
+        ));
+        const shouldShow = !!(state && (state.visible === true || (!Object.prototype.hasOwnProperty.call(state, 'visible') && hasContent)));
+        if (!shouldShow){
           summaryPanel.classList.add('hidden');
           setSummaryStatus('', null);
           if (summaryBanner){ summaryBanner.classList.remove('show'); summaryBanner.textContent = ''; }
@@ -1742,13 +1785,31 @@
         }
       }
 
+      function setProcessing(active){
+        if (!!active){
+          processingOverlay && processingOverlay.classList.add('show');
+          if (scanning) { stopScanner(); }
+          // disable UI while processing
+          if (startStopBtn) startStopBtn.disabled = true;
+          if (cameraSelect) cameraSelect.disabled = true;
+          if (torchBtn) torchBtn.disabled = true;
+        } else {
+          processingOverlay && processingOverlay.classList.remove('show');
+          if (startStopBtn) startStopBtn.disabled = false;
+          if (cameraSelect) cameraSelect.disabled = false;
+          if (torchBtn) torchBtn.disabled = !torchSupported;
+        }
+        CFG.excelUpdating = !!active;
+      }
+
       async function sendHeartbeat(){
         try {
           const res = await fetch('/api/qr/remote/heartbeat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token, mode: CFG.mode, repeat_enabled: CFG.repeatEnabled, auto_submit_enabled: CFG.autoSubmit })
+            // Do not push mode/repeat/auto here to avoid overwriting desktop changes; this is a pull-only heartbeat.
+            body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token })
           });
           
           if (res.status === 410) {
@@ -1779,6 +1840,10 @@
           if (data && data.expires_at) {
             CFG.expiresAt = data.expires_at;
             updateExpiryCountdown();
+          }
+          if (data && Object.prototype.hasOwnProperty.call(data, 'excel_updating')){
+            // Only block scans if repeat-entry is enabled, as requested
+            setProcessing(!!data.excel_updating && !!CFG.repeatEnabled);
           }
           if (data && data.mode){
             applyMode(data.mode);
@@ -1824,7 +1889,8 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token, mode: CFG.mode, repeat_enabled: CFG.repeatEnabled, auto_submit_enabled: CFG.autoSubmit })
+            // Pull initial state without pushing local toggles to avoid clobbering desktop values
+            body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token })
           });
           const data = await res.json().catch(() => null);
           if (!res.ok || !data || data.ok === false){
@@ -1832,6 +1898,9 @@
             setStatus(message, 'error');
             disableControls();
             return;
+          }
+          if (Object.prototype.hasOwnProperty.call(data, 'excel_updating')){
+            setProcessing(!!data.excel_updating && !!CFG.repeatEnabled);
           }
           if (data.mode){
             applyMode(data.mode);
@@ -1863,6 +1932,11 @@
       }
 
       async function pushPayload(text){
+        if (CFG.repeatEnabled && CFG.excelUpdating){
+          setStatus('💾 Ο υπολογιστής ολοκληρώνει αποθήκευση… περίμενε.', 'error');
+          pulseFrame('error');
+          return;
+        }
         lastSentText = text;
         setTimeout(() => { lastSentText = ''; }, 1800);
         setStatus('Παρακαλώ περιμένετε…', null);
@@ -1879,7 +1953,8 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token, payload: text, mode: CFG.mode, repeat_enabled: CFG.repeatEnabled, auto_submit_enabled: CFG.autoSubmit })
+              // Do not send mode/repeat/auto here; those are synced via explicit toggle updates
+              body: JSON.stringify({ session_id: CFG.sessionId, token: CFG.token, payload: text })
           });
           const data = await res.json().catch(() => null);
           if (!res.ok || !data || data.ok === false){

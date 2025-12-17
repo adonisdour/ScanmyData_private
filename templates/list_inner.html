@@ -1429,6 +1429,32 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
     }catch(_){ return -1; }
   }
 
+  function findEntryDateCol(thead){
+    try{
+      const ths = Array.from(thead.querySelectorAll('th'));
+      const names = ths.map(h => (h.innerText||h.textContent||'').trim().toLowerCase());
+      // Priority order: entry date > insertion date > generic date
+      const entryDateCandidates = ['ημερομηνία εισαγωγής', 'εισαγωγή', 'entry date', 'inserted', 'created'];
+      const genericDateCandidates = ['ημερομηνία','ημερομηνιa','ημερ','date','ημ.','ημ'];
+      
+      // First try to find specific entry/insertion date columns
+      for(let i=0;i<names.length;i++){
+        for(const c of entryDateCandidates) {
+          if(names[i].includes(c)) return i;
+        }
+      }
+      
+      // Fallback to generic date columns
+      for(let i=0;i<names.length;i++){
+        for(const c of genericDateCandidates) {
+          if(names[i].includes(c)) return i;
+        }
+      }
+      
+      return -1;
+    }catch(_){ return -1; }
+  }
+
   function parseRowToData(tr, colCount, markCol){
     const tds = Array.from(tr.children || []);
     const obj = {};
@@ -1484,6 +1510,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
   try{ window.parseRowToData = parseRowToData; }catch(_){ }
   try{ window.findMarkCol = findMarkCol; }catch(_){ }
   try{ window.findDateCol = findDateCol; }catch(_){ }
+  try{ window.findEntryDateCol = findEntryDateCol; }catch(_){ }
 
   function toNumberLocalized(s){
     if(s===undefined||s===null) return 0;
@@ -1529,11 +1556,49 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
 
       const columns = buildColumnsFromThead(thead).map((col, i)=>{
         const isNum = detectNumericHeader(col.title);
+        const isDate = /ημερ|date|ημ\.|ημ$/i.test(col.title);
         const colDef = Object.assign({}, col, { hozAlign: (i===0? 'left' : (isNum? 'right' : 'left')), headerSort: true, resizable:true });
         // restore width if user previously resized this column
         try{ const w = storedWidths[col.field]; if(w && Number(w)>0) colDef.width = Number(w); }catch(_){ }
         // Hide second column (index 1) - usually checkmark/icon column
         if(i===0){ colDef.visible = false; }
+        if(isDate){
+          // Custom date sorter that sorts by month first, then by day
+          colDef.sorter = function(a, b, aRow, bRow, column, dir, sorterParams){
+            try{
+              const parseGreekDate = (str) => {
+                if(!str) return new Date(0);
+                // Handle dd/mm/yyyy or dd-mm-yyyy format
+                const cleaned = String(str).trim().replace(/[-]/g, '/');
+                const parts = cleaned.split('/');
+                if(parts.length === 3){
+                  const day = parseInt(parts[0], 10);
+                  const month = parseInt(parts[1], 10) - 1; // 0-based months
+                  const year = parseInt(parts[2], 10);
+                  return new Date(year, month, day);
+                }
+                return new Date(str);
+              };
+              
+              const dateA = parseGreekDate(a);
+              const dateB = parseGreekDate(b);
+              
+              // Sort by month first, then by day
+              const monthA = dateA.getMonth();
+              const monthB = dateB.getMonth();
+              if(monthA !== monthB) return monthA - monthB;
+              
+              const dayA = dateA.getDate();
+              const dayB = dateB.getDate();
+              if(dayA !== dayB) return dayA - dayB;
+              
+              // If same month and day, sort by year
+              return dateA.getFullYear() - dateB.getFullYear();
+            }catch(_){
+              return String(a).localeCompare(String(b));
+            }
+          };
+        }
         if(isNum){
           colDef.bottomCalc = 'sum';
           colDef.bottomCalcFormatter = function(cell){ return formatGreekNumberLocal(cell.getValue()); };
@@ -1587,18 +1652,21 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
       const tbody = origTable.querySelector('tbody');
       const rows = [];
       if(tbody){
-        Array.from(tbody.querySelectorAll('tr')).forEach(tr=>{
-          if(tr.getAttribute && tr.getAttribute('data-server-totals')==='1') return; // skip server totals
+        // Read table rows in reverse order (last to first)
+        const allTrs = Array.from(tbody.querySelectorAll('tr'));
+        for(let i = allTrs.length - 1; i >= 0; i--){
+          const tr = allTrs[i];
+          if(tr.getAttribute && tr.getAttribute('data-server-totals')==='1') continue; // skip server totals
           const d = parseRowToData(tr, colCount, markColIndex);
           // convert numeric fields to numbers for Tabulator sums
-          for(let i=0;i<colCount;i++){
-            const hdrText = (thead.querySelectorAll('th')[i]||{}).innerText || '';
+          for(let j=0;j<colCount;j++){
+            const hdrText = (thead.querySelectorAll('th')[j]||{}).innerText || '';
             if(detectNumericHeader(hdrText)){
-              d['c'+i] = toNumberLocalized(d['c'+i]);
+              d['c'+j] = toNumberLocalized(d['c'+j]);
             }
           }
           rows.push(d);
-        });
+        }
       }
 
       // create wrapper and init Tabulator
@@ -1610,6 +1678,8 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
       // page length from localStorage
       let pageSize = 10;
       try{ const stored = localStorage.getItem('fbp_tab_page_len'); if(stored) pageSize = parseInt(stored,10) || 10; }catch(_){ }
+
+      // Rows are already read in reverse order above
 
       const tab = new Tabulator(wrapper, {
         data: rows,
@@ -1626,6 +1696,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
         footerElement: null,
         pagination: 'local',
         paginationSize: pageSize,
+        // No initial sort since we already reversed the rows
         // paginationSizeSelector removed to hide Tabulator's built-in page-size menu
       });
 

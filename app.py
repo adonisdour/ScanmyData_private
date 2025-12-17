@@ -299,6 +299,42 @@ def _parse_bool(value: Any) -> Optional[bool]:
     return None
 
 
+# --- Remote processing lock helpers (desktop saves signal mobile to pause) ---
+def _signal_remote_processing_start(timeout_seconds: int = 30) -> None:
+    owner = session.get("_remote_qr_owner")
+    if not owner:
+        return
+    deadline = _remote_qr_now() + datetime.timedelta(seconds=timeout_seconds)
+    with REMOTE_QR_LOCK:
+        for entry in REMOTE_QR_SESSIONS.values():
+            if entry.get("owner_token") == owner:
+                entry["excel_updating"] = True
+                entry["excel_updating_until"] = deadline
+
+
+def _signal_remote_processing_end() -> None:
+    owner = session.get("_remote_qr_owner")
+    if not owner:
+        return
+    with REMOTE_QR_LOCK:
+        for entry in REMOTE_QR_SESSIONS.values():
+            if entry.get("owner_token") == owner:
+                entry["excel_updating"] = False
+                entry["excel_updating_until"] = None
+
+
+def _is_remote_processing(entry: Dict[str, Any]) -> bool:
+    now = _remote_qr_now()
+    processing_until = entry.get("excel_updating_until")
+    if processing_until and isinstance(processing_until, datetime.datetime):
+        if now < processing_until:
+            return True
+    # auto-clear stale flag
+    entry["excel_updating"] = False
+    entry["excel_updating_until"] = None
+    return False
+
+
 def _normalize_scanned_value(raw: str) -> str:
     try:
         text = (raw or "").strip()
@@ -5020,6 +5056,8 @@ def api_qr_remote_start():
         "control": None,
         "control_version": 0,
         "control_last_delivered": 0,
+        "excel_updating": False,
+        "excel_updating_until": None,
     }
 
     with REMOTE_QR_LOCK:
@@ -5085,15 +5123,9 @@ def api_qr_remote_status():
         remote_last_seen = entry.get("remote_last_seen")
         if entry.get("attached") and isinstance(remote_last_seen, datetime.datetime):
             if now - remote_last_seen > REMOTE_QR_REMOTE_STALE:
-                REMOTE_QR_SESSIONS.pop(session_id, None)
-                return (
-                    jsonify(
-                        ok=False,
-                        error="Η φορητή συσκευή αποσυνδέθηκε.",
-                        disconnected=True,
-                    ),
-                    410,
-                )
+                # μην διαγράφεις τη συνεδρία: κράτα την ζωντανή αλλά αποσύνδεσε το κινητό
+                entry["attached"] = False
+                entry["remote_last_seen"] = None
 
         entry["last_seen"] = now
         version = entry.get("version", 0)
@@ -5121,6 +5153,9 @@ def api_qr_remote_status():
             "auto_submit_enabled": bool(entry.get("auto_submit_enabled")),
         }
 
+        # Signal processing lock to mobile (blocks scans while desktop saves)
+        response["excel_updating"] = _is_remote_processing(entry)
+
     if payload_data:
         response["payload"] = payload_data
 
@@ -5128,14 +5163,11 @@ def api_qr_remote_status():
     if isinstance(remote_last_seen_val, datetime.datetime):
         response["remote_last_seen"] = remote_last_seen_val.isoformat()
 
-    summary_version = entry.get("summary_version") or 0
-    if summary_version:
-        last_summary = entry.get("summary_last_delivered") or 0
-        if summary_version > last_summary:
-            if entry.get("summary_state") is not None:
-                response["summary_state"] = entry["summary_state"]
-            response["summary_version"] = summary_version
-            entry["summary_last_delivered"] = summary_version
+    summary_version = int(entry.get("summary_version") or 0)
+    response["summary_version"] = summary_version
+    # Always include the latest summary payload so mobile can mirror desktop state
+    if entry.get("summary_state") is not None:
+        response["summary_state"] = entry["summary_state"]
 
     control_version = entry.get("control_version") or 0
     if control_version:
@@ -5225,11 +5257,13 @@ def api_qr_remote_attach():
             "auto_submit_enabled": bool(entry.get("auto_submit_enabled")),
         }
 
-        summary_version = entry.get("summary_version") or 0
-        if summary_version:
-            response["summary_version"] = summary_version
-            if entry.get("summary_state") is not None:
-                response["summary_state"] = entry["summary_state"]
+        # Include current processing state so mobile can block scans immediately on attach
+        response["excel_updating"] = _is_remote_processing(entry)
+
+        summary_version = int(entry.get("summary_version") or 0)
+        response["summary_version"] = summary_version
+        if entry.get("summary_state") is not None:
+            response["summary_state"] = entry["summary_state"]
 
         remote_last_seen = entry.get("remote_last_seen")
         if isinstance(remote_last_seen, datetime.datetime):
@@ -5291,11 +5325,12 @@ def api_qr_remote_heartbeat():
             "auto_submit_enabled": bool(entry.get("auto_submit_enabled")),
         }
 
-        summary_version = entry.get("summary_version") or 0
-        if summary_version:
-            response["summary_version"] = summary_version
-            if entry.get("summary_state") is not None:
-                response["summary_state"] = entry["summary_state"]
+        response["excel_updating"] = _is_remote_processing(entry)
+
+        summary_version = int(entry.get("summary_version") or 0)
+        response["summary_version"] = summary_version
+        if entry.get("summary_state") is not None:
+            response["summary_state"] = entry["summary_state"]
 
         remote_last_seen = entry.get("remote_last_seen")
         if isinstance(remote_last_seen, datetime.datetime):
@@ -5521,6 +5556,7 @@ def mobile_qr_scanner():
                 expires_at="",
                 repeat_enabled=False,
                 auto_submit_enabled=False,
+                active_year=None,
                 error="Η συνεδρία δεν είναι διαθέσιμη.",
             ),
             400,
@@ -5540,6 +5576,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Η συνεδρία δεν βρέθηκε ή έληξε.",
                 ),
                 404,
@@ -5554,6 +5591,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Ο σύνδεσμος δεν είναι πλέον έγκυρος.",
                 ),
                 403,
@@ -5571,6 +5609,7 @@ def mobile_qr_scanner():
                     expires_at="",
                     repeat_enabled=False,
                     auto_submit_enabled=False,
+                    active_year=None,
                     error="Η συνεδρία έληξε. Δημιούργησε νέο σύνδεσμο από τον υπολογιστή.",
                 ),
                 410,
@@ -5584,6 +5623,10 @@ def mobile_qr_scanner():
         expires_iso = expires_at.isoformat() if expires_at else ""
         repeat_enabled = bool(entry.get("repeat_enabled"))
 
+        # Get active fiscal year
+        from epsilon_bridge_multiclient_strict import _read_active_fiscal_year
+        active_year = _read_active_fiscal_year("data")
+
     return render_template(
         "mobile_qr_scanner.html",
         session_id=session_id,
@@ -5592,6 +5635,7 @@ def mobile_qr_scanner():
         expires_at=expires_iso,
         repeat_enabled=repeat_enabled,
         auto_submit_enabled=bool(entry.get("auto_submit_enabled")),
+        active_year=active_year,
         error=None,
     )
 
@@ -7791,34 +7835,8 @@ def search():
                                 else:
                                     # Invoice flow (κανονικά)
                                     invoice_lines = []
-                                    
-                                    # ΦΙΛΤΡΑΡΙΣΜΑ: Αποκλεισμός "Instance #" γραμμών (ΚΑΙ ΓΙΑ Β ΚΑΙ ΓΙΑ Γ ΚΑΤΗΓΟΡΙΑ)
-                                    # Αυτές δημιουργούνται από τα epsilon_bridge modules για λογιστικούς λόγους
-                                    # και δεν πρέπει να εμφανίζονται στο modal summary
-                                    
-                                    # Εντοπισμός κύριων γραμμών (exclude Instance #, ΦΠΑ accounts, προμηθευτή)
-                                    main_docs = []
-                                    for inst in docs_for_mark:
-                                        desc = str(inst.get("description", ""))
-                                        lcode = str(inst.get("lcode", "") or inst.get("LCODE", "") or "")
-                                        cat = str(inst.get("category", ""))
-                                        
-                                        # Αποκλείουμε:
-                                        # 1. Γραμμές με "Instance #" (generated/duplicate data) - ΓΙΑ ΟΛΟΥΣ
-                                        # 2. Λογαριασμούς ΦΠΑ (lcode που ξεκινάει με 54) - Γ Κατηγορία
-                                        # 3. Λογαριασμό προμηθευτή (cat = "προμηθευτής") - Γ Κατηγορία
-                                        is_generated = "Instance #" in desc
-                                        is_vat_account = lcode.startswith("54")
-                                        is_supplier = "προμηθευτής" in cat.lower()
-                                        
-                                        if not (is_generated or is_vat_account or is_supplier):
-                                            main_docs.append(inst)
-                                    
-                                    # Χρήση κύριων γραμμών αν υπάρχουν, αλλιώς όλες
-                                    docs_to_process = main_docs if main_docs else docs_for_mark
-                                    
-                                    # Δημιουργούμε invoice_lines από τις φιλτραρισμένες γραμμές
-                                    for idx, inst in enumerate(docs_to_process):
+                                    seen_vat_categories = set()
+                                    for idx, inst in enumerate(docs_for_mark):
                                         line_id = inst.get("id") or inst.get("line_id") or inst.get("LineId") or f"{mark}_inst{idx}"
                                         description = pick(inst, "description", "desc", "Description", "Name", "Name_issuer") or f"Instance #{idx+1}"
                                         amount = pick(inst, "amount", "lineTotal", "totalNetValue", "totalValue", "value", default="")
@@ -7826,21 +7844,25 @@ def search():
                                         raw_vatcat = pick(inst, "vatCategory", "vat_category", "vatClass", "vatCategoryCode", "VATCategory", "vatCat", default="")
                                         mapped_vatcat = VAT_MAP.get(str(raw_vatcat).strip(), raw_vatcat) if raw_vatcat else ""
                                         
-                                        line_obj = {
+                                        # Για Γ κατηγορία: αποφυγή διπλών γραμμών (κρατάμε μόνο την πρώτη εμφάνιση κάθε vatCategory)
+                                        # Αυτό αποφεύγει τις επιπλέον γραμμές ΦΠΑ που εμφανίζονται σε τιμολόγια με πολλές γραμμές
+                                        if mapped_vatcat and mapped_vatcat in seen_vat_categories:
+                                            continue
+                                        if mapped_vatcat:
+                                            seen_vat_categories.add(mapped_vatcat)
+                                        
+                                        invoice_lines.append({
                                             "id": line_id,
                                             "description": description,
                                             "amount": amount,
                                             "vat": vat_rate,
                                             "category": "",
                                             "vatCategory": mapped_vatcat
-                                        }
-                                        
-                                        invoice_lines.append(line_obj)
+                                        })
 
                                     first = docs_for_mark[0]
-                                    # Υπολογισμός totals από τις κύριες γραμμές (όχι από ΦΠΑ/προμηθευτή)
-                                    total_net = sum(float_from_comma(pick(d, "totalNetValue", "totalNet", "lineTotal", default=0)) for d in docs_to_process)
-                                    total_vat = sum(float_from_comma(pick(d, "totalVatAmount", "totalVat", default=0)) for d in docs_to_process)
+                                    total_net = sum(float_from_comma(pick(d, "totalNetValue", "totalNet", "lineTotal", default=0)) for d in docs_for_mark)
+                                    total_vat = sum(float_from_comma(pick(d, "totalVatAmount", "totalVat", default=0)) for d in docs_for_mark)
                                     total_value = total_net + total_vat
 
                                     NEGATIVE_TYPES = {"5.1", "5.2", "11.4"}
@@ -7938,17 +7960,12 @@ def search():
                                                         "lines": []
                                                     }
                                                     for ln in invoice_lines:
-                                                        # Προεπιλογή category από τις διαθέσιμες κατηγορίες πελάτη
-                                                        line_category = ln.get("category", "") or ""
-                                                        if not line_category and customer_categories:
-                                                            line_category = customer_categories[0]
-                                                        
                                                         epsilon_entry["lines"].append({
                                                             "id": ln.get("id", ""),
                                                             "description": ln.get("description", ""),
                                                             "amount": ln.get("amount", ""),
                                                             "vat": ln.get("vat", ""),
-                                                            "category": line_category,
+                                                            "category": ln.get("category", "") or "",
                                                             "vat_category": ln.get("vatCategory", "") or ""
                                                         })
                                                     eps_list.append(epsilon_entry)
@@ -8795,6 +8812,13 @@ def save_summary():
     """
     import os, json, re
 
+    _signal_remote_processing_start()
+
+    @after_this_request
+    def _clear_processing(response):
+        _signal_remote_processing_end()
+        return response
+
     try:
         from datetime import datetime as _dt, timezone as _tz
     except Exception:
@@ -9139,102 +9163,29 @@ def save_summary():
         try:
             existing = epsilon_cache[existing_index]
             existing_lines = existing.get("lines", []) or []
-            
-            # ΚΑΘΑΡΙΣΜΟΣ: Αφαίρεση Instance #N γραμμών από existing_lines
-            # (αν υπάρχουν από παλαιότερη λανθασμένη αποθήκευση)
-            original_count = len(existing_lines)
-            existing_lines = [
-                l for l in existing_lines 
-                if not str(l.get("description", "")).strip().startswith("Instance #")
-            ]
-            if len(existing_lines) < original_count:
-                log.info("save_summary: Cleaned %d Instance lines from existing entry", 
-                        original_count - len(existing_lines))
-            
             by_id = {str(l.get("id","")): l for l in existing_lines if l.get("id") is not None}
-            
-            # Δημιουργία map από vatCategory σε category για να συμπληρώσουμε τις κενές
-            vat_to_category = {}
-            for ln in summary["lines"]:
-                # Αγνόησε Instance #N γραμμές κατά τη δημιουργία του map
-                desc = str(ln.get("description", "")).strip()
-                if desc.startswith("Instance #"):
-                    continue
-                    
-                vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-                cat = ln.get("category", "")
-                if vat_cat and cat:
-                    # Κρατάμε την πρώτη μη-κενή category για κάθε VAT category
-                    if vat_cat not in vat_to_category:
-                        vat_to_category[vat_cat] = cat
-            
-            log.info("save_summary: vat_to_category map (reclassification): %s", vat_to_category)
-            log.info("save_summary: existing_lines count: %d, by_id count: %d", len(existing_lines), len(by_id))
-            
             updated = False
             for ln in summary["lines"]:
-                # Αγνόησε Instance #N γραμμές κατά την ενημέρωση
-                desc = str(ln.get("description", "")).strip()
-                if desc.startswith("Instance #"):
-                    log.info("save_summary: Skipping Instance line in reclassification: %s", desc)
-                    continue
-                
                 lid = str(ln.get("id","")); 
                 if not lid: 
                     continue
                 if lid in by_id:
                     el = by_id[lid]
                     new_cat = ln.get("category","") or ""
-                    log.info("save_summary: Updating line %s from summary: category=%s", lid, new_cat)
-                    
-                    # Αν δεν έχει category, ψάξε από το vat_to_category map
-                    if not new_cat:
-                        vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-                        if vat_cat and vat_cat in vat_to_category:
-                            new_cat = vat_to_category[vat_cat]
-                        elif is_receipt:
-                            new_cat = "αποδειξακια"
-                    
+                    # Για αποδείξεις, αν λείπει στο υπάρχον -> γράψε "αποδειξακια"
+                    if not new_cat and is_receipt:
+                        new_cat = "αποδειξακια"
                     if new_cat and str(el.get("category","")) != new_cat:
                         el["category"] = new_cat; updated = True
                     if ln.get("vatCategory") and str(el.get("vat_category","")) != ln.get("vatCategory"):
                         el["vat_category"] = ln.get("vatCategory"); updated = True
                 else:
-                    # Για νέα γραμμή που προστίθεται
-                    line_cat = ln.get("category","") or ""
-                    if not line_cat:
-                        vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-                        if vat_cat and vat_cat in vat_to_category:
-                            line_cat = vat_to_category[vat_cat]
-                        elif is_receipt:
-                            line_cat = "αποδειξακια"
-                    
                     existing_lines.append({
                         "id": lid, "description": ln.get("description",""),
                         "amount": ln.get("amount",""), "vat": ln.get("vat",""),
-                        "category": line_cat,
+                        "category": (ln.get("category","") or ("αποδειξακια" if is_receipt else "")),
                         "vat_category": ln.get("vatCategory","") or ""
                     }); updated = True
-
-            # Δεύτερο pass: ενημέρωση γραμμών που δεν ήταν στο summary (Instance #N γραμμές)
-            # βασιζόμενο στο vat_to_category map
-            summary_ids = {str(ln.get("id","")) for ln in summary["lines"] if ln.get("id")}
-            log.info("save_summary: summary_ids (lines in summary): %s", summary_ids)
-            
-            for el in existing_lines:
-                el_id = str(el.get("id",""))
-                # Αν η γραμμή δεν ήταν στο summary (δηλ. δεν ενημερώθηκε ακόμα)
-                if el_id not in summary_ids:
-                    vat_cat = el.get("vat_category","")
-                    current_cat = el.get("category","")
-                    # Αν έχει VAT και το vat_to_category map έχει mapping
-                    if vat_cat and vat_cat in vat_to_category:
-                        mapped_cat = vat_to_category[vat_cat]
-                        log.info("save_summary: Updating %s: VAT=%s, current_cat=%s -> mapped_cat=%s", el_id, vat_cat, current_cat, mapped_cat)
-                        if str(current_cat) != mapped_cat:
-                            el["category"] = mapped_cat; updated = True
-                    else:
-                        log.info("save_summary: NOT updating %s: VAT=%s not in vat_to_category map or no VAT", el_id, vat_cat)
 
             # Ενημέρωση MTYPE στο top-level του παραστατικού (αν υπάρχει στο summary)
             new_mtype = summary.get("mtype","") or ""
@@ -9397,42 +9348,13 @@ def save_summary():
             "AFM": summary.get("AFM","") or vat,
             "lines": []
         }
-        
-        # Δημιουργία map από vatCategory σε category για να συμπληρώσουμε τις κενές
-        vat_to_category = {}
         for ln in summary["lines"]:
-            vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-            cat = ln.get("category", "")
-            if vat_cat and cat:
-                # Κρατάμε την πρώτη μη-κενή category για κάθε VAT category
-                if vat_cat not in vat_to_category:
-                    vat_to_category[vat_cat] = cat
-        
-        for ln in summary["lines"]:
-            # ΦΙΛΤΡΑΡΙΣΜΑ: Αγνόησε Instance #N γραμμές (VAT accounts, supplier lines)
-            # που δημιουργούνται από το epsilon_bridge για λογιστικούς λόγους
-            # και δεν πρέπει να αποθηκευτούν στο epsilon cache
-            desc = str(ln.get("description", "")).strip()
-            if desc.startswith("Instance #"):
-                log.info("save_summary: Skipping Instance line: %s", desc)
-                continue
-            
-            line_category = ln.get("category", "")
-            
-            # Αν η γραμμή δεν έχει category αλλά έχει vatCategory, ψάξε από το map
-            if not line_category:
-                vat_cat = ln.get("vatCategory", "") or ln.get("vat_category", "")
-                if vat_cat and vat_cat in vat_to_category:
-                    line_category = vat_to_category[vat_cat]
-                elif is_receipt:
-                    line_category = "αποδειξακια"
-            
             epsilon_entry["lines"].append({
                 "id": ln.get("id",""),
                 "description": ln.get("description",""),
                 "amount": ln.get("amount",""),
                 "vat": ln.get("vat",""),
-                "category": line_category,
+                "category": (ln.get("category","") or ("αποδειξακια" if is_receipt else "")),
                 "vat_category": ln.get("vatCategory","") or ""
             })
 
@@ -9486,6 +9408,13 @@ def save_summary():
 
 @app.route("/save_receipt", methods=["POST"])
 def save_receipt():
+    _signal_remote_processing_start()
+
+    @after_this_request
+    def _clear_processing(response):
+        _signal_remote_processing_end()
+        return response
+
     receipt = request.form.to_dict()
     vat = receipt.get("issuer_vat")
     year = receipt.get("issue_date")[-4:]
@@ -9610,6 +9539,13 @@ def api_confirm_receipt():
       - Γράφει/ενημερώνει Excel (μία φορά).
     Επιστρέφει JSON: { ok, saved, mark, excel_written, updated_existing }
     """
+    _signal_remote_processing_start()
+
+    @after_this_request
+    def _clear_processing(response):
+        _signal_remote_processing_end()
+        return response
+
     try:
         payload = request.get_json(force=True, silent=True) or {}
     except Exception:
