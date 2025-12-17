@@ -475,27 +475,26 @@ def firebase_login():
             {'email': firebase_email}
         )
         
-        # Redirect to group selection if no active group set
-        if not session.get('active_group'):
-            user_groups = list(getattr(user, 'groups', []) or [])
-            if len(user_groups) == 1:
-                session['active_group'] = user_groups[0].name
-                flash(f'Καλώς ήρθατε!', 'success')
-                return redirect(url_for('home'))
-            else:
-                if user_groups:
-                    flash('Επίλεξε ενεργή ομάδα για να συνεχίσεις.', 'info')
-                else:
-                    flash('Δεν έχεις ακόμη αντιστοιχιστεί σε ομάδα.', 'warning')
-                return redirect(url_for('auth.list_groups'))
+        # Handle active group selection after login
+        # Always check user's groups and set/clear active_group appropriately
+        user_groups = list(getattr(user, 'groups', []) or [])
         
-        # After successful login, if an active group exists, start a lazy-pull
-        # via a small sync page that shows a progress modal to the user.
-        if session.get('active_group'):
-            return redirect(url_for('firebase_auth.sync_start_pull', group=session.get('active_group')))
-
-        flash(f'Καλώς ήρθατε!', 'success')
-        return redirect(url_for('home'))
+        if len(user_groups) == 0:
+            # No groups: clear active_group and redirect to list
+            session.pop('active_group', None)
+            flash('Δεν έχεις ακόμη αντιστοιχιστεί σε ομάδα.', 'warning')
+            return redirect(url_for('auth.list_groups'))
+        elif len(user_groups) == 1:
+            # Exactly one group: auto-set as active and continue
+            session['active_group'] = user_groups[0].name
+            flash(f'Καλώς ήρθατε!', 'success')
+            # Start lazy-pull via sync page
+            return redirect(url_for('firebase_auth.sync_start_pull', group=session['active_group']))
+        else:
+            # Multiple groups: redirect to list to select one
+            session.pop('active_group', None)  # Clear any stale active_group
+            flash('Επίλεξε ενεργή ομάδα για να συνεχίσεις.', 'info')
+            return redirect(url_for('auth.list_groups'))
     
     return render_template('auth/login.html')
 

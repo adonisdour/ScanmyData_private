@@ -12,7 +12,11 @@
     <!-- Flash messages are shown in base.html, no need to duplicate here -->
 
     <style>
-      ul li.selected { background: #e6f7ff; border-color: #38bdf8; }
+      ul li.selected { 
+        background: #dbeafe; 
+        border: 2px solid #0ea5e9;
+        border-width: 2px;
+      }
       
       /* Remove member button styling */
       .remove-member-btn {
@@ -49,11 +53,12 @@
         color: #e5e7eb;
       }
 
-      /* Dark mode adjustments for selection and modals */
+      /* Dark mode adjustments for selection */
       [data-theme="dark"] ul li.selected {
-        background-color: #083344; /* deep teal / highlighted row */
-        border-color: #0369a1;
-        color: #f8fafc;
+        background-color: #164e63; /* darker teal for dark mode */
+        border: 2px solid #0891b2;
+        border-width: 2px;
+        color: #e0f2fe;
       }
 
       /* leave-group button should match logout color */
@@ -162,7 +167,7 @@
               <span class="member-pill inline-block px-2 py-1 border rounded mr-1" style="display:inline-flex;align-items:center;gap:6px;">
                 <span>{{ ug.user.username }}</span>
                 <em class="text-xs text-gray-500">({{ ug.role }})</em>
-                {% if current_user.is_authenticated and current_user.role_for_group(g) == 'admin' %}
+                {% if current_user.is_authenticated and current_user.role_for_group(g) == 'admin' and ug.user.id != current_user.id %}
                   <button class="remove-member-btn" data-username="{{ ug.user.username }}" data-group="{{ g.name }}" style="margin-left:6px;">✖</button>
                 {% endif %}
               </span>
@@ -299,8 +304,8 @@
             const resp = await fetch("{{ url_for('auth.leave_group') }}", {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: 'group='+encodeURIComponent(group)});
             const data = await resp.json();
             if(data.ok){
-              // remove the group li from DOM
-              btn.closest('li').remove();
+              // Reload the page to reflect session changes and group removal
+              window.location.reload();
             } else {
               await showModalAlert('Σφάλμα', (isAdmin ? 'Διαγραφή' : 'Αποχώρηση') + ' απέτυχε: '+(data.error||'άγνωστο σφάλμα'));
             }
