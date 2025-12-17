@@ -13,7 +13,41 @@
 
     <style>
       ul li.selected { background: #e6f7ff; border-color: #38bdf8; }
-      .member-pill button { border: none; background: transparent; cursor: pointer; color: #c53030; }
+      
+      /* Remove member button styling */
+      .remove-member-btn {
+        border: none;
+        background: #fee2e2;
+        color: #991b1b;
+        cursor: pointer;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+      .remove-member-btn:hover {
+        background: #fca5a5;
+        color: #7f1d1d;
+      }
+      [data-theme="dark"] .remove-member-btn {
+        background: #7f1d1d;
+        color: #fee2e2;
+      }
+      [data-theme="dark"] .remove-member-btn:hover {
+        background: #991b1b;
+        color: #ffffff;
+      }
+
+      /* Member pill styling */
+      .member-pill {
+        background: #f3f4f6;
+        border: 1px solid #d1d5db;
+      }
+      [data-theme="dark"] .member-pill {
+        background: #374151;
+        border: 1px solid #4b5563;
+        color: #e5e7eb;
+      }
 
       /* Dark mode adjustments for selection and modals */
       [data-theme="dark"] ul li.selected {
@@ -26,12 +60,22 @@
       .leave-group-btn {
         background: #fee2e2;
         color: #7f1d1d;
-        border: 1px solid transparent;
+        border: 1px solid #fca5a5;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+      .leave-group-btn:hover {
+        background: #fca5a5;
+        color: #991b1b;
       }
       [data-theme="dark"] .leave-group-btn {
         background: #7f1d1d;
+        color: #fee2e2;
+        border: 1px solid #991b1b;
+      }
+      [data-theme="dark"] .leave-group-btn:hover {
+        background: #991b1b;
         color: #ffffff;
-        border: 1px solid rgba(0,0,0,0.08);
       }
 
       /* Modal visual improvements έΑΦ larger, more readable */
@@ -87,8 +131,8 @@
             <input id="assign-username" type="text" name="username" placeholder="Όνομα χρήστη ή email" class="px-3 py-2 border rounded flex-1" />
             <div id="user-check-result" class="text-sm"></div>
           </div>
-          <select name="group" class="px-3 py-2 border rounded">
-            <option value="">Επιλέξτε ομάδα...</option>
+          <select name="group" class="px-3 py-2 border rounded" required>
+            <option value="">-- Επιλέξτε ομάδα --</option>
             {% for g in admin_groups %}
             <option value="{{ g.name }}">{{ g.name }}</option>
             {% endfor %}

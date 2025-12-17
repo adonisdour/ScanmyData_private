@@ -901,6 +901,16 @@ try:
     firebase_config.init_firebase()
     logger.info("Firebase initialized")
     
+    # Initialize Firestore sync (must be after db.create_all() and Firebase init)
+    try:
+        from firestore_sync import init_firestore_sync
+        init_firestore_sync(app)
+        logger.info("Firestore sync initialized")
+    except ImportError:
+        logger.debug("Firestore sync module not available")
+    except Exception as e:
+        logger.warning(f"Firestore sync initialization failed: {e}")
+    
     # Register Firebase Auth routes
     from firebase_auth_routes import firebase_auth_bp
     app.register_blueprint(firebase_auth_bp)

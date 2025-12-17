@@ -367,19 +367,36 @@ class FirebaseAuthHandler:
             return False, None, str(e)
 
     @staticmethod
-    def add_user_to_group(uid: str, group_name: str) -> Tuple[bool, Optional[str]]:
+    def add_user_to_group(uid: str, group_name: str, role: str = 'member') -> Tuple[bool, Optional[str]]:
         """Add user to a group"""
         try:
             if not firebase_config.is_firebase_enabled():
                 return False, "Firebase not enabled"
             
+            # Try Firestore first if enabled
+            try:
+                from firestore_sync import fs_atomic_add_user_to_group, FIRESTORE_ENABLED
+                if FIRESTORE_ENABLED:
+                    result = fs_atomic_add_user_to_group(uid, group_name, role)
+                    if result:
+                        logger.info(f"User {uid} added to group {group_name} via Firestore")
+                        return True, None
+            except ImportError:
+                logger.debug("Firestore sync not available, using RTDB fallback")
+            except Exception as e:
+                logger.warning(f"Firestore add failed: {e}, falling back to RTDB")
+            
+            # Fallback to RTDB
             # Add to user's groups list
             user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
             if user_profile:
                 if 'groups' not in user_profile:
-                    user_profile['groups'] = []
-                if group_name not in user_profile['groups']:
-                    user_profile['groups'].append(group_name)
+                    user_profile['groups'] = {}
+                if 'group_roles' not in user_profile:
+                    user_profile['group_roles'] = {}
+                
+                user_profile['groups'][group_name] = role
+                user_profile['group_roles'][group_name] = role
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
             # Add to group's members list
@@ -387,11 +404,26 @@ class FirebaseAuthHandler:
             if group_data:
                 if 'members' not in group_data:
                     group_data['members'] = []
-                if uid not in group_data['members']:
-                    group_data['members'].append(uid)
+                if 'admins' not in group_data:
+                    group_data['admins'] = []
+                
+                # Remove from both lists first
+                if uid in group_data['members']:
+                    group_data['members'].remove(uid)
+                if uid in group_data['admins']:
+                    group_data['admins'].remove(uid)
+                
+                # Add to appropriate list
+                if role == 'admin':
+                    if uid not in group_data['admins']:
+                        group_data['admins'].append(uid)
+                else:
+                    if uid not in group_data['members']:
+                        group_data['members'].append(uid)
+                
                 firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
             
-            logger.info(f"User {uid} added to group: {group_name}")
+            logger.info(f"User {uid} added to group: {group_name} (RTDB)")
             
             # Log activity
             firebase_config.firebase_log_activity(
@@ -414,19 +446,55 @@ class FirebaseAuthHandler:
             if not firebase_config.is_firebase_enabled():
                 return False, "Firebase not enabled"
             
+            # Try Firestore first if enabled
+            try:
+                from firestore_sync import fs_atomic_remove_user_from_group, FIRESTORE_ENABLED
+                if FIRESTORE_ENABLED:
+                    result = fs_atomic_remove_user_from_group(uid, group_name)
+                    if result:
+                        logger.info(f"User {uid} removed from group {group_name} via Firestore")
+                        return True, None
+            except ImportError:
+                logger.debug("Firestore sync not available, using RTDB fallback")
+            except Exception as e:
+                logger.warning(f"Firestore remove failed: {e}, falling back to RTDB")
+            
+            # Fallback to RTDB
             # Remove from user's groups list
             user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
-            if user_profile and 'groups' in user_profile:
-                user_profile['groups'] = [g for g in user_profile['groups'] if g != group_name]
+            if user_profile:
+                groups = user_profile.get('groups', {})
+                if isinstance(groups, dict):
+                    if group_name in groups:
+                        del groups[group_name]
+                else:
+                    # Handle legacy list format
+                    groups = [g for g in groups if g != group_name]
+                
+                group_roles = user_profile.get('group_roles', {})
+                if isinstance(group_roles, dict) and group_name in group_roles:
+                    del group_roles[group_name]
+                
+                user_profile['groups'] = groups
+                user_profile['group_roles'] = group_roles
                 firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
             
             # Remove from group's members list
             group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data and 'members' in group_data:
-                group_data['members'] = [m for m in group_data['members'] if m != uid]
+            if group_data:
+                members = group_data.get('members', [])
+                admins = group_data.get('admins', [])
+                
+                if uid in members:
+                    members.remove(uid)
+                if uid in admins:
+                    admins.remove(uid)
+                
+                group_data['members'] = members
+                group_data['admins'] = admins
                 firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
             
-            logger.info(f"User {uid} removed from group: {group_name}")
+            logger.info(f"User {uid} removed from group: {group_name} (RTDB)")
             
             # Log activity
             firebase_config.firebase_log_activity(
@@ -449,9 +517,27 @@ class FirebaseAuthHandler:
             if not firebase_config.is_firebase_enabled():
                 return []
             
+            # Try Firestore first if enabled
+            try:
+                from firestore_sync import fs_get_user_groups, FIRESTORE_ENABLED
+                if FIRESTORE_ENABLED:
+                    groups_dict = fs_get_user_groups(uid)
+                    if groups_dict:
+                        return list(groups_dict.keys())
+            except ImportError:
+                logger.debug("Firestore sync not available, using RTDB fallback")
+            except Exception as e:
+                logger.debug(f"Firestore get failed: {e}, falling back to RTDB")
+            
+            # Fallback to RTDB
             user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
-            if user_profile and 'groups' in user_profile:
-                return user_profile['groups']
+            if user_profile:
+                groups = user_profile.get('groups', {})
+                if isinstance(groups, dict):
+                    return list(groups.keys())
+                else:
+                    # Handle legacy list format
+                    return groups if isinstance(groups, list) else []
             return []
             
         except Exception as e:
@@ -465,9 +551,26 @@ class FirebaseAuthHandler:
             if not firebase_config.is_firebase_enabled():
                 return []
             
+            # Try Firestore first if enabled
+            try:
+                from firestore_sync import fs_get_group_members, FIRESTORE_ENABLED
+                if FIRESTORE_ENABLED:
+                    group_data = fs_get_group_members(group_name)
+                    if group_data:
+                        members = group_data.get('members', [])
+                        admins = group_data.get('admins', [])
+                        return list(set(members + admins))
+            except ImportError:
+                logger.debug("Firestore sync not available, using RTDB fallback")
+            except Exception as e:
+                logger.debug(f"Firestore get failed: {e}, falling back to RTDB")
+            
+            # Fallback to RTDB
             group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-            if group_data and 'members' in group_data:
-                return group_data['members']
+            if group_data:
+                members = group_data.get('members', [])
+                admins = group_data.get('admins', [])
+                return list(set(members + admins))
             return []
             
         except Exception as e:
@@ -574,30 +677,64 @@ def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[
         if not firebase_config.is_firebase_enabled():
             return False, "Firebase not enabled"
         
+        # Try Firestore first if enabled
+        try:
+            from firestore_sync import fs_atomic_set_user_group_role, FIRESTORE_ENABLED
+            if FIRESTORE_ENABLED:
+                result = fs_atomic_set_user_group_role(uid, group_name, role)
+                if result:
+                    logger.info(f"User {uid} role set to '{role}' in group {group_name} via Firestore")
+                    return True, None
+        except ImportError:
+            logger.debug("Firestore sync not available, using RTDB fallback")
+        except Exception as e:
+            logger.warning(f"Firestore role update failed: {e}, falling back to RTDB")
+        
+        # Fallback to RTDB
         # Update user profile
         user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
         if user_profile:
+            groups = user_profile.get('groups', {})
+            if isinstance(groups, list):
+                # Convert legacy list format to dict
+                groups = {g: 'member' for g in groups}
+            
+            if group_name not in groups:
+                groups[group_name] = role
+            else:
+                groups[group_name] = role
+            
             if 'group_roles' not in user_profile:
                 user_profile['group_roles'] = {}
             user_profile['group_roles'][group_name] = role
+            user_profile['groups'] = groups
             firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
         
         # Update group data
         group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
         if group_data:
-            if 'admins' not in group_data:
-                group_data['admins'] = []
+            members = group_data.get('members', [])
+            admins = group_data.get('admins', [])
             
+            # Remove from both lists first
+            if uid in members:
+                members.remove(uid)
+            if uid in admins:
+                admins.remove(uid)
+            
+            # Add to appropriate list
             if role == 'admin':
-                if uid not in group_data['admins']:
-                    group_data['admins'].append(uid)
+                if uid not in admins:
+                    admins.append(uid)
             else:
-                if uid in group_data['admins']:
-                    group_data['admins'].remove(uid)
+                if uid not in members:
+                    members.append(uid)
             
+            group_data['members'] = members
+            group_data['admins'] = admins
             firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
         
-        logger.info(f"User {uid} role set to '{role}' in group: {group_name}")
+        logger.info(f"User {uid} role set to '{role}' in group: {group_name} (RTDB)")
         
         # Log activity
         firebase_config.firebase_log_activity(
@@ -615,54 +752,110 @@ def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[
 
 
 def firebase_get_user_role_in_group(uid: str, group_name: str) -> Optional[str]:
-    """Get user's role in a specific group"""
+    """Get user's role in a specific group.
+
+    Firestore-first with RTDB fallback to ensure correct admin/member detection
+    in templates and dropdowns.
+    """
     try:
         if not firebase_config.is_firebase_enabled():
             return None
-        
+
+        # Try Firestore first
+        try:
+            from firestore_sync import fs_get_user_role_in_group, FIRESTORE_ENABLED
+            if FIRESTORE_ENABLED:
+                role = fs_get_user_role_in_group(uid, group_name)
+                if role:
+                    return role
+        except ImportError:
+            logger.debug("Firestore module not available for role lookup, using RTDB fallback")
+        except Exception as e:
+            logger.debug(f"Firestore role lookup failed: {e}; falling back to RTDB")
+
+        # Fallback to RTDB (legacy structure)
         user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
-        if user_profile and 'group_roles' in user_profile:
-            return user_profile['group_roles'].get(group_name, 'member')
-        
-        return 'member'  # Default role
-        
+        if user_profile:
+            # Support both dict style and legacy list
+            group_roles = user_profile.get('group_roles') or {}
+            if isinstance(group_roles, dict):
+                return group_roles.get(group_name, 'member')
+            # If only 'groups' list exists, treat as member
+            groups = user_profile.get('groups') or []
+            if isinstance(groups, list) and group_name in groups:
+                return 'member'
+
+        # Default when unknown: member
+        return 'member'
+
     except Exception as e:
         logger.error(f"Failed to get role for user {uid} in group {group_name}: {e}")
         return None
 
 
 def firebase_delete_group(group_name: str, admin_uid: str) -> Tuple[bool, Optional[str]]:
-    """Delete a group (admin only)"""
+    """Delete a group (admin only). Firestore-first with RTDB fallback."""
     try:
         if not firebase_config.is_firebase_enabled():
             return False, "Firebase not enabled"
-        
+
         # Check if user is admin
         user_role = firebase_get_user_role_in_group(admin_uid, group_name)
         if user_role != 'admin':
             return False, "Only group admins can delete groups"
-        
-        # Get group members to remove group from their profiles
-        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
-        if group_data and 'members' in group_data:
-            for member_uid in group_data['members']:
-                user_profile = firebase_config.firebase_read_data(f'/users/{member_uid}')
-                if user_profile:
-                    # Remove group from user's groups
-                    if 'groups' in user_profile and group_name in user_profile['groups']:
-                        user_profile['groups'].remove(group_name)
-                    
-                    # Remove group role
-                    if 'group_roles' in user_profile and group_name in user_profile['group_roles']:
-                        del user_profile['group_roles'][group_name]
-                    
-                    firebase_config.firebase_write_data(f'/users/{member_uid}', user_profile)
-        
+
+        # Try Firestore first
+        try:
+            from firestore_sync import fs_delete_group, FIRESTORE_ENABLED
+            if FIRESTORE_ENABLED:
+                if fs_delete_group(group_name):
+                    logger.info(f"Group '{group_name}' deleted in Firestore by {admin_uid}")
+                    firebase_config.firebase_log_activity(
+                        admin_uid,
+                        'system',
+                        'group_deleted',
+                        {'group': group_name}
+                    )
+                    return True, None
+                else:
+                    logger.warning(f"Firestore delete failed for group '{group_name}', attempting RTDB fallback")
+        except ImportError:
+            logger.debug("Firestore module not available for delete, using RTDB fallback")
+        except Exception as e:
+            logger.warning(f"Firestore delete error for group '{group_name}': {e}; falling back to RTDB")
+
+        # RTDB fallback: remove group from users and delete group node
+        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}') or {}
+        members = group_data.get('members') or []
+        admins = group_data.get('admins') or []
+        all_uids = set(members) | set(admins)
+
+        for uid in all_uids:
+            user_profile = firebase_config.firebase_read_data(f'/users/{uid}') or {}
+            # Handle 'groups' as dict or list
+            groups_val = user_profile.get('groups')
+            if isinstance(groups_val, dict):
+                if group_name in groups_val:
+                    del groups_val[group_name]
+                user_profile['groups'] = groups_val
+            elif isinstance(groups_val, list):
+                if group_name in groups_val:
+                    groups_val.remove(group_name)
+                user_profile['groups'] = groups_val
+
+            # Handle 'group_roles' dict
+            group_roles = user_profile.get('group_roles') or {}
+            if isinstance(group_roles, dict) and group_name in group_roles:
+                del group_roles[group_name]
+                user_profile['group_roles'] = group_roles
+
+            firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
+
         # Delete group data
         firebase_config.firebase_delete_data(f'/groups/{group_name}')
-        
-        logger.info(f"Group '{group_name}' deleted by {admin_uid}")
-        
+
+        logger.info(f"Group '{group_name}' deleted in RTDB by {admin_uid}")
+
         # Log activity
         firebase_config.firebase_log_activity(
             admin_uid,
@@ -670,9 +863,9 @@ def firebase_delete_group(group_name: str, admin_uid: str) -> Tuple[bool, Option
             'group_deleted',
             {'group': group_name}
         )
-        
+
         return True, None
-        
+
     except Exception as e:
         logger.error(f"Failed to delete group {group_name}: {e}")
         return False, str(e)

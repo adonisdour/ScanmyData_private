@@ -787,57 +787,55 @@ def leave_group():
         if not ug:
             return jsonify({'ok': False, 'error': 'not a member'}), 400
 
-        # if admin and only admin, automatically delete the entire group
+        # If admin clicked, delete the entire group after confirmation (regardless of other admins)
         if ug.role == 'admin':
-            other_admins = [u for u in grp.user_groups if u.role == 'admin' and u.user_id != current_user.id]
-            if not other_admins:
-                # Get data folder before deleting group
-                data_folder = getattr(grp, 'data_folder', None)
+            # Get data folder before deleting group
+            data_folder = getattr(grp, 'data_folder', None)
 
-                # append deletion entry to group activity log BEFORE removing records/files
+            # append deletion entry to group activity log BEFORE removing records/files
+            try:
+                _append_group_log(grp, {
+                    'action': 'group_delete',
+                    'group': grp.name,
+                    'description': 'Διαγραφή ομάδας',
+                    'details': {'reason': 'admin_requested_delete'}
+                })
+            except Exception:
+                pass
+
+            # Delete all user memberships for this group
+            for user_group in list(grp.user_groups):
+                db.session.delete(user_group)
+
+            # Delete from Firebase/Firestore
+            if getattr(current_user, 'firebase_uid', None):
                 try:
-                    _append_group_log(grp, {
-                        'action': 'group_delete',
-                        'group': grp.name,
-                        'description': 'Διαγραφή ομάδας',
-                        'details': {'reason': 'last_admin_left'}
-                    })
+                    from firebase_auth_handlers_new import firebase_delete_group
+                    firebase_success, firebase_error = firebase_delete_group(grp.name, current_user.firebase_uid)
+                    if not firebase_success:
+                        current_app.logger.warning(f"Firebase group deletion failed: {firebase_error}")
+                except Exception as e:
+                    current_app.logger.error(f"Firebase group deletion error: {e}")
+            
+            # Delete the group itself
+            db.session.delete(grp)
+            
+            # Clear active group from session if it was this group
+            if session.get('active_group') == grp.name:
+                session.pop('active_group', None)
+            
+            db.session.commit()
+            
+            # Remove folder under data/ if exists
+            if data_folder:
+                import shutil, os
+                folder_path = os.path.join(current_app.root_path, 'data', data_folder)
+                try:
+                    shutil.rmtree(folder_path, ignore_errors=True)
                 except Exception:
                     pass
-
-                # Delete all user memberships for this group
-                for user_group in grp.user_groups:
-                    db.session.delete(user_group)
-
-                # Delete from Firebase if current user has firebase_uid
-                if getattr(current_user, 'firebase_uid', None):
-                    try:
-                        from firebase_auth_handlers_new import firebase_delete_group
-                        firebase_success, firebase_error = firebase_delete_group(grp.name, current_user.firebase_uid)
-                        if not firebase_success:
-                            current_app.logger.warning(f"Firebase group deletion (auto) failed: {firebase_error}")
-                    except Exception as e:
-                        current_app.logger.error(f"Firebase group deletion (auto) error: {e}")
-                
-                # Delete the group itself
-                db.session.delete(grp)
-                
-                # Clear active group from session if it was this group
-                if session.get('active_group') == grp.name:
-                    session.pop('active_group', None)
-                
-                db.session.commit()
-                
-                # Remove folder under data/ if exists
-                if data_folder:
-                    import shutil, os
-                    folder_path = os.path.join(current_app.root_path, 'data', data_folder)
-                    try:
-                        shutil.rmtree(folder_path, ignore_errors=True)
-                    except Exception:
-                        pass
-                
-                return jsonify({'ok': True, 'message': 'Group deleted successfully - you were the last admin'})
+            
+            return jsonify({'ok': True, 'message': 'Group deleted successfully'})
 
         # Remove from Firebase if current user has firebase_uid
         if getattr(current_user, 'firebase_uid', None):
