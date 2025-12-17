@@ -122,6 +122,17 @@ def signup():
             grp = Group(name=new_group_name, data_folder=safe_folder)
             db.session.add(grp)
             db.session.flush()
+            
+            # Create group in Firebase if enabled
+            if user.firebase_uid:
+                try:
+                    from firebase_auth_handlers_new import firebase_create_group
+                    success, error = firebase_create_group(new_group_name, user.firebase_uid, safe_folder)
+                    if not success:
+                        current_app.logger.warning(f"Firebase group creation failed: {error}")
+                except Exception as e:
+                    current_app.logger.error(f"Firebase group creation error: {e}")
+            
             # attach user as admin
             user.add_to_group(grp, role='admin')
             # ensure folder exists under data/
@@ -453,6 +464,16 @@ def delete_group():
             })
         except Exception:
             pass
+        # Delete from Firebase if current user has firebase_uid
+        if getattr(current_user, 'firebase_uid', None):
+            try:
+                from firebase_auth_handlers_new import firebase_delete_group
+                firebase_success, firebase_error = firebase_delete_group(group_name, current_user.firebase_uid)
+                if not firebase_success:
+                    current_app.logger.warning(f"Firebase group deletion failed: {firebase_error}")
+            except Exception as e:
+                current_app.logger.error(f"Firebase group deletion error: {e}")
+        
         # delete group (cascade removes memberships)
         db.session.delete(grp)
         db.session.commit()
@@ -585,6 +606,17 @@ def create_group():
     grp = Group(name=name, data_folder=safe_folder)
     db.session.add(grp)
     db.session.flush()
+    
+    # Create group in Firebase if current user has firebase_uid
+    if getattr(current_user, 'firebase_uid', None):
+        try:
+            from firebase_auth_handlers_new import firebase_create_group
+            firebase_success, firebase_error = firebase_create_group(name, current_user.firebase_uid, safe_folder)
+            if not firebase_success:
+                current_app.logger.warning(f"Firebase group creation failed: {firebase_error}")
+        except Exception as e:
+            current_app.logger.error(f"Firebase group creation error: {e}")
+    
     # make current_user admin of the newly created group
     try:
         current_user.add_to_group(grp, role='admin')
@@ -708,6 +740,17 @@ def remove_member():
         ug = next((ug for ug in target.user_groups if ug.group_id == grp.id), None)
         if not ug:
             return jsonify({'ok': False, 'error': 'user is not a member of group'}), 400
+        
+        # Remove from Firebase if target user has firebase_uid
+        if getattr(target, 'firebase_uid', None):
+            try:
+                from firebase_auth_handlers_new import firebase_remove_user_from_group
+                firebase_success, firebase_error = firebase_remove_user_from_group(target.firebase_uid, group_name)
+                if not firebase_success:
+                    current_app.logger.warning(f"Firebase user removal failed: {firebase_error}")
+            except Exception as e:
+                current_app.logger.error(f"Firebase user removal error: {e}")
+        
         db.session.delete(ug)
         db.session.commit()
         # structured log for removal
@@ -766,6 +809,16 @@ def leave_group():
                 for user_group in grp.user_groups:
                     db.session.delete(user_group)
 
+                # Delete from Firebase if current user has firebase_uid
+                if getattr(current_user, 'firebase_uid', None):
+                    try:
+                        from firebase_auth_handlers_new import firebase_delete_group
+                        firebase_success, firebase_error = firebase_delete_group(grp.name, current_user.firebase_uid)
+                        if not firebase_success:
+                            current_app.logger.warning(f"Firebase group deletion (auto) failed: {firebase_error}")
+                    except Exception as e:
+                        current_app.logger.error(f"Firebase group deletion (auto) error: {e}")
+                
                 # Delete the group itself
                 db.session.delete(grp)
                 
@@ -786,6 +839,16 @@ def leave_group():
                 
                 return jsonify({'ok': True, 'message': 'Group deleted successfully - you were the last admin'})
 
+        # Remove from Firebase if current user has firebase_uid
+        if getattr(current_user, 'firebase_uid', None):
+            try:
+                from firebase_auth_handlers_new import firebase_remove_user_from_group
+                firebase_success, firebase_error = firebase_remove_user_from_group(current_user.firebase_uid, grp.name)
+                if not firebase_success:
+                    current_app.logger.warning(f"Firebase user leave failed: {firebase_error}")
+            except Exception as e:
+                current_app.logger.error(f"Firebase user leave error: {e}")
+        
         db.session.delete(ug)
         db.session.commit()
         # if active_group matches, clear it

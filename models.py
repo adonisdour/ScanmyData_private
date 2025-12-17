@@ -68,9 +68,41 @@ class User(UserMixin, db.Model):
 
     @property
     def groups(self):
+        # If Firebase is enabled and user has firebase_uid, get groups from Firebase
+        if self.firebase_uid:
+            try:
+                from firebase_auth_handlers_new import firebase_user_groups
+                firebase_group_names = firebase_user_groups(self.firebase_uid)
+                if firebase_group_names:
+                    # Convert group names to Group objects from local DB
+                    firebase_groups = []
+                    for group_name in firebase_group_names:
+                        group = Group.query.filter_by(name=group_name).first()
+                        if group:
+                            firebase_groups.append(group)
+                    
+                    if firebase_groups:
+                        return firebase_groups
+            except Exception as e:
+                print(f"Firebase groups fetch error: {e}")
+        
+        # Fallback to local database
         return [ug.group for ug in self.user_groups]
 
     def add_to_group(self, group, role='member'):
+        # If Firebase is enabled and user has firebase_uid, sync to Firebase
+        if self.firebase_uid:
+            try:
+                from firebase_auth_handlers_new import firebase_add_user_to_group, firebase_set_user_group_role
+                success, error = firebase_add_user_to_group(self.firebase_uid, group.name)
+                if success:
+                    firebase_set_user_group_role(self.firebase_uid, group.name, role)
+                else:
+                    print(f"Firebase group add failed: {error}")
+            except Exception as e:
+                print(f"Firebase group add error: {e}")
+        
+        # Also maintain local database for compatibility
         # replace existing role if present
         for ug in self.user_groups:
             if ug.group_id == group.id:
@@ -80,10 +112,39 @@ class User(UserMixin, db.Model):
         self.user_groups.append(ug)
 
     def role_for_group(self, group):
+        # If Firebase is enabled and user has firebase_uid, get role from Firebase
+        if self.firebase_uid:
+            try:
+                from firebase_auth_handlers_new import firebase_get_user_role_in_group
+                firebase_role = firebase_get_user_role_in_group(self.firebase_uid, group.name)
+                if firebase_role:
+                    return firebase_role
+            except Exception as e:
+                print(f"Firebase role fetch error: {e}")
+        
+        # Fallback to local database
         for ug in self.user_groups:
             if ug.group_id == group.id:
                 return ug.role
         return None
+
+    def remove_from_group(self, group):
+        """Remove user from a group"""
+        # If Firebase is enabled and user has firebase_uid, sync to Firebase
+        if self.firebase_uid:
+            try:
+                from firebase_auth_handlers_new import firebase_remove_user_from_group
+                success, error = firebase_remove_user_from_group(self.firebase_uid, group.name)
+                if not success:
+                    print(f"Firebase group remove failed: {error}")
+            except Exception as e:
+                print(f"Firebase group remove error: {e}")
+        
+        # Also remove from local database
+        for ug in self.user_groups:
+            if ug.group_id == group.id:
+                self.user_groups.remove(ug)
+                break
 
     # --- Session helpers ---
     def is_online(self, timeout_seconds: int = 300) -> bool:
@@ -154,9 +215,46 @@ class Group(db.Model):
     user_groups = db.relationship('UserGroup', back_populates='group', cascade='all, delete-orphan')
 
     def users(self):
+        """Get all users in this group (prioritize Firebase, fallback to local)"""
+        try:
+            from firebase_auth_handlers_new import firebase_get_group_members
+            firebase_member_uids = firebase_get_group_members(self.name)
+            if firebase_member_uids:
+                # Convert UIDs to User objects
+                firebase_users = []
+                for uid in firebase_member_uids:
+                    user = User.query.filter_by(firebase_uid=uid).first()
+                    if user:
+                        firebase_users.append(user)
+                
+                if firebase_users:
+                    return firebase_users
+        except Exception as e:
+            print(f"Firebase members fetch error: {e}")
+        
+        # Fallback to local database
         return [ug.user for ug in self.user_groups]
 
     def admins(self):
+        """Get all admin users in this group (prioritize Firebase, fallback to local)"""
+        try:
+            import firebase_config
+            if firebase_config.is_firebase_enabled():
+                group_data = firebase_config.firebase_read_data(f'/groups/{self.name}')
+                if group_data and 'admins' in group_data:
+                    # Convert admin UIDs to User objects
+                    firebase_admins = []
+                    for uid in group_data['admins']:
+                        user = User.query.filter_by(firebase_uid=uid).first()
+                        if user:
+                            firebase_admins.append(user)
+                    
+                    if firebase_admins:
+                        return firebase_admins
+        except Exception as e:
+            print(f"Firebase admins fetch error: {e}")
+        
+        # Fallback to local database
         return [ug.user for ug in self.user_groups if ug.role == 'admin']
 
     def __repr__(self):

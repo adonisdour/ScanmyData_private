@@ -495,3 +495,184 @@ def firebase_get_user(uid: str) -> Optional[Dict[str, Any]]:
 def firebase_user_groups(uid: str) -> list:
     """Get user's groups"""
     return FirebaseAuthHandler.get_user_groups(uid)
+
+
+def firebase_add_user_to_group(uid: str, group_name: str) -> Tuple[bool, Optional[str]]:
+    """Add user to group"""
+    return FirebaseAuthHandler.add_user_to_group(uid, group_name)
+
+
+def firebase_remove_user_from_group(uid: str, group_name: str) -> Tuple[bool, Optional[str]]:
+    """Remove user from group"""
+    return FirebaseAuthHandler.remove_user_from_group(uid, group_name)
+
+
+def firebase_get_group_members(group_name: str) -> list:
+    """Get group members"""
+    return FirebaseAuthHandler.get_group_members(group_name)
+
+
+def firebase_create_group(group_name: str, creator_uid: str, data_folder: str = "") -> Tuple[bool, Optional[str]]:
+    """Create a new group"""
+    try:
+        if not firebase_config.is_firebase_enabled():
+            return False, "Firebase not enabled"
+        
+        # Check if group already exists
+        existing = firebase_config.firebase_read_data(f'/groups/{group_name}')
+        if existing:
+            return False, "Group already exists"
+        
+        # Create group data
+        group_data = {
+            'name': group_name,
+            'data_folder': data_folder or group_name.lower().replace(' ', '_'),
+            'creator_uid': creator_uid,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'members': [creator_uid],
+            'admins': [creator_uid]
+        }
+        
+        # Save to Firebase
+        firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+        
+        # Add group to creator's profile
+        user_profile = firebase_config.firebase_read_data(f'/users/{creator_uid}')
+        if user_profile:
+            if 'groups' not in user_profile:
+                user_profile['groups'] = []
+            if group_name not in user_profile['groups']:
+                user_profile['groups'].append(group_name)
+            
+            # Set group roles
+            if 'group_roles' not in user_profile:
+                user_profile['group_roles'] = {}
+            user_profile['group_roles'][group_name] = 'admin'
+            
+            firebase_config.firebase_write_data(f'/users/{creator_uid}', user_profile)
+        
+        logger.info(f"Group '{group_name}' created by {creator_uid}")
+        
+        # Log activity
+        firebase_config.firebase_log_activity(
+            creator_uid,
+            group_name,
+            'group_created',
+            {'group': group_name, 'data_folder': data_folder}
+        )
+        
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"Failed to create group {group_name}: {e}")
+        return False, str(e)
+
+
+def firebase_set_user_group_role(uid: str, group_name: str, role: str) -> Tuple[bool, Optional[str]]:
+    """Set user's role in a group"""
+    try:
+        if not firebase_config.is_firebase_enabled():
+            return False, "Firebase not enabled"
+        
+        # Update user profile
+        user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
+        if user_profile:
+            if 'group_roles' not in user_profile:
+                user_profile['group_roles'] = {}
+            user_profile['group_roles'][group_name] = role
+            firebase_config.firebase_write_data(f'/users/{uid}', user_profile)
+        
+        # Update group data
+        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
+        if group_data:
+            if 'admins' not in group_data:
+                group_data['admins'] = []
+            
+            if role == 'admin':
+                if uid not in group_data['admins']:
+                    group_data['admins'].append(uid)
+            else:
+                if uid in group_data['admins']:
+                    group_data['admins'].remove(uid)
+            
+            firebase_config.firebase_write_data(f'/groups/{group_name}', group_data)
+        
+        logger.info(f"User {uid} role set to '{role}' in group: {group_name}")
+        
+        # Log activity
+        firebase_config.firebase_log_activity(
+            uid,
+            group_name,
+            'user_role_changed',
+            {'group': group_name, 'role': role}
+        )
+        
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"Failed to set role for user {uid} in group {group_name}: {e}")
+        return False, str(e)
+
+
+def firebase_get_user_role_in_group(uid: str, group_name: str) -> Optional[str]:
+    """Get user's role in a specific group"""
+    try:
+        if not firebase_config.is_firebase_enabled():
+            return None
+        
+        user_profile = firebase_config.firebase_read_data(f'/users/{uid}')
+        if user_profile and 'group_roles' in user_profile:
+            return user_profile['group_roles'].get(group_name, 'member')
+        
+        return 'member'  # Default role
+        
+    except Exception as e:
+        logger.error(f"Failed to get role for user {uid} in group {group_name}: {e}")
+        return None
+
+
+def firebase_delete_group(group_name: str, admin_uid: str) -> Tuple[bool, Optional[str]]:
+    """Delete a group (admin only)"""
+    try:
+        if not firebase_config.is_firebase_enabled():
+            return False, "Firebase not enabled"
+        
+        # Check if user is admin
+        user_role = firebase_get_user_role_in_group(admin_uid, group_name)
+        if user_role != 'admin':
+            return False, "Only group admins can delete groups"
+        
+        # Get group members to remove group from their profiles
+        group_data = firebase_config.firebase_read_data(f'/groups/{group_name}')
+        if group_data and 'members' in group_data:
+            for member_uid in group_data['members']:
+                user_profile = firebase_config.firebase_read_data(f'/users/{member_uid}')
+                if user_profile:
+                    # Remove group from user's groups
+                    if 'groups' in user_profile and group_name in user_profile['groups']:
+                        user_profile['groups'].remove(group_name)
+                    
+                    # Remove group role
+                    if 'group_roles' in user_profile and group_name in user_profile['group_roles']:
+                        del user_profile['group_roles'][group_name]
+                    
+                    firebase_config.firebase_write_data(f'/users/{member_uid}', user_profile)
+        
+        # Delete group data
+        firebase_config.firebase_delete_data(f'/groups/{group_name}')
+        
+        logger.info(f"Group '{group_name}' deleted by {admin_uid}")
+        
+        # Log activity
+        firebase_config.firebase_log_activity(
+            admin_uid,
+            'system',
+            'group_deleted',
+            {'group': group_name}
+        )
+        
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"Failed to delete group {group_name}: {e}")
+        return False, str(e)
