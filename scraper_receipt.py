@@ -1124,12 +1124,37 @@ def scrape_epsilon(url, timeout=20, debug=False):
             if ln in ("invoicetype", "invoicetypecode", "invoicetypeid", "invoicetypecode"):
                 if el.text and el.text.strip():
                     out["doc_type"] = el.text.strip(); break
+        # Always prefer totalGrossValue if present
+        found_total = False
         for el in root.iter():
             ln = el.tag.split("}")[-1].lower()
-            if ln in ("payableamount", "legalmonetarytotal", "grandtotal", "totalamount", "amount", "payableamount"):
+            if ln == "totalgrossvalue":
                 txt = (el.text or "").strip()
                 if txt and re.search(r"[0-9]", txt):
-                    out["total_amount"] = _clean_amount_to_comma(txt); break
+                    out["total_amount"] = _clean_amount_to_comma(txt)
+                    found_total = True
+                    break
+        # If not found, try totalNetValue
+        if not found_total:
+            for el in root.iter():
+                ln = el.tag.split("}")[-1].lower()
+                if ln == "totalnetvalue":
+                    txt = (el.text or "").strip()
+                    if txt and re.search(r"[0-9]", txt):
+                        out["total_amount"] = _clean_amount_to_comma(txt)
+                        found_total = True
+                        break
+        # If still not found, try other common tags
+        if not found_total:
+            for el in root.iter():
+                ln = el.tag.split("}")[-1].lower()
+                if ln in ("payableamount", "legalmonetarytotal", "grandtotal", "totalamount", "amount", "payableamount"):
+                    txt = (el.text or "").strip()
+                    if txt and re.search(r"[0-9]", txt):
+                        out["total_amount"] = _clean_amount_to_comma(txt)
+                        found_total = True
+                        break
+        # Fallback: regex search in XML text
         if not out["total_amount"]:
             txt = ET.tostring(root, encoding="utf-8", method="text").decode("utf-8")
             m = re.search(r"([0-9]{1,3}(?:[.,][0-9]{3})*[.,][0-9]{1,2})", txt)
