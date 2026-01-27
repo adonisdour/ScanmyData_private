@@ -775,6 +775,18 @@ def export_multiclient_strict(
     # ---------- Φτιάξε ΚΙΝΗΣΕΙΣ όπως ΕΙΝΑΙ (δεν πειράζουμε mapping/λογικές) ----------
     flat: List[Dict[str, Any]] = []
     artid = 1
+    
+    # Ελέγχουμε το book_category για να αποφασίσουμε το MTYPE
+    is_b_category = False
+    try:
+        credentials = _safe_json_read(credentials_json, default=[])
+        cred_list = credentials if isinstance(credentials, list) else [credentials]
+        active = next((c for c in cred_list if str(c.get("vat")) == str(vat)), (cred_list[0] if cred_list else {}))
+        book_category = str(active.get("book_category") or "Β").strip().upper()
+        is_b_category = (book_category == "Β")
+    except Exception:
+        is_b_category = False
+    
     for rec in rows:
         is_receipt = any(
             k in str(rec.get("DOCTYPE", "")).lower()
@@ -785,9 +797,15 @@ def export_multiclient_strict(
         if sum_net < 0:
             msign = -1
         for ln in rec.get("LINES", []):
+            # Για Β κατηγορία, MTYPE = 1 πάντα. Αλλιώς, χρησιμοποιούμε την παλιά λογική
+            if is_b_category:
+                mtype_val = 1
+            else:
+                mtype_val = 1 if is_receipt or ("αγορ" in (ln.get("category", "") or "") or "δαπ" in (ln.get("category", "") or "")) else 0
+            
             flat.append({
                 "ARTID": artid,
-                "MTYPE": 1 if is_receipt or ("αγορ" in (ln.get("category", "") or "") or "δαπ" in (ln.get("category", "") or "")) else 0,
+                "MTYPE": mtype_val,
                 "ISKEPYO": 1,
                 "ISAGRYP": 0,
                 "CUSTID": rec.get("CUSTID"),
