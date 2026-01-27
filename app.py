@@ -9253,9 +9253,12 @@ def save_summary():
                         total_net = float_from_comma(summary.get("totalNetValue", existing.get("totalNetValue","") or 0))
                         total_vat = float_from_comma(summary.get("totalVatAmount", existing.get("totalVatAmount","") or 0))
                         total_value = total_net + total_vat
+                        # Για Β κατηγορία πελατών, το ΑΦΜ στο excel πρέπει να είναι "1"
+                        book_category = str(active_cred.get("book_category") or "Β").strip().upper()
+                        afm_excel = "1" if book_category == "Β" else (summary.get("AFM_issuer") or summary.get("AFM") or vat)
                         row = {
                             "MARK": str(summary.get("mark", existing.get("mark",""))),
-                            "ΑΦΜ": summary.get("AFM_issuer") or summary.get("AFM") or vat,
+                            "ΑΦΜ": afm_excel,
                             "Επωνυμία": summary.get("Name", existing.get("Name_issuer","") or ""),
                             "Σειρά": summary.get("series", existing.get("series","") or ""),
                             "Αριθμός": summary.get("number", existing.get("AA", existing.get("aa",""))),
@@ -9291,9 +9294,13 @@ def save_summary():
         total_value = float_from_comma(summary.get("totalValue", total_net + total_vat))
         tipo_excel = "ΑΠΟΔΕΙΞΗ" if is_receipt else _first(summary.get("type_name"), summary.get("type"))
 
+        # Για Β κατηγορία πελατών, το ΑΦΜ στο excel πρέπει να είναι "1"
+        book_category = str(active_cred.get("book_category") or "Β").strip().upper()
+        afm_excel = "1" if book_category == "Β" else (summary.get("AFM_issuer") or summary.get("AFM") or vat)
+
         row = {
             "MARK": str(summary.get("mark","")),
-            "ΑΦΜ": summary.get("AFM_issuer") or summary.get("AFM") or vat,
+            "ΑΦΜ": afm_excel,
             "Επωνυμία": summary.get("Name",""),
             "Σειρά": summary.get("series",""),
             "Αριθμός": summary.get("number",""),
