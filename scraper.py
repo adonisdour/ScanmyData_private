@@ -650,6 +650,75 @@ def scrape_impact(url):
     full_text = soup.get_text(" ", strip=True)
     m = MARK_RE.search(full_text)
     return (m.group(0) if m else None), None
+# -------------------- PEGCLOUD --------------------
+def scrape_pegcloud(url):
+    """
+    Επιστρέφει (mark, counterpart_vat)
+    Για URLs όπως: https://e-invoicing.pegcloud.io/pegasus/einv02/search_invoice01.php?auth_code=...
+    Εξάγει το MARK και ΑΦΜ πελάτη από το HTML της σελίδας.
+    """
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+    
+    try:
+        r = sess.get(url, timeout=15)
+        r.raise_for_status()
+        r.encoding = 'utf-8'
+    except Exception as e:
+        print(f"[RequestError] {e}")
+        return None, None
+    
+    html = r.text
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 1) MARK - Αναζήτηση "Μ.Αρ.Κ.:" 
+    mark = None
+    page_text = soup.get_text(" ", strip=True)
+    
+    # Pattern 1: Αναζήτηση στο HTML για το "Μ.Αρ.Κ.: XXX"
+    mark_match = re.search(r'(?:Μ\.Αρ\.Κ\.|MARK)\s*[:]\s*([0-9]{15})', html, re.I)
+    if mark_match:
+        mark = mark_match.group(1)
+    
+    # Pattern 2: Regex fallback για 15ψήφιο αριθμό
+    if not mark:
+        m = re.search(r'\b([0-9]{15})\b', html)
+        if m:
+            mark = m.group(1)
+    
+    # 2) ΑΦΜ Πελάτη - Αναζήτηση στο τμήμα "Στοιχεία Πελάτη"
+    counterpart_vat = None
+    
+    # Pattern 1: Βρες το section "Στοιχεία Πελάτη" και μετά "ΑΦΜ"
+    customer_section = soup.find(string=re.compile(r"Στοιχεία Πελάτη", re.I))
+    if customer_section:
+        parent = customer_section.find_parent()
+        if parent:
+            # Αναζήτηση στο επόμενο row που περιέχει ΑΦΜ
+            for row in parent.find_all("div", class_="row"):
+                row_text = row.get_text(" ", strip=True)
+                if "ΑΦΜ" in row_text or "Α.Φ.Μ" in row_text:
+                    # Πάρε το τελευταίο div (που περιέχει την τιμή)
+                    cols = row.find_all("div")
+                    if cols:
+                        vat_text = cols[-1].get_text(strip=True)
+                        m = re.search(r'([0-9]{9})', vat_text)
+                        if m:
+                            counterpart_vat = m.group(1)
+                            break
+    
+    # Pattern 2: Fallback - βρες όλα τα 9ψήφια και πάρε το πρώτο που δεν είναι του εκδότη
+    if not counterpart_vat:
+        all_vats = re.findall(r'\b([0-9]{9})\b', html)
+        if len(all_vats) >= 2:
+            # Πάρε το δεύτερο (συνήθως πελάτης)
+            counterpart_vat = all_vats[1]
+        elif all_vats:
+            counterpart_vat = all_vats[0]
+    
+    return mark, counterpart_vat
+
+
 # -------------------- E-INVOICING.GR (PEPPOL) --------------------
 def scrape_einvoicing_gr(url):
     """
@@ -857,6 +926,11 @@ def main():
         mark, counterpart_vat, info = scrape_epsilon(url)
         marks = [mark] if mark else []
 
+    elif "e-invoicing.pegcloud.io" in domain:
+        source = "Pegcloud e-Invoicing"
+        mark, counterpart_vat = scrape_pegcloud(url)
+        marks = [mark] if mark else []
+
     elif "e-invoicing.gr" in domain:
         source = "e-Invoicing.gr (PEPPOL)"
         mark, counterpart_vat = scrape_einvoicing_gr(url)
@@ -899,6 +973,12 @@ def main():
     if source == "Parochos (myData)":
         if counterpart_vat:
             print("counterpart VAT:", counterpart_vat)
+
+    if source == "Pegcloud e-Invoicing":
+        if counterpart_vat:
+            print("ΑΦΜ Πελάτη:", counterpart_vat)
+        else:
+            print("Δεν βρέθηκε ΑΦΜ πελάτη.")
 
     if source == "e-Invoicing.gr (PEPPOL)":
         if counterpart_vat:
