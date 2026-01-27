@@ -2318,5 +2318,104 @@
     "AFM_issuer": "094420307",
     "Name_issuer": "",
     "paymentMethodType": "5"
+  },
+  {
+    "mark": "400012408179264",
+    "AA": "165",
+    "AFM_issuer": "094386010",
+    "Name": "PREMIER CAPITAL ΕΛΛΑΣ-ΔΙΑΧΕΙΡΙΣΗ ΚΑΙ ΛΕΙΤΟΥΡΓΙΑ ΕΣΤΙΑΤΟΡΙΩΝ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "issueDate": "25/09/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "9,4",
+    "totalNetValue": "9,4",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,4",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "165",
+    "characteristic": "αποδειξακια",
+    "MARK": "400012408179264",
+    "aa": "165",
+    "progressive_aa": "165",
+    "AFM": "094386010",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2026-01-27T12:47:57",
+    "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400012408179265",
+    "AA": "36671",
+    "AFM_issuer": "115333562",
+    "Name": "ΤΕΡΖΟΠΟΥΛΟΣ ΚΩΝΣΤ",
+    "issueDate": "10/10/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "8,00",
+    "totalNetValue": "8,00",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "36671",
+    "characteristic": "αποδειξακια",
+    "MARK": "400012408179265",
+    "aa": "36671",
+    "progressive_aa": "36671",
+    "AFM": "115333562",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2026-01-27T12:48:24",
+    "series": "ΑΛΠ"
+  },
+  {
+    "mark": "400012408179266",
+    "AA": "165",
+    "AFM_issuer": "094386010",
+    "Name": "PREMIER CAPITAL ΕΛΛΑΣ-ΔΙΑΧΕΙΡΙΣΗ ΚΑΙ ΛΕΙΤΟΥΡΓΙΑ ΕΣΤΙΑΤΟΡΙΩΝ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "issueDate": "25/09/2025",
+    "type_name": "ΑΠΟΔΕΙΞΗ",
+    "totalValue": "9,4",
+    "totalNetValue": "9,4",
+    "totalVatAmount": "",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,4",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vatCategory": ""
+      }
+    ],
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "category": "αποδειξακια",
+    "is_receipt": true,
+    "number": "165",
+    "characteristic": "αποδειξακια",
+    "MARK": "400012408179266",
+    "aa": "165",
+    "progressive_aa": "165",
+    "AFM": "094386010",
+    "χαρακτηρισμός": "αποδειξακια",
+    "created_at": "2026-01-27T12:48:28",
+    "series": "ΑΛΠ"
   }
 ]

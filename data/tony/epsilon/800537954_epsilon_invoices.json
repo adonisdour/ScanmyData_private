@@ -27,5 +27,65 @@
       }
     ],
     "_updated_at": "2026-01-27T12:38:58.605484+00:00"
+  },
+  {
+    "mark": "400012360709395",
+    "issueDate": "22/01/2026",
+    "series": "ΤΠΥ-Ε",
+    "aa": "62644",
+    "AA": "62644",
+    "type": "Τιμολόγιο Παροχής Υπηρεσιών",
+    "vatCategory": "",
+    "totalNetValue": "180,00",
+    "totalVatAmount": "43,20",
+    "totalValue": "223,20",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "094420307",
+    "Name_issuer": "ΤΕΣΑΕ ΕΠΙΧΕΙΡΗΣΕΙΣ ΣΧΕΔΙΑΣΗΣ ΑΝΑΠΤΥΞΗΣ ΕΦΑΡΜΟΓΩΝ ΠΛΗΡΟΦΟΡΙΚΗ",
+    "AFM": "094420307",
+    "lines": [
+      {
+        "id": "400012360709395_inst0",
+        "description": "ΤΕΣΑΕ ΕΠΙΧΕΙΡΗΣΕΙΣ ΣΧΕΔΙΑΣΗΣ ΑΝΑΠΤΥΞΗΣ ΕΦΑΡΜΟΓΩΝ ΠΛΗΡΟΦΟΡΙΚΗ",
+        "amount": "180,00",
+        "vat": "43,20",
+        "category": "custom_other_software",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
+  },
+  {
+    "mark": "400012335783676",
+    "issueDate": "20/01/2026",
+    "series": "ΤΠΥ-Ε",
+    "aa": "62431",
+    "AA": "62431",
+    "type": "Τιμολόγιο Παροχής Υπηρεσιών",
+    "vatCategory": "",
+    "totalNetValue": "159,00",
+    "totalVatAmount": "38,16",
+    "totalValue": "197,16",
+    "classification": "",
+    "category": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "mtype": "",
+    "AFM_issuer": "094420307",
+    "Name_issuer": "ΤΕΣΑΕ ΕΠΙΧΕΙΡΗΣΕΙΣ ΣΧΕΔΙΑΣΗΣ ΑΝΑΠΤΥΞΗΣ ΕΦΑΡΜΟΓΩΝ ΠΛΗΡΟΦΟΡΙΚΗ",
+    "AFM": "094420307",
+    "lines": [
+      {
+        "id": "400012335783676_inst0",
+        "description": "ΤΕΣΑΕ ΕΠΙΧΕΙΡΗΣΕΙΣ ΣΧΕΔΙΑΣΗΣ ΑΝΑΠΤΥΞΗΣ ΕΦΑΡΜΟΓΩΝ ΠΛΗΡΟΦΟΡΙΚΗ",
+        "amount": "159,00",
+        "vat": "38,16",
+        "category": "custom_other_software",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ]
   }
 ]
