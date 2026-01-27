@@ -42,7 +42,7 @@ from flask import (
 import tempfile
 import zipfile
 import shutil
-from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon
+from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr
 import requests
 import pandas as pd
 from shutil import move
@@ -7456,7 +7456,7 @@ def search():
         import re
         from urllib.parse import urlparse
         # existing invoice scrapers
-        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon
+        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr
         # safe import of receipt scraper
         try:
             from scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
@@ -7498,6 +7498,14 @@ def search():
                         scraped_marks = scrape_impact(mark)
                     elif "epsilonnet.gr" in domain:
                         mark_val, scraped_afm, _ = scrape_epsilon(mark)
+                        if mark_val:
+                            scraped_marks = [mark_val]
+                    elif "e-invoicing.pegcloud.io" in domain:
+                        mark_val, scraped_afm = scrape_pegcloud(mark)
+                        if mark_val:
+                            scraped_marks = [mark_val]
+                    elif "e-invoicing.gr" in domain:
+                        mark_val, scraped_afm = scrape_einvoicing_gr(mark)
                         if mark_val:
                             scraped_marks = [mark_val]
                     else:
