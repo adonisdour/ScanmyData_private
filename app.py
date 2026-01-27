@@ -9254,7 +9254,7 @@ def save_summary():
                         total_vat = float_from_comma(summary.get("totalVatAmount", existing.get("totalVatAmount","") or 0))
                         total_value = total_net + total_vat
                         # Για Β κατηγορία πελατών, το ΑΦΜ στο excel πρέπει να είναι "1"
-                        book_category = str(active_cred.get("book_category") or "Β").strip().upper()
+                        book_category = str(active.get("book_category") or "Β").strip().upper()
                         afm_excel = "1" if book_category == "Β" else (summary.get("AFM_issuer") or summary.get("AFM") or vat)
                         row = {
                             "MARK": str(summary.get("mark", existing.get("mark",""))),
@@ -9295,7 +9295,7 @@ def save_summary():
         tipo_excel = "ΑΠΟΔΕΙΞΗ" if is_receipt else _first(summary.get("type_name"), summary.get("type"))
 
         # Για Β κατηγορία πελατών, το ΑΦΜ στο excel πρέπει να είναι "1"
-        book_category = str(active_cred.get("book_category") or "Β").strip().upper()
+        book_category = str(active.get("book_category") or "Β").strip().upper()
         afm_excel = "1" if book_category == "Β" else (summary.get("AFM_issuer") or summary.get("AFM") or vat)
 
         row = {
