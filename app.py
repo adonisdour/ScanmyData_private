@@ -7464,6 +7464,14 @@ def search():
             detect_and_scrape_receipt = None
 
         input_is_url = re.match(r'^https?://', mark)
+        
+        # Normalization: αν λείπει https://, πρόσθεσε το
+        if not input_is_url and re.match(r'^[a-z0-9]', mark, re.I):
+            # Ψάχνουμε αν μοιάζει με domain (περιέχει . ή /)
+            if '.' in mark or '/' in mark:
+                mark = 'https://' + mark
+                input_is_url = True
+        
         if input_is_url:
             domain = urlparse(mark).netloc.lower()
 
@@ -7488,26 +7496,39 @@ def search():
                 try:
                     if "wedoconnect" in domain:
                         scraped_marks, scraped_afm = scrape_wedoconnect(mark)
+                        # Cleanup: ensure marks are valid 15-digit strings
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
                     elif "mydatapi.aade.gr" in domain:
                         data = scrape_mydatapi(mark)
-                        scraped_marks = [data.get("MARK", "N/A")]
+                        mark_val = data.get("MARK", "N/A")
+                        scraped_marks = [mark_val] if mark_val != "N/A" and len(str(mark_val).strip()) == 15 else []
                         scraped_afm = data.get("ΑΦΜ Πελάτη")
                     elif "einvoice.s1ecos.gr" in domain:
                         scraped_marks, scraped_afm = scrape_einvoice(mark)
+                        # Cleanup: ensure marks are valid 15-digit strings
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
                     elif "einvoice.impact.gr" in domain or "impact.gr" in domain:
-                        scraped_marks = scrape_impact(mark)
+                        mark_val, scraped_afm_impact = scrape_impact(mark)
+                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_impact
                     elif "epsilonnet.gr" in domain:
-                        mark_val, scraped_afm, _ = scrape_epsilon(mark)
-                        if mark_val:
-                            scraped_marks = [mark_val]
+                        mark_val, scraped_afm_eps, _ = scrape_epsilon(mark)
+                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_eps
                     elif "e-invoicing.pegcloud.io" in domain:
-                        mark_val, scraped_afm = scrape_pegcloud(mark)
-                        if mark_val:
-                            scraped_marks = [mark_val]
+                        mark_val, scraped_afm_peg = scrape_pegcloud(mark)
+                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_peg
                     elif "e-invoicing.gr" in domain:
-                        mark_val, scraped_afm = scrape_einvoicing_gr(mark)
-                        if mark_val:
-                            scraped_marks = [mark_val]
+                        mark_val, scraped_afm_eg = scrape_einvoicing_gr(mark)
+                        scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_eg
                     else:
                         # fallback try receipt detector
                         if detect_and_scrape_receipt:
