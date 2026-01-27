@@ -1,0 +1,2912 @@
+[
+  {
+    "mark": "500000000000000",
+    "issueDate": "04/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "14944",
+    "AA": "14944",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,02",
+    "totalVatAmount": "",
+    "totalValue": "14,02",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,02",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000001",
+    "issueDate": "01/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "14722",
+    "AA": "14722",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "7,00",
+    "totalVatAmount": "",
+    "totalValue": "7,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "042451280",
+    "Name_issuer": "ΣΑΚΕΡΛΗΣ ΔΗΜΟΣ",
+    "AFM": "042451280",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "7,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000002",
+    "issueDate": "01/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "31746",
+    "AA": "31746",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "9,01",
+    "totalVatAmount": "",
+    "totalValue": "9,01",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,01",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000005",
+    "issueDate": "27/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "349613",
+    "AA": "349613",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "16,65",
+    "totalVatAmount": "",
+    "totalValue": "16,65",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "095437324",
+    "Name_issuer": "ΚΡΕΑΤΕΜΠΟΡΙΚΗ ΑΡΓΥΡΟΥΠΟΛΗΣ ΕΤΑ",
+    "AFM": "095437324",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "16,65",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000006",
+    "issueDate": "27/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "987",
+    "AA": "987",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "10,00",
+    "totalVatAmount": "",
+    "totalValue": "10,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "040192270",
+    "Name_issuer": "ΣΠΑΝΟΣ ΚΩΝΣΤ",
+    "AFM": "040192270",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "10,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000007",
+    "issueDate": "29/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "22850",
+    "AA": "22850",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "12,02",
+    "totalVatAmount": "",
+    "totalValue": "12,02",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,02",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000009",
+    "issueDate": "31/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "17519",
+    "AA": "17519",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "10,80",
+    "totalVatAmount": "",
+    "totalValue": "10,80",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "10,80",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000010",
+    "issueDate": "30/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "12674",
+    "AA": "12674",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "9,7",
+    "totalVatAmount": "",
+    "totalValue": "9,7",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,7",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000011",
+    "issueDate": "24/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "36654",
+    "AA": "36654",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "28,17",
+    "totalVatAmount": "",
+    "totalValue": "28,17",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ-ΒΗΤΑ\" ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "28,17",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000012",
+    "issueDate": "20/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "12155",
+    "AA": "12155",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "65,29",
+    "totalVatAmount": "",
+    "totalValue": "65,29",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "65,29",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000013",
+    "issueDate": "29/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "84474",
+    "AA": "84474",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "58,99",
+    "totalVatAmount": "",
+    "totalValue": "58,99",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "58,99",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000014",
+    "issueDate": "17/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "11991",
+    "AA": "11991",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,54",
+    "totalVatAmount": "",
+    "totalValue": "14,54",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,54",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000015",
+    "issueDate": "23/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "36546",
+    "AA": "36546",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,03",
+    "totalVatAmount": "",
+    "totalValue": "8,03",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,03",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000016",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "10 10280",
+    "AA": "10 10280",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,16",
+    "totalVatAmount": "",
+    "totalValue": "14,16",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,16",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000017",
+    "issueDate": "16/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "13741",
+    "AA": "13741",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "7,74",
+    "totalVatAmount": "",
+    "totalValue": "7,74",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ-ΒΗΤΑ\" ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "7,74",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000018",
+    "issueDate": "15/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "29703",
+    "AA": "29703",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "11,73",
+    "totalVatAmount": "",
+    "totalValue": "11,73",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "11,73",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000019",
+    "issueDate": "14/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "1553498",
+    "AA": "1553498",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "9,99",
+    "totalVatAmount": "",
+    "totalValue": "9,99",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025320",
+    "Name_issuer": "ERMHS 297",
+    "AFM": "094025320",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "9,99",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000020",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "13441",
+    "AA": "13441",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "27,32",
+    "totalVatAmount": "",
+    "totalValue": "27,32",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "27,32",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000021",
+    "issueDate": "09/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "31557",
+    "AA": "31557",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "68,54",
+    "totalVatAmount": "",
+    "totalValue": "68,54",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998731192",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΙΩΑΝΝΗ ΣΑΚΚΟΥ ΚΑΙ ΣΙ",
+    "AFM": "998731192",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "68,54",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000022",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "04 41667",
+    "AA": "04 41667",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "75,51",
+    "totalVatAmount": "",
+    "totalValue": "75,51",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "75,51",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000023",
+    "issueDate": "08/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "61158",
+    "AA": "61158",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "18,70",
+    "totalVatAmount": "",
+    "totalValue": "18,70",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802791104",
+    "Name_issuer": "GEFSIS ΙΔΙΩΤΙΚΗ ΚΕΦΑΛΑΙΟΥΧΙΚΗ ΕΤΑΙΡΙΑ",
+    "AFM": "802791104",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "18,70",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000024",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "64646",
+    "AA": "64646",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "22,50",
+    "totalVatAmount": "",
+    "totalValue": "22,50",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802791104",
+    "Name_issuer": "GEFSIS ΙΔΙΩΤΙΚΗ ΚΕΦΑΛΑΙΟΥΧΙΚΗ ΕΤΑΙΡΙΑ",
+    "AFM": "802791104",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "22,50",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000025",
+    "issueDate": "07/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "20904",
+    "AA": "20904",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "30,89",
+    "totalVatAmount": "",
+    "totalValue": "30,89",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ-ΒΗΤΑ\" ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "30,89",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000026",
+    "issueDate": "10/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "13386",
+    "AA": "13386",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "5,19",
+    "totalVatAmount": "",
+    "totalValue": "5,19",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "5,19",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000027",
+    "issueDate": "05/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "540108",
+    "AA": "540108",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "17,12",
+    "totalVatAmount": "",
+    "totalValue": "17,12",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "997717765",
+    "Name_issuer": "ΒΛΑΧΟΣ ΒΑΣΙΛΕΙΟΣ ΑΡΤΟΠΟΙΕΙΑ ΚΑΙ ΣΙΑ ΕΕ",
+    "AFM": "997717765",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "17,12",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000028",
+    "issueDate": "04/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "09 99214",
+    "AA": "09 99214",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "19,99",
+    "totalVatAmount": "",
+    "totalValue": "19,99",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "19,99",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000029",
+    "issueDate": "02/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "83143",
+    "AA": "83143",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "100,00",
+    "totalVatAmount": "",
+    "totalValue": "100,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800583196",
+    "Name_issuer": "ΛΑΜΠΡΟΣ ΓΕΝΝΑΡΑΣ ΣΙΑ ΕΕ",
+    "AFM": "800583196",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "100,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000030",
+    "issueDate": "24/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "88582",
+    "AA": "88582",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "20,00",
+    "totalVatAmount": "",
+    "totalValue": "20,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800583196",
+    "Name_issuer": "ΛΑΜΠΡΟΣ ΓΕΝΝΑΡΑΣ ΣΙΑ ΕΕ",
+    "AFM": "800583196",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "20,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000031",
+    "issueDate": "22/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "15826",
+    "AA": "15826",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "55,95",
+    "totalVatAmount": "",
+    "totalValue": "55,95",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801468905",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΝΙΚΟΛΑΟΥ ΧΡΙΣΤΙΝΑΚΗ ΚΑΙ ΣΙΑ Ο Ε",
+    "AFM": "801468905",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "55,95",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000032",
+    "issueDate": "20/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "279585",
+    "AA": "279585",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "47,33",
+    "totalVatAmount": "",
+    "totalValue": "47,33",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801468905",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΝΙΚΟΛΑΟΥ ΧΡΙΣΤΙΝΑΚΗ ΚΑΙ ΣΙΑ Ο Ε",
+    "AFM": "801468905",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "47,33",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000033",
+    "issueDate": "17/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "15405",
+    "AA": "15405",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "55,27",
+    "totalVatAmount": "",
+    "totalValue": "55,27",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801468905",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΝΙΚΟΛΑΟΥ ΧΡΙΣΤΙΝΑΚΗ ΚΑΙ ΣΙΑ Ο.Ε.",
+    "AFM": "801468905",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "55,27",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000034",
+    "issueDate": "17/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "243890",
+    "AA": "243890",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,02",
+    "totalVatAmount": "",
+    "totalValue": "14,02",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "095437324",
+    "Name_issuer": "ΚΡΕΑΤΕΜΠΟΡΙΚΗ ΑΡΓΥΡΟΥΠΟΛΗΣ ΕΤΑ",
+    "AFM": "095437324",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,02",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000035",
+    "issueDate": "20/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "20079",
+    "AA": "20079",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "18,00",
+    "totalVatAmount": "",
+    "totalValue": "18,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094175543",
+    "Name_issuer": "BED AND BATH ΛΕΥΚΑ ΕΙΔΗ ΑΝΩΝΥΜ",
+    "AFM": "094175543",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "18,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000036",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "8851",
+    "AA": "8851",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "39,40",
+    "totalVatAmount": "",
+    "totalValue": "39,40",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "39,40",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000037",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "60529",
+    "AA": "60529",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "15,00",
+    "totalVatAmount": "",
+    "totalValue": "15,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801734972",
+    "Name_issuer": "ΤΣΟΚΟ ΑΝΙΜΟΥΣ Ι Κ Ε",
+    "AFM": "801734972",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "15,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000038",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "1920",
+    "AA": "1920",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "99,95",
+    "totalVatAmount": "",
+    "totalValue": "99,95",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "033606303",
+    "Name_issuer": "ΜΕΤΑΞΙΝΙΑΔΗΣ ΣΠΥΡΙ",
+    "AFM": "033606303",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "99,95",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000039",
+    "issueDate": "09/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "6513",
+    "AA": "6513",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "74,00",
+    "totalVatAmount": "",
+    "totalValue": "74,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998086924",
+    "Name_issuer": "Μ & Α ΤΑΣΟΥΛΗΣ ΟΕ",
+    "AFM": "998086924",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "74,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000040",
+    "issueDate": "26/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "107060114517",
+    "AA": "107060114517",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "15",
+    "totalVatAmount": "",
+    "totalValue": "15",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "090010223",
+    "Name_issuer": "ΟΡΓΑΝΙΣΜΟΣ ΛΙΜΕΝΟΣ ΠΕΙΡΑΙΩΣ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "090010223",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "15",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000041",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "8394",
+    "AA": "8394",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "11,00",
+    "totalVatAmount": "",
+    "totalValue": "11,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "11,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000042",
+    "issueDate": "10/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16882",
+    "AA": "16882",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "10,47",
+    "totalVatAmount": "",
+    "totalValue": "10,47",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "10,47",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000043",
+    "issueDate": "17/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "17142",
+    "AA": "17142",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,86",
+    "totalVatAmount": "",
+    "totalValue": "8,86",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,86",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000044",
+    "issueDate": "26/09/2025",
+    "series": "ΑΛΠ",
+    "aa": "16453",
+    "AA": "16453",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "12,48",
+    "totalVatAmount": "",
+    "totalValue": "12,48",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,48",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000045",
+    "issueDate": "03/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16634",
+    "AA": "16634",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,05",
+    "totalVatAmount": "",
+    "totalValue": "8,05",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,05",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000046",
+    "issueDate": "08/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16756",
+    "AA": "16756",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "10,00",
+    "totalVatAmount": "",
+    "totalValue": "10,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "10,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000047",
+    "issueDate": "09/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16829",
+    "AA": "16829",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "13,00",
+    "totalVatAmount": "",
+    "totalValue": "13,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "13,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000048",
+    "issueDate": "15/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "17029",
+    "AA": "17029",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "6,40",
+    "totalVatAmount": "",
+    "totalValue": "6,40",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "6,40",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000049",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "14389",
+    "AA": "14389",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,00",
+    "totalVatAmount": "",
+    "totalValue": "8,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "042451280",
+    "Name_issuer": "ΣΑΚΕΡΛΗΣ ΔΗΜΟΣ",
+    "AFM": "042451280",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000050",
+    "issueDate": "24/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "24294",
+    "AA": "24294",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "16,00",
+    "totalVatAmount": "",
+    "totalValue": "16,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "105798609",
+    "Name_issuer": "ΚΑΛΟΓΕΡΟΠΟΥΛΟΣ ΠΑΝΤΕ",
+    "AFM": "105798609",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "16,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000051",
+    "issueDate": "10/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "32899",
+    "AA": "32899",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,39",
+    "totalVatAmount": "",
+    "totalValue": "14,39",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "082911572",
+    "Name_issuer": "Π ΚΟΣΜΑΣ ΚΑΙ ΣΙΑ ΟΕ",
+    "AFM": "082911572",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,39",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000052",
+    "issueDate": "09/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "8262",
+    "AA": "8262",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "43,50",
+    "totalVatAmount": "",
+    "totalValue": "43,50",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "43,50",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000053",
+    "issueDate": "10/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16849",
+    "AA": "16849",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "32,57",
+    "totalVatAmount": "",
+    "totalValue": "32,57",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "32,57",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000054",
+    "issueDate": "04/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "7883",
+    "AA": "7883",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,90",
+    "totalVatAmount": "",
+    "totalValue": "8,90",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,90",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000055",
+    "issueDate": "22/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "17273",
+    "AA": "17273",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "83,23",
+    "totalVatAmount": "",
+    "totalValue": "83,23",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "83,23",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000056",
+    "issueDate": "16/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "17140",
+    "AA": "17140",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "21,72",
+    "totalVatAmount": "",
+    "totalValue": "21,72",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "21,72",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000057",
+    "issueDate": "08/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "16775",
+    "AA": "16775",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "16,08",
+    "totalVatAmount": "",
+    "totalValue": "16,08",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "16,08",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000058",
+    "issueDate": "17/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "8805",
+    "AA": "8805",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "34,40",
+    "totalVatAmount": "",
+    "totalValue": "34,40",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "34,40",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000059",
+    "issueDate": "25/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "9282",
+    "AA": "9282",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,50",
+    "totalVatAmount": "",
+    "totalValue": "8,50",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,50",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000060",
+    "issueDate": "21/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "37452",
+    "AA": "37452",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "57,27",
+    "totalVatAmount": "",
+    "totalValue": "57,27",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998731192",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΙΩΑΝΝΗ ΣΑΚΚΟΥ ΚΑΙ ΣΙ",
+    "AFM": "998731192",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "57,27",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000061",
+    "issueDate": "21/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "152847",
+    "AA": "152847",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "5,90",
+    "totalVatAmount": "",
+    "totalValue": "5,90",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998309374",
+    "Name_issuer": "ΑΦΟΙ ΜΠΟΥΡΝΑ ΟΕ",
+    "AFM": "998309374",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "5,90",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000063",
+    "issueDate": "19/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "11076",
+    "AA": "11076",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "24,80",
+    "totalVatAmount": "",
+    "totalValue": "24,80",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "24,80",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000064",
+    "issueDate": "15/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "40649",
+    "AA": "40649",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "10,84",
+    "totalVatAmount": "",
+    "totalValue": "10,84",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998731192",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΙΩΑΝΝΗ ΣΑΚΚΟΥ ΚΑΙ ΣΙ",
+    "AFM": "998731192",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "10,84",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000065",
+    "issueDate": "15/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "2529",
+    "AA": "2529",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "12,40",
+    "totalVatAmount": "",
+    "totalValue": "12,40",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "149962958",
+    "Name_issuer": "ΚΑΣΤΡΑΝΤΑΣ ΙΩΑΝΝ",
+    "AFM": "149962958",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,40",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000066",
+    "issueDate": "16/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "32422",
+    "AA": "32422",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "26,70",
+    "totalVatAmount": "",
+    "totalValue": "26,70",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998607297",
+    "Name_issuer": "Α ΓΙΩΤΑΣ ΕΕ",
+    "AFM": "998607297",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "26,70",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000067",
+    "issueDate": "13/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "22665",
+    "AA": "22665",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "5,00",
+    "totalVatAmount": "",
+    "totalValue": "5,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "040197609",
+    "Name_issuer": "ΚΑΤΩΠΟΔΗ ΛΥΔΙΑ",
+    "AFM": "040197609",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "5,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000068",
+    "issueDate": "15/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "10703",
+    "AA": "10703",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "42,90",
+    "totalVatAmount": "",
+    "totalValue": "42,90",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801244290",
+    "Name_issuer": "ΟΙΚΟΝΟΜΟΥ Ι    Θ  Ε Ε",
+    "AFM": "801244290",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "42,90",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000069",
+    "issueDate": "14/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "14218",
+    "AA": "14218",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "6,90",
+    "totalVatAmount": "",
+    "totalValue": "6,90",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "102907874",
+    "Name_issuer": "ΒΑΛΛΙΑΝΟΣ ΙΩΑΝΝ",
+    "AFM": "102907874",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "6,90",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000070",
+    "issueDate": "18/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "6802",
+    "AA": "6802",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "59,00",
+    "totalVatAmount": "",
+    "totalValue": "59,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998086924",
+    "Name_issuer": "Μ & Α ΤΑΣΟΥΛΗΣ ΟΕ",
+    "AFM": "998086924",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "59,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000071",
+    "issueDate": "21/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "18233",
+    "AA": "18233",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "11,60",
+    "totalVatAmount": "",
+    "totalValue": "11,60",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "11,60",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000072",
+    "issueDate": "16/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "226212",
+    "AA": "226212",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "11,51",
+    "totalVatAmount": "",
+    "totalValue": "11,51",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800896348",
+    "Name_issuer": "SMART MARKET  Ε Ε",
+    "AFM": "800896348",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "11,51",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000073",
+    "issueDate": "14/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "13526",
+    "AA": "13526",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,58",
+    "totalVatAmount": "",
+    "totalValue": "8,58",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,58",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000074",
+    "issueDate": "15/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "13586",
+    "AA": "13586",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "15,09",
+    "totalVatAmount": "",
+    "totalValue": "15,09",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ-ΒΗΤΑ\" ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "15,09",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000076",
+    "issueDate": "18/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "13728",
+    "AA": "13728",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "12,4",
+    "totalVatAmount": "",
+    "totalValue": "12,4",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "12,4",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000077",
+    "issueDate": "15/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "34875",
+    "AA": "34875",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "40,16",
+    "totalVatAmount": "",
+    "totalValue": "40,16",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998731192",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΙΩΑΝΝΗ ΣΑΚΚΟΥ ΚΑΙ ΣΙ",
+    "AFM": "998731192",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "40,16",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000078",
+    "issueDate": "20/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "131044",
+    "AA": "131044",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "89,52",
+    "totalVatAmount": "",
+    "totalValue": "89,52",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "801468905",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΝΙΚΟΛΑΟΥ ΧΡΙΣΤΙΝΑΚΗ ΚΑΙ ΣΙΑ Ο Ε",
+    "AFM": "801468905",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "89,52",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000079",
+    "issueDate": "21/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "40885",
+    "AA": "40885",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "11,73",
+    "totalVatAmount": "",
+    "totalValue": "11,73",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "11,73",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000080",
+    "issueDate": "12/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "43314",
+    "AA": "43314",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "5,40",
+    "totalVatAmount": "",
+    "totalValue": "5,40",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "029264873",
+    "Name_issuer": "ΜΠΑΚΟΓΙΑΝΝΗΣ ΙΩΑΝΝ",
+    "AFM": "029264873",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "5,40",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000081",
+    "issueDate": "10/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17805",
+    "AA": "17805",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "25,45",
+    "totalVatAmount": "",
+    "totalValue": "25,45",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "25,45",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000082",
+    "issueDate": "07/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17752",
+    "AA": "17752",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "26,30",
+    "totalVatAmount": "",
+    "totalValue": "26,30",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "26,30",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000084",
+    "issueDate": "06/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17694",
+    "AA": "17694",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "26,00",
+    "totalVatAmount": "",
+    "totalValue": "26,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "26,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000085",
+    "issueDate": "05/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17666",
+    "AA": "17666",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "17,69",
+    "totalVatAmount": "",
+    "totalValue": "17,69",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "17,69",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000086",
+    "issueDate": "03/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "33618",
+    "AA": "33618",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "23,67",
+    "totalVatAmount": "",
+    "totalValue": "23,67",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998731192",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΙΩΑΝΝΗ ΣΑΚΚΟΥ ΚΑΙ ΣΙ",
+    "AFM": "998731192",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "23,67",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000087",
+    "issueDate": "07/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "37429",
+    "AA": "37429",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "28,66",
+    "totalVatAmount": "",
+    "totalValue": "28,66",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "095437324",
+    "Name_issuer": "ΚΡΕΑΤΕΜΠΟΡΙΚΗ ΑΡΓΥΡΟΥΠΟΛΗΣ ΕΤΑ",
+    "AFM": "095437324",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "28,66",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000088",
+    "issueDate": "04/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "350931",
+    "AA": "350931",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "18,76",
+    "totalVatAmount": "",
+    "totalValue": "18,76",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "095437324",
+    "Name_issuer": "ΚΡΕΑΤΕΜΠΟΡΙΚΗ ΑΡΓΥΡΟΥΠΟΛΗΣ ΕΤΑ",
+    "AFM": "095437324",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "18,76",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000090",
+    "issueDate": "06/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "03 52477",
+    "AA": "03 52477",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "18,46",
+    "totalVatAmount": "",
+    "totalValue": "18,46",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "18,46",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000091",
+    "issueDate": "11/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "09 114832",
+    "AA": "09 114832",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "14,55",
+    "totalVatAmount": "",
+    "totalValue": "14,55",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "800764388",
+    "Name_issuer": "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+    "AFM": "800764388",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "14,55",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000092",
+    "issueDate": "11/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "88339",
+    "AA": "88339",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "28,33",
+    "totalVatAmount": "",
+    "totalValue": "28,33",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ-ΒΗΤΑ\" ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "28,33",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000093",
+    "issueDate": "07/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "160904",
+    "AA": "160904",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "18,50",
+    "totalVatAmount": "",
+    "totalValue": "18,50",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "998703261",
+    "Name_issuer": "ΤΣΙΛΗ ΑΝΤΕΛΙΝΑ ΚΑΙ ΣΙΑ ΟΕ",
+    "AFM": "998703261",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "18,50",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000094",
+    "issueDate": "10/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "24004",
+    "AA": "24004",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "5,75",
+    "totalVatAmount": "",
+    "totalValue": "5,75",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094025817",
+    "Name_issuer": "ΑΛΦΑ ΒΗΤΑ ΒΑΣΙΛΟΠΟΥΛΟΣ ΜΟΝΟΠΡΟΣΩΠΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ",
+    "AFM": "094025817",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "5,75",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000095",
+    "issueDate": "04/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "811539",
+    "AA": "811539",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "28,13",
+    "totalVatAmount": "",
+    "totalValue": "28,13",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094155175",
+    "Name_issuer": "ΙΑΤΡΟΠΟΛΙΣ ΜΑΓΝΗΤΙΚΗ ΤΟΜΟΓΡΑΦΙΑ ΙΔΙΩΤΙΚΟ ΠΟΛΥΙΑΤΡΕΙΟ ΑΝΩΝΥΜΗ ΕΤΑΙΡΙΑ",
+    "AFM": "094155175",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "28,13",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000096",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "Α-78118",
+    "AA": "Α-78118",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "8,00",
+    "totalVatAmount": "",
+    "totalValue": "8,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094423696",
+    "Name_issuer": "ΒΙΟΪΑΤΡΙΚΗ Α.Ε.",
+    "AFM": "094423696",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "8,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000097",
+    "issueDate": "11/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "Α-78119",
+    "AA": "Α-78119",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "16,04",
+    "totalVatAmount": "",
+    "totalValue": "16,04",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094423696",
+    "Name_issuer": "ΒΙΟΪΑΤΡΙΚΗ Α.Ε.",
+    "AFM": "094423696",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "16,04",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000098",
+    "issueDate": "18/10/2025",
+    "series": "ΑΛΠ",
+    "aa": "56562",
+    "AA": "56562",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "38,75",
+    "totalVatAmount": "",
+    "totalValue": "38,75",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094045435",
+    "Name_issuer": "ΑΦΟΙ Ι ΚΑΙ Β ΛΑΔΕΝΗΣ ΑΕ ΜΙΝΕΡΒΑ ΒΙΟΜΗΧΑΝΙΑ ΠΛΕΚΤΙΚΗΣ",
+    "AFM": "094045435",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "38,75",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000099",
+    "issueDate": "29/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "57263",
+    "AA": "57263",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "31,00",
+    "totalVatAmount": "",
+    "totalValue": "31,00",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "094045435",
+    "Name_issuer": "ΑΦΟΙ Ι ΚΑΙ Β ΛΑΔΕΝΗΣ ΑΕ ΜΙΝΕΡΒΑ ΒΙΟΜΗΧΑΝΙΑ ΠΛΕΚΤΙΚΗΣ",
+    "AFM": "094045435",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "31,00",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000100",
+    "issueDate": "10/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17792",
+    "AA": "17792",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "7,38",
+    "totalVatAmount": "",
+    "totalValue": "7,38",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "7,38",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000101",
+    "issueDate": "04/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "17607",
+    "AA": "17607",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "6,70",
+    "totalVatAmount": "",
+    "totalValue": "6,70",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "6,70",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000102",
+    "issueDate": "27/11/2025",
+    "series": "ΑΛΠ",
+    "aa": "18414",
+    "AA": "18414",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "40,79",
+    "totalVatAmount": "",
+    "totalValue": "40,79",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "802315671",
+    "Name_issuer": "ΦΑΡΜΑΚΕΙΟ ΚΩΝΣΤΑΝΤΙΝΟΣ ΑΝΔΡΕΟΥ",
+    "AFM": "802315671",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "40,79",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  },
+  {
+    "mark": "500000000000103",
+    "issueDate": "16/12/2025",
+    "series": "ΑΛΠ",
+    "aa": "43954",
+    "AA": "43954",
+    "type": "ΑΠΟΔΕΙΞΗ",
+    "vatCategory": "",
+    "totalNetValue": "7,60",
+    "totalVatAmount": "",
+    "totalValue": "7,60",
+    "classification": "",
+    "category": "αποδειξακια",
+    "χαρακτηρισμός": "αποδειξακια",
+    "characteristic": "αποδειξακια",
+    "mtype": "",
+    "AFM_issuer": "115333562",
+    "Name_issuer": "ΤΕΡΖΟΠΟΥΛΟΣ ΚΩΝΣΤ",
+    "AFM": "115333562",
+    "lines": [
+      {
+        "id": "r0",
+        "description": "",
+        "amount": "7,60",
+        "vat": "",
+        "category": "αποδειξακια",
+        "vat_category": ""
+      }
+    ]
+  }
+]
