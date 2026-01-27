@@ -242,83 +242,6 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
     marks = list(dict.fromkeys(marks))
     return marks, counterpart_vat
 
-    """
-    Επιστρέφει (marks_list, counterpart_vat).
-    (existing logic you had previously — kept as-is for this change request)
-    """
-    sess = requests.Session()
-    sess.headers.update(HEADERS)
-
-    try:
-        r = sess.get(url, timeout=timeout)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"[RequestError] {e}")
-        return [], None
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    page_text = soup.get_text(" ", strip=True)
-    marks = MARK_RE.findall(page_text)
-    marks = list(dict.fromkeys(marks))
-    # candidate attachments (simple approach)
-    candidate_urls = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        full = urljoin(r.url, href)
-        low = href.lower()
-        if any(token in low for token in (".xml", "az-ubl", "ubl", "mydata", "mydatafilecontainer", "blob.core.windows.net")):
-            candidate_urls.append(full)
-        else:
-            txt = (a.get("title") or a.get("download") or a.text or "").lower()
-            if any(token in txt for token in ("az-ubl", "mydata", "ubl", ".xml")):
-                candidate_urls.append(full)
-    # try attachments for AFM
-    counterpart_vat = None
-    for cu in candidate_urls:
-        try:
-            r2 = sess.get(cu, timeout=timeout)
-            r2.raise_for_status()
-        except Exception:
-            continue
-        text = r2.text
-        content = r2.content
-        # try xml
-        if "xml" in (r2.headers.get("Content-Type") or "").lower() or "<?xml" in text[:200]:
-            try:
-                root = ET.fromstring(content)
-                # try common xml paths
-                cp = root.find(".//{*}counterpart") or root.find(".//counterpart") or root.find(".//{*}AccountingCustomerParty")
-                if cp is not None:
-                    vat_el = cp.find(".//{*}vatNumber") or cp.find(".//vatNumber") or cp.find(".//{*}CompanyID")
-                    if vat_el is not None and (vat_el.text or "").strip():
-                        m = re.search(r"(\d{9})", vat_el.text)
-                        if m:
-                            counterpart_vat = m.group(1)
-                            # also try find MARK inside xml
-                            mark_xml = root.find(".//{*}mark") or root.find(".//mark") or root.find(".//{*}cbc:ID")
-                            if mark_xml is not None and (mark_xml.text or "").strip():
-                                marks.append((mark_xml.text or "").strip())
-                            break
-            except Exception:
-                # regex fallback on text
-                m = re.search(r"\b\d{9}\b", text)
-                if m:
-                    counterpart_vat = m.group(0)
-                    break
-        else:
-            # binary/pd f fallback
-            m = re.search(rb"\b\d{9}\b", content)
-            if m:
-                counterpart_vat = m.group(0).decode("ascii")
-                break
-            m2 = re.search(r"\b\d{9}\b", text)
-            if m2:
-                counterpart_vat = m2.group(0)
-                break
-
-    marks = list(dict.fromkeys(marks))
-    return marks, counterpart_vat
-
 
 # -------------------- MYDATAPI --------------------
 def scrape_mydatapi(url):
@@ -417,7 +340,8 @@ def scrape_einvoice(url):
         afm = (data.get("ΑΦΜ Πελάτη") or "").strip()
         afm = re.sub(r"\D", "", afm) if afm else None
         mark_str = mark if mark and mark != "N/A" else None
-        return mark_str, afm
+        marks = [mark_str] if mark_str else []
+        return marks, afm
 
     # 2) Fallback στην παλιά λογική
     # 1) MARK extraction
@@ -592,8 +516,9 @@ def scrape_einvoice(url):
     if counterpart_vat:
         counterpart_vat = re.sub(r"\D", "", counterpart_vat)
 
-    # ΕΠΙΣΤΡΟΦΗ: string (ή None), όχι λίστα
-    return mark, counterpart_vat
+    # ΕΠΙΣΤΡΟΦΗ: marks είναι LIST, counterpart_vat είναι string
+    marks = [mark] if mark else []
+    return marks, counterpart_vat
 
 # -------------------- IMPACT E-INVOICING --------------------
 def scrape_impact(url):
