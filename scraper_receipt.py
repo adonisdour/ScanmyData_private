@@ -1549,6 +1549,179 @@ def scrape_s1ecos(url, timeout=15, debug=False):
 
     return out
 
+
+def scrape_pegcloud(url, timeout=15, debug=False):
+    """
+    Pegcloud e-Invoicing scraper για receipts.
+    Εξάγει: issuer_vat, issue_date, total_amount, MARK, κλπ.
+    URLs: https://e-invoicing.pegcloud.io/pegasus/einv02/search_invoice01.php?auth_code=...
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "Pegcloud"
+    }
+    
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+    try:
+        r = sess.get(url, timeout=timeout)
+        r.raise_for_status()
+        r.encoding = 'utf-8'
+    except Exception as e:
+        if debug: print(f"[Pegcloud RequestError] {e}")
+        return out
+    
+    html = r.text
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 1) MARK - Αναζήτηση "Μ.Αρ.Κ.:" ή "MARK"
+    mark_match = re.search(r'(?:Μ\.Αρ\.Κ\.|MARK)\s*[:]\s*([0-9]{15})', html, re.I)
+    if mark_match:
+        out["MARK"] = mark_match.group(1)
+    
+    # Fallback: 15ψήφιο αριθμό
+    if not out["MARK"]:
+        m = re.search(r'\b([0-9]{15})\b', html)
+        if m:
+            out["MARK"] = m.group(1)
+    
+    # 2) Issue Date - αναζήτηση ημερομηνίας
+    for pattern in [r"(?:Ημερομηνία|Issue Date)\s*[:]\s*([0-9/\-\.]+)", r"(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})"]:
+        match = re.search(pattern, html, re.I)
+        if match:
+            out["issue_date"] = _norm_date_to_ddmmyyyy(match.group(1))
+            break
+    
+    # 3) ΑΦΜ Εκδότη - Αναζήτηση "Α.Φ.Μ:" ή "VAT"
+    vat_match = re.search(r'(?:Α\.?Φ\.?Μ|VAT)\s*[:]\s*([0-9]{9})', html, re.I)
+    if vat_match:
+        out["issuer_vat"] = vat_match.group(1)
+    
+    # Fallback: όλα τα 9ψήφια
+    if not out["issuer_vat"]:
+        all_vats = re.findall(r'\b([0-9]{9})\b', html)
+        if all_vats:
+            out["issuer_vat"] = all_vats[0]  # Πρώτο ΑΦΜ συνήθως εκδότη
+    
+    # 4) Total Amount - αναζήτηση χρηματικού ποσού
+    total_match = re.search(r'(?:Σύνολο|Total|Ποσό)\s*[:]*\s*€?\s*([0-9\.,]+)', html, re.I)
+    if total_match:
+        out["total_amount"] = _clean_amount_to_comma(total_match.group(1))
+    
+    # Fallback: € pattern
+    if not out["total_amount"]:
+        m = re.search(r"€\s*([0-9\.,]+)", html)
+        if m:
+            out["total_amount"] = _clean_amount_to_comma(m.group(1))
+    
+    # 5) Doc Type - αναζήτηση είδους παραστατικού
+    dtype_match = re.search(r'(?:Είδος|Type|Document)\s*[:]\s*([^\n<]+)', html, re.I)
+    if dtype_match:
+        out["doc_type"] = dtype_match.group(1).strip()
+    
+    # Detect invoice keyword
+    if re.search(r"τιμολό?γιο|invoice", html, re.I):
+        out["is_invoice"] = True
+    
+    return out
+
+
+def scrape_einvoicing_gr(url, timeout=15, debug=False):
+    """
+    e-Invoicing.gr (PEPPOL) scraper για receipts.
+    URLs: https://e-invoicing.gr/edocuments/ViewInvoice?ct=PEPPOL&id=...&s=A&h=...
+    Εξάγει: issuer_vat, issue_date, total_amount, MARK, κλπ.
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "e-Invoicing.gr"
+    }
+    
+    parsed = urlparse(url)
+    
+    # Μετατροπή ViewInvoice → API endpoint
+    if "/api/GetInvoice" in parsed.path:
+        api_url = url
+    else:
+        qs = parse_qs(parsed.query)
+        ct = qs.get("ct", [""])[0]
+        doc_id = qs.get("id", [""])[0]
+        source = qs.get("s", [""])[0]
+        hash_token = qs.get("h", [""])[0]
+        
+        if not all([ct, doc_id, source, hash_token]):
+            if debug: print("e-invoicing.gr: missing parameters")
+            return out
+        
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        api_url = f"{base}/api/GetInvoice?contentType={ct}&id={doc_id}&source={source}&isPreview=True&hashToken={hash_token}"
+    
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+    try:
+        r = sess.get(api_url, timeout=timeout)
+        r.raise_for_status()
+        r.encoding = 'utf-8'
+    except Exception as e:
+        if debug: print(f"[e-invoicing.gr RequestError] {e}")
+        return out
+    
+    html = r.text
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 1) MARK - Αναζήτηση στο HTML
+    mark_match = re.search(r'M\.AR\.K[:]\s*([0-9]{15})|(?:MARK)\s*[:]\s*([0-9]{15})', html, re.I)
+    if mark_match:
+        out["MARK"] = mark_match.group(1) or mark_match.group(2)
+    
+    # Fallback: 15ψήφιο
+    if not out["MARK"]:
+        m = re.search(r'\b([0-9]{15})\b', html)
+        if m:
+            out["MARK"] = m.group(1)
+    
+    # 2) ΑΦΜ Εκδότη - αναζήτηση "Α.Φ.Μ:" ή "VAT"
+    vat_match = re.search(r'(?:Α\.?Φ\.?Μ|VAT)\s*[:]\s*([0-9]{9})', html, re.I)
+    if vat_match:
+        out["issuer_vat"] = vat_match.group(1)
+    
+    # Fallback: scan για όλα τα 9ψήφια
+    if not out["issuer_vat"]:
+        all_vats = re.findall(r'\b([0-9]{9})\b', html)
+        if all_vats:
+            out["issuer_vat"] = all_vats[0]
+    
+    # 3) Issue Date
+    for pattern in [r"(?:Ημερομηνία|Issue Date)\s*[:]\s*([0-9/\-\.]+)", r"(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})"]:
+        match = re.search(pattern, html, re.I)
+        if match:
+            out["issue_date"] = _norm_date_to_ddmmyyyy(match.group(1))
+            break
+    
+    # 4) Total Amount - χρηματικό ποσό
+    total_match = re.search(r'(?:Σύνολο|Total|Amount)\s*[:]*\s*€?\s*([0-9\.,]+)', html, re.I)
+    if total_match:
+        out["total_amount"] = _clean_amount_to_comma(total_match.group(1))
+    
+    # Fallback: € pattern
+    if not out["total_amount"]:
+        m = re.search(r"€\s*([0-9\.,]+)", html)
+        if m:
+            out["total_amount"] = _clean_amount_to_comma(m.group(1))
+    
+    # 5) Doc Type
+    dtype_match = re.search(r'(?:Είδος|Type|Document)\s*[:]\s*([^\n<]+)', html, re.I)
+    if dtype_match:
+        out["doc_type"] = dtype_match.group(1).strip()
+    
+    # Detect invoice
+    if re.search(r"τιμολό?γιο|invoice", html, re.I):
+        out["is_invoice"] = True
+    
+    return out
+
 # ---------- entry point demonstration ----------
 def detect_and_scrape(url, timeout=20, debug=False):
     """
@@ -1569,6 +1742,8 @@ def detect_and_scrape(url, timeout=20, debug=False):
         return scrape_epsilon(url, timeout=timeout, debug=debug)
     if "parochos.gr" in domain:
         return scrape_epsilon(url, timeout=timeout, debug=debug)  # Χρησιμοποιεί το ίδιο API
+    if "pegcloud.io" in domain or "pegcloud" in domain:
+        return scrape_pegcloud(url, timeout=timeout, debug=debug)
     if "e-invoicing.gr" in domain:
         return scrape_einvoicing_gr(url, timeout=timeout, debug=debug)
     # fallback: attempt generic wedoconnect-like scraping then page scanning
