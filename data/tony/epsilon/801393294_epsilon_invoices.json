@@ -1,0 +1,31 @@
+[
+  {
+    "mark": "400012117646863",
+    "issueDate": "30/12/2025",
+    "series": "ΕΑ",
+    "aa": "77900",
+    "AA": "77900",
+    "type": "1.1",
+    "vatCategory": "",
+    "totalNetValue": "38,14",
+    "totalVatAmount": "9,15",
+    "totalValue": "47,29",
+    "classification": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "AFM_issuer": "094503985",
+    "Name_issuer": "ΕΛΤΡΕΚΚΑ M.Α.Ε",
+    "AFM": "094503985",
+    "lines": [
+      {
+        "id": "400012117646863_inst0",
+        "description": "ΕΛΤΡΕΚΚΑ M.Α.Ε",
+        "amount": "38,14",
+        "vat": "9,15",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ],
+    "_updated_at": "2026-01-14T10:58:35.252599+00:00"
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "mark": "400012234952226",
+    "issueDate": "12/01/2026",
+    "series": "ΤΔΑ",
+    "aa": "739",
+    "AA": "739",
+    "type": "1.1",
+    "vatCategory": "",
+    "totalNetValue": "116,76",
+    "totalVatAmount": "28,02",
+    "totalValue": "144,78",
+    "classification": "",
+    "χαρακτηρισμός": "",
+    "characteristic": "",
+    "AFM_issuer": "094138756",
+    "Name_issuer": "ELECTRIC LIFE HELLAS Α.Ε.Β.Ε",
+    "AFM": "094138756",
+    "lines": [
+      {
+        "id": "400012234952226_inst0",
+        "description": "ELECTRIC LIFE HELLAS Α.Ε.Β.Ε",
+        "amount": "116,76",
+        "vat": "28,02",
+        "category": "αγορες_εμπορευματων",
+        "vat_category": "ΦΠΑ 24%"
+      }
+    ],
+    "mtype": "12",
+    "_updated_at": "2026-01-23T13:05:18.330777+00:00"
+  }
+]
