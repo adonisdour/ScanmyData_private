@@ -5959,10 +5959,19 @@ def upload_client_db():
                         return jsonify(success=False, message='Δεν έχετε πρόσβαση στην επιλεγμένη ομάδα.'), 403
                     target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
                 else:
-                    if len(user_groups) == 1:
-                        target_base = os.path.join(BASE_DIR, 'data', user_groups[0].data_folder or '')
+                    # Try to use active_group from session first
+                    active_group_name = session.get('active_group')
+                    if active_group_name:
+                        for g in user_groups:
+                            if g.name == active_group_name:
+                                target_base = os.path.join(BASE_DIR, 'data', g.data_folder or '')
+                                break
                     else:
-                        return jsonify(success=False, message='Έχετε πολλές ομάδες. Συμπληρώστε το πεδίο group στο αίτημα.'), 400
+                        # Fallback: if only 1 group, use it; otherwise require explicit group param
+                        if len(user_groups) == 1:
+                            target_base = os.path.join(BASE_DIR, 'data', user_groups[0].data_folder or '')
+                        else:
+                            return jsonify(success=False, message='Έχετε πολλές ομάδες. Συμπληρώστε το πεδίο group στο αίτημα.'), 400
             os.makedirs(target_base, exist_ok=True)
 
             dest_name = f'client_db{ext}'

@@ -1065,19 +1065,29 @@ def select_group():
     """Set the active group for the session. Expects form param 'group' (group name).
     Only allows selecting groups the current user belongs to.
     Also attempts to ensure group data is available locally (lazy-pull from Firebase).
+    Returns JSON for AJAX requests, redirect for form submissions.
     """
     group_name = (request.form.get('group') or request.json.get('group') if request.is_json else request.form.get('group')) or ''
     group_name = (group_name or '').strip()
     if not group_name:
-        return jsonify({'ok': False, 'error': 'group required'}), 400
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'group required'}), 400
+        flash('Η ομάδα είναι υποχρεωτική.', 'error')
+        return redirect(url_for('auth.list_groups')), 400
 
     grp = Group.query.filter_by(name=group_name).first()
     if not grp:
-        return jsonify({'ok': False, 'error': 'group not found'}), 404
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'group not found'}), 404
+        flash('Η ομάδα δεν βρέθηκε.', 'error')
+        return redirect(url_for('auth.list_groups')), 404
 
     # verify membership
     if grp not in current_user.groups:
-        return jsonify({'ok': False, 'error': 'not a member of group'}), 403
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'not a member of group'}), 403
+        flash('Δεν έχετε πρόσβαση στην ομάδα.', 'error')
+        return redirect(url_for('auth.list_groups')), 403
 
     # Attempt lazy-pull if group data missing locally
     try:
@@ -1089,8 +1099,13 @@ def select_group():
         current_app.logger.debug(f"Lazy-pull failed when selecting group {group_name}: {e}")
 
     session['active_group'] = grp.name
-    flash(f'Επιλέχθηκε η ομάδα: {grp.name}', 'info')
-    return redirect(url_for('auth.list_groups'))
+    
+    # Return JSON for AJAX requests, redirect for form submissions
+    if request.is_json:
+        return jsonify({'ok': True, 'message': f'Επιλέχθηκε η ομάδα: {grp.name}'}), 200
+    else:
+        flash(f'Επιλέχθηκε η ομάδα: {grp.name}', 'info')
+        return redirect(url_for('auth.list_groups'))
 
 
 # --- JSON API endpoints for frontend-driven login/logout/status ---
