@@ -1,12 +1,17 @@
 # fetch.py
 import requests
-import xml.etree.ElementTree as ET
 import pandas as pd
 from collections import defaultdict
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from dateutil.parser import parse
 from typing import Tuple, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    from lxml import etree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
 
 def _safe_strip(s):
     return str(s).strip() if s else ""
@@ -74,28 +79,14 @@ def format_decimal_comma(value) -> str:
     except Exception:
         return str(value).strip()
 
-def request_docs(
-    date_from: str,
-    date_to: str,
-    mark: str,
-    aade_user: str,
-    aade_key: str,
-    debug: bool = False,
-    save_excel: bool = True,
-    out_filename: str = "invoices_vat_summary_classified.xlsx"
-) -> Tuple[List[dict], List[dict]]:
-    """
-    Returns:
-        all_rows_json, summary_json  # JSON-ready with comma decimals
-    Also saves Excel with numeric columns for Καθαρή Αξία, ΦΠΑ, Σύνολο
-    """
+def _fetch_request_docs(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> Tuple[List[dict], set]:
+    """Fetch RequestDocs and return rows with transmitted marks."""
     URL_REQUEST_DOCS = "https://mydatapi.aade.gr/myDATA/RequestDocs"
-    URL_REQUEST_TRANSMITTED = "https://mydatapi.aade.gr/myDATA/RequestTransmittedDocs"
     headers = {"aade-user-id": aade_user, "Ocp-Apim-Subscription-Key": aade_key}
     all_rows = []
     params_docs = {"mark": mark, "dateFrom": date_from, "dateTo": date_to}
+    ns = {'ns': 'http://www.aade.gr/myDATA/invoice/v1.0'}
 
-    # --- Step 1: RequestDocs ---
     while True:
         resp = requests.get(URL_REQUEST_DOCS, params=params_docs, headers=headers)
         if debug: print(f"[RequestDocs] Status: {resp.status_code}")
@@ -103,8 +94,6 @@ def request_docs(
             raise RuntimeError(f"RequestDocs HTTP {resp.status_code}: {(resp.text or '')[:1000]}")
 
         root = ET.fromstring(resp.content)
-        ns = {'ns': 'http://www.aade.gr/myDATA/invoice/v1.0'}
-
         for invoice in root.findall(".//ns:invoice", ns):
             mark_val = _safe_strip(invoice.findtext("ns:mark", default="", namespaces=ns))
             header = invoice.find("ns:invoiceHeader", ns)
@@ -123,13 +112,12 @@ def request_docs(
 
             vatissuer, Name_issuer = extract_issuer_info(invoice, ns)
 
-            # Extract paymentMethodDetails type (for Γ category MTYPE validation)
+            # Extract paymentMethodDetails type
             payment_method_type = ""
             payment_methods = invoice.findall(".//ns:paymentMethods/ns:paymentMethodDetails", ns)
             if not payment_methods:
                 payment_methods = invoice.findall(".//paymentMethods/paymentMethodDetails")
             if payment_methods:
-                # Παίρνουμε το type από το πρώτο paymentMethodDetails
                 first_payment = payment_methods[0]
                 payment_method_type = _safe_strip(
                     first_payment.findtext("ns:type", default="", namespaces=ns) or
@@ -180,21 +168,54 @@ def request_docs(
         else:
             break
 
-    # --- Step 2: RequestTransmittedDocs ---
+    return all_rows
+
+def _fetch_transmitted_docs(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str) -> set:
+    """Fetch transmitted marks in parallel."""
+    URL_REQUEST_TRANSMITTED = "https://mydatapi.aade.gr/myDATA/RequestTransmittedDocs"
+    headers = {"aade-user-id": aade_user, "Ocp-Apim-Subscription-Key": aade_key}
+    
     date_to_docs = datetime.strptime(date_to, "%d/%m/%Y")
     date_to_trans = date_to_docs + relativedelta(months=3)
     DATE_TO_TRANS = date_to_trans.strftime("%d/%m/%Y")
     params_trans = {"mark": mark, "dateFrom": date_from, "dateTo": DATE_TO_TRANS}
-    resp_trans = requests.get(URL_REQUEST_TRANSMITTED, params=params_trans, headers=headers)
+    
     transmitted_marks = set()
+    resp_trans = requests.get(URL_REQUEST_TRANSMITTED, params=params_trans, headers=headers)
     if resp_trans.status_code == 200 and resp_trans.content:
         root_trans = ET.fromstring(resp_trans.content)
         for elem in root_trans.iter():
-            local = elem.tag.split("}", 1)[-1] if "}" in elem.tag else elem.tag
-            if local.lower() == "invoicemark" and elem.text:
-                transmitted_marks.add(_safe_strip(elem.text))
-            if elem.text and _safe_strip(elem.text).isdigit() and len(_safe_strip(elem.text))==15:
-                transmitted_marks.add(_safe_strip(elem.text))
+            if elem.text:
+                text = _safe_strip(elem.text)
+                local = elem.tag.split("}", 1)[-1] if "}" in elem.tag else elem.tag
+                if local.lower() == "invoicemark":
+                    transmitted_marks.add(text)
+                elif text.isdigit() and len(text) == 15:
+                    transmitted_marks.add(text)
+    return transmitted_marks
+
+def request_docs(
+    date_from: str,
+    date_to: str,
+    mark: str,
+    aade_user: str,
+    aade_key: str,
+    debug: bool = False,
+    save_excel: bool = True,
+    out_filename: str = "invoices_vat_summary_classified.xlsx"
+) -> Tuple[List[dict], List[dict]]:
+    """
+    Returns:
+        all_rows_json, summary_json  # JSON-ready with comma decimals
+    Also saves Excel with numeric columns for Καθαρή Αξία, ΦΠΑ, Σύνολο
+    """
+    # --- Step 1 & 2: Parallel fetch ---
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        docs_future = executor.submit(_fetch_request_docs, mark, date_from, date_to, aade_user, aade_key, debug)
+        trans_future = executor.submit(_fetch_transmitted_docs, mark, date_from, date_to, aade_user, aade_key)
+        
+        all_rows = docs_future.result()
+        transmitted_marks = trans_future.result()
 
     # --- Step 3: Classification update ---
     for row in all_rows:
@@ -208,18 +229,12 @@ def request_docs(
         if mark_val not in summary_rows:
             summary_rows[mark_val] = dict(row)
         else:
-            summary_rows[mark_val]["totalNetValue"] += row.get("totalNetValue", 0)
-            summary_rows[mark_val]["totalVatAmount"] += row.get("totalVatAmount", 0)
-            summary_rows[mark_val]["totalValue"] += row.get("totalValue", 0)
+            sr = summary_rows[mark_val]
+            sr["totalNetValue"] = round(sr.get("totalNetValue", 0) + row.get("totalNetValue", 0), 2)
+            sr["totalVatAmount"] = round(sr.get("totalVatAmount", 0) + row.get("totalVatAmount", 0), 2)
+            sr["totalValue"] = round(sr.get("totalValue", 0) + row.get("totalValue", 0), 2)
             if row.get("classification") == "χαρακτηρισμενο":
-                summary_rows[mark_val]["classification"] = "χαρακτηρισμενο"
-
-    for s in summary_rows.values():
-        s["totalNetValue"] = round(s.get("totalNetValue", 0), 2)
-        s["totalVatAmount"] = round(s.get("totalVatAmount", 0), 2)
-        s["totalValue"] = round(s.get("totalValue", 0), 2)
-        if s.get("issueDate"):
-            s["issueDate"] = format_date_to_ddmmyyyy(s["issueDate"])
+                sr["classification"] = "χαρακτηρισμενο"
 
     summary_list = list(summary_rows.values())
 
