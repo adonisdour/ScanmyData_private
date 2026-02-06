@@ -5,5 +5,4 @@ __pycache__/
 *.pyc
 *.db
 *.log
-data/activity.log
-data/credentials_settings.json
+data/
