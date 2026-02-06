@@ -3378,10 +3378,13 @@ def write_client_meta(filename, uploaded_at_iso, base_dir=None):
     meta_path = _client_meta_path(base_dir)
     try:
         os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        log.info("[Client Meta] Writing to: %s", meta_path)
         with open(meta_path, 'w', encoding='utf-8') as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
-    except Exception:
-        log.exception("Failed writing client_db.meta.json")
+        log.info("[Client Meta] Successfully wrote: %s", meta_path)
+    except Exception as e:
+        log.exception("[Client Meta] Failed writing client_db.meta.json to %s: %s", meta_path, e)
+        raise
 
 def normalize_vat_key(raw):
     """
@@ -5918,17 +5921,20 @@ def upload_client_db():
 
         # --- Ανάγνωση client_file για επεξεργασία πελατών ---
         try:
+            log.info("[Client DB Upload] Reading file with extension: %s", ext)
             f.stream.seek(0)
             if ext in ['.xls', '.xlsx']:
                 df = pd.read_excel(f.stream, dtype=str)
             else:
                 df = pd.read_csv(f.stream, dtype=str)
             df.fillna('', inplace=True)
+            log.info("[Client DB Upload] File read successfully: %d rows, %d columns", len(df), len(df.columns))
         except Exception as e:
-            log.exception("Failed to read uploaded client_file")
+            log.exception("[Client DB Upload] Failed to read uploaded client_file")
             return jsonify(success=False, message=f'Σφάλμα κατά την ανάγνωση του αρχείου: {e}'), 500
 
         total_rows = len(df)
+        log.info("[Client DB Upload] Total rows in file: %d", total_rows)
         existing_clients_set = get_existing_client_ids()
         new_clients_set = set()
         already_existing_set = set()
@@ -5940,6 +5946,9 @@ def upload_client_db():
                     already_existing_set.add(afm_str)
                 else:
                     new_clients_set.add(afm_str)
+        
+        log.info("[Client DB Upload] Processing complete: new=%d, existing=%d, total=%d", 
+                 len(new_clients_set), len(already_existing_set), total_rows)
 
         # --- Backup: keep only one backup ---
         # save into the user's group folder when possible
@@ -6015,15 +6024,19 @@ def upload_client_db():
             log.exception("Failed while rotating client_db backups (continuing)")
 
         # --- Meta info ---
+        uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
         try:
-            uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
+            log.info("[Client DB Upload] Writing metadata to base_dir: %s", target_base)
             try:
                 write_client_meta(filename, uploaded_at_iso, base_dir=target_base)
-            except Exception:
+                log.info("[Client DB Upload] Metadata written successfully")
+            except Exception as meta_err:
+                log.error("[Client DB Upload] Failed to write metadata to target_base, trying fallback: %s", meta_err)
                 # fallback to global meta write
                 write_client_meta(filename, uploaded_at_iso)
+                log.info("[Client DB Upload] Metadata written to fallback location")
         except Exception:
-            log.exception("Failed to write client_db metadata (continuing)")
+            log.exception("[Client DB Upload] Failed to write client_db metadata (continuing anyway)")
 
         return jsonify(
             success=True,
@@ -6102,9 +6115,11 @@ def _upload_chart_of_accounts_impl(category='G'):
         # --- ΕΛΕΓΧΟΣ ΣΤΗΛΩΝ ΠΡΙΝ ΤΗΝ ΑΠΟΘΗΚΕΥΣΗ ---
         log.info("[CoA Upload] Reading Excel file...")
         try:
+            # Important: Ensure stream is at the beginning
+            f.stream.seek(0)
             df = pd.read_excel(f.stream, dtype=str)
             df.fillna('', inplace=True)
-            log.info("[CoA Upload] Excel read successfully: %d rows", len(df))
+            log.info("[CoA Upload] Excel read successfully: %d rows, %d columns", len(df), len(df.columns))
         except Exception as e:
             log.exception("Failed to read chart of accounts file")
             return jsonify(ok=False, error=f'Σφάλμα ανάγνωσης: {e}'), 500
@@ -6171,8 +6186,12 @@ def _upload_chart_of_accounts_impl(category='G'):
         
         uploaded_at = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
         
-        # 4) Αποθήκευση metadata
+        # 4) Αποθήκευση metadata - με σαφές error handling
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
+        if account_count <= 0:
+            log.error("[CoA Upload] CRITICAL: account_count is %d after validation (should be > 0)", account_count)
+            return jsonify(ok=False, error='Εσωτερικό σφάλμα: Μη έγκυρο πλήθος λογαριασμών.'), 500
+            
         meta = {
             'filename': filename,
             'uploaded_at': uploaded_at,
@@ -6184,8 +6203,13 @@ def _upload_chart_of_accounts_impl(category='G'):
         try:
             with open(meta_path, 'w', encoding='utf-8') as mf:
                 json.dump(meta, mf, ensure_ascii=False, indent=2)
-        except Exception:
-            log.exception("Failed to write CoA metadata")
+            log.info("[CoA Upload] Metadata saved: %s", meta_path)
+            log.info("[CoA Upload] Metadata content: account_count=%d", account_count)
+        except Exception as e:
+            log.exception("[CoA Upload] CRITICAL: Failed to write metadata to %s", meta_path)
+            # Even if metadata fails, don't lose the file - try to continue
+            log.error("[CoA Upload] Will return success anyway since file was saved, but metadata write failed")
+            return jsonify(ok=False, error=f'Σφάλμα αποθήκευσης μεταδεδομένων: {e}'), 500
 
         return jsonify(
             ok=True,
@@ -6276,7 +6300,11 @@ def _get_chart_of_accounts_status_impl(category='G'):
         dest_path = os.path.join(target_base, dest_name)
         meta_path = os.path.join(target_base, f'{dest_name}.meta.json')
         
+        log.info("[CoA Status %s] Checking: %s", category, dest_path)
+        log.info("[CoA Status %s] Metadata path: %s", category, meta_path)
+        
         if not os.path.exists(dest_path):
+            log.info("[CoA Status %s] File not found: %s", category, dest_path)
             return jsonify(ok=True, exists=False, category=category), 200
         
         # Load metadata
@@ -6285,8 +6313,14 @@ def _get_chart_of_accounts_status_impl(category='G'):
             try:
                 with open(meta_path, 'r', encoding='utf-8') as mf:
                     meta = json.load(mf)
-            except:
-                pass
+                log.info("[CoA Status %s] Metadata loaded: account_count=%s", category, meta.get('account_count'))
+            except Exception as e:
+                log.error("[CoA Status %s] Failed to read metadata: %s", category, e)
+        else:
+            log.warning("[CoA Status %s] Metadata file not found: %s", category, meta_path)
+        
+        account_count = meta.get('account_count', 0)
+        log.info("[CoA Status %s] Returning: exists=True, account_count=%d", category, account_count)
         
         return jsonify(
             ok=True,
@@ -6294,7 +6328,7 @@ def _get_chart_of_accounts_status_impl(category='G'):
             category=category,
             filename=meta.get('filename', dest_name),
             uploaded_at=meta.get('uploaded_at', ''),
-            account_count=meta.get('account_count', 0)
+            account_count=account_count
         ), 200
 
     except Exception:
