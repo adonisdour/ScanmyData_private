@@ -1638,11 +1638,41 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
         frozen:true,
         titleFormatter:function(cell){
           const table = cell.getTable();
-          const box = document.createElement('input'); box.type='checkbox';
+          const box = document.createElement('input'); 
+          box.type='checkbox';
           box.addEventListener('change', ()=>{
-            const rows = table.getRows('active');
-            if(box.checked){ table.selectRow(rows); }
-            else { table.deselectRow(rows); }
+            // Get ONLY the rows in the current page/viewport
+            let paginatedRows = [];
+            let totalRows = 0;
+            try {
+              const allRows = table.getRows();
+              totalRows = allRows.length;
+              
+              paginatedRows = allRows.filter(row => {
+                try {
+                  const el = row.getElement();
+                  // offsetParent is null if element is display:none or not in document
+                  return el && el.offsetParent !== null;
+                } catch(e) {
+                  return false;
+                }
+              });
+              
+              console.log(`[Tabulator SelectAll] Total rows: ${totalRows}, Visible rows: ${paginatedRows.length}, Checked: ${box.checked}`);
+            } catch(e) {
+              console.warn('Error getting paginated rows:', e);
+              // Fallback: if filtering fails, don't select all to avoid selecting hidden rows
+              paginatedRows = [];
+            }
+            
+            if(box.checked) { 
+              table.selectRow(paginatedRows);
+              console.log(`[Tabulator SelectAll] Selected ${paginatedRows.length} rows`);
+            }
+            else { 
+              table.deselectRow(paginatedRows);
+              console.log(`[Tabulator SelectAll] Deselected ${paginatedRows.length} rows`);
+            }
           });
           return box;
         }
@@ -2022,6 +2052,7 @@ document.getElementById('epsilonExport')?.addEventListener('click', function(){
           if(window.FBP_TABULATOR){
             const sel = window.FBP_TABULATOR.getSelectedData();
             const marks = sel.map(r=> r._mark ).filter(v=>v);
+            console.log(`[_fbp_collect_marks_from_tabulator] Selected marks count: ${marks.length}, marks:`, marks);
             return Array.isArray(marks) ? marks : [];
           }
         }catch(_){ }

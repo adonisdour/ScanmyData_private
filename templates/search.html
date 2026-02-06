@@ -5038,30 +5038,33 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     }
 
     try {
-      const anyCheckbox = document.querySelector('input[name="delete_mark"]');
-      if (anyCheckbox){
-        const firstTh = document.querySelector('.summary-table thead th');
-        if (firstTh && !document.getElementById('selectAll')){
-          const chk = document.createElement('input');
-          chk.type = 'checkbox'; chk.id = 'selectAll'; chk.title = 'Επιλογή όλων';
-          chk.style.marginRight = '6px';
-          firstTh.prepend(chk);
-          chk.addEventListener('change', function(){ document.querySelectorAll('input[name="delete_mark"]').forEach(cb => cb.checked = this.checked); });
-        }
-        const headers = Array.from(document.querySelectorAll('.summary-table thead th')).map(h => h.innerText.trim().toLowerCase());
-        let markIdx = headers.findIndex(h => h.includes('mark'));
-        if (markIdx === -1) markIdx = headers.findIndex(h => h.includes('αφμ') || h.includes('afm'));
-        if (markIdx >= 0){
-          document.querySelectorAll('.summary-table tbody tr').forEach(row => {
-            const cb = row.querySelector('input[name="delete_mark"]');
-            if (cb){
-              const td = row.querySelectorAll('td')[markIdx];
-              if (td){
-                const v = td.innerText.trim();
-                if (v) cb.value = v;
+      // Check if Tabulator is active - if so, skip legacy checkbox init
+      if (typeof Tabulator !== 'undefined' && window.FBP_TABULATOR) {
+        console.log('Tabulator active - skipping legacy select-all init');
+      } else {
+        // Legacy fallback: only if Tabulator is NOT in use
+        const anyCheckbox = document.querySelector('input[name="delete_mark"]');
+        if (anyCheckbox){
+          const firstTh = document.querySelector('.summary-table thead th');
+          if (firstTh && !document.getElementById('selectAll')){
+            // Use the centralized helper function to initialize selectAll
+            initializeSelectAllCheckbox();
+          }
+          const headers = Array.from(document.querySelectorAll('.summary-table thead th')).map(h => h.innerText.trim().toLowerCase());
+          let markIdx = headers.findIndex(h => h.includes('mark'));
+          if (markIdx === -1) markIdx = headers.findIndex(h => h.includes('αφμ') || h.includes('afm'));
+          if (markIdx >= 0){
+            document.querySelectorAll('.summary-table tbody tr').forEach(row => {
+              const cb = row.querySelector('input[name="delete_mark"]');
+              if (cb){
+                const td = row.querySelectorAll('td')[markIdx];
+                if (td){
+                  const v = td.innerText.trim();
+                  if (v) cb.value = v;
+                }
               }
-            }
-          });
+            });
+          }
         }
       }
     } catch(e){ console.warn('select-all / mark mapping error', e); }
@@ -5354,6 +5357,82 @@ try {
   // Intercept "Αποθήκευση στο Cache" to perform AJAX save for scraped receipts
   // intercept saveSummaryForm submit when scrapeUrlField is present
 // --- replace the previous payload construction + fetch with this robust version ---
+
+// ===== Helper function for partial table reload (after save) =====
+async function partiallyReloadInvoiceTable() {
+  try {
+    const tableRes = await fetch('/list/fragment', { method: 'GET', credentials: 'same-origin' });
+    if (tableRes.ok) {
+      const data = await tableRes.json();
+      if (data.ok && data.table_html) {
+        const container = document.getElementById('summary-container');
+        if (container) {
+          container.innerHTML = data.table_html;
+          // Reinitialize table event listeners 
+          setTimeout(() => {
+            try { 
+              // If Tabulator is in use, reinitialize it (this is the correct approach)
+              if (typeof window.FBP_INIT_TABULATOR === 'function') {
+                window.FBP_INIT_TABULATOR();
+              } else if (typeof window.FBP_INIT_TABLE === 'function') {
+                // Otherwise fallback to legacy init
+                window.FBP_INIT_TABLE();
+                initializeSelectAllCheckbox();
+              }
+            } catch(e) { console.warn('Table reinitialization failed:', e); }
+          }, 50);
+          return true;
+        }
+      }
+    }
+  } catch(err) {
+    console.warn('Partial reload failed:', err);
+  }
+  return false;
+}
+
+// ===== Helper to initialize selectAll checkbox with correct logic (only visible rows) =====
+function initializeSelectAllCheckbox() {
+  try {
+    // If Tabulator is in use, don't manipulate the DOM checkboxes - Tabulator handles it
+    if (typeof Tabulator !== 'undefined' && window.FBP_TABULATOR) {
+      console.log('Tabulator is active - skipping legacy selectAll init');
+      return;
+    }
+    
+    const anyCheckbox = document.querySelector('input[name="delete_mark"]');
+    if (!anyCheckbox) return;
+    
+    const firstTh = document.querySelector('.summary-table thead th');
+    if (!firstTh) return;
+    
+    // Remove old selectAll if it exists
+    const oldSelectAll = document.getElementById('selectAll');
+    if (oldSelectAll) oldSelectAll.remove();
+    
+    // Create new selectAll checkbox
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.id = 'selectAll';
+    chk.title = 'Επιλογή όλων';
+    chk.style.marginRight = '6px';
+    firstTh.prepend(chk);
+    
+    // Add listener that selects only VISIBLE rows
+    chk.addEventListener('change', function() { 
+      document.querySelectorAll('.summary-table tbody tr').forEach(tr => {
+        const cb = tr.querySelector('input[name="delete_mark"]');
+        // Only select if the row is visible (display !== 'none')
+        if (cb && tr.style.display !== 'none') {
+          cb.checked = this.checked;
+        }
+      });
+    });
+  } catch(e) {
+    console.warn('initializeSelectAllCheckbox failed:', e);
+  }
+}
+
 document.getElementById('saveSummaryForm')?.addEventListener('submit', async function(e){
   const scrapeUrl = document.getElementById('scrapeUrlField')?.value || '';
   if(!scrapeUrl) return; // let normal (invoice) flow proceed
@@ -5399,7 +5478,13 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       return;
     }
     try { hideSummaryModal(); } catch(_) {}
-    window.location = window.location.pathname;
+    // Partial reload: ανανέωσε μόνο τον πίνακα αντί για full page reload
+    const reloaded = await partiallyReloadInvoiceTable();
+    if (reloaded) {
+      try { if (typeof showFlash === 'function') showFlash('Παραστατικό αποθηκεύτηκε με επιτυχία!', 'success', 2000); } catch(_) {}
+    } else {
+      window.location = window.location.pathname; // fallback to full reload
+    }
   } catch (err) {
     console.error('save_summary AJAX error', err);
     await showModalAlert('Σφάλμα', 'Σφάλμα αποθήκευσης: ' + (err.message || err));
@@ -5504,9 +5589,39 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       }
     }
     
-    // Προχώρα στην κανονική server αποθήκευση
+    // Προχώρα στην κανονική server αποθήκευση (AJAX αντί για form submit για partial reload)
     try{ showLoadingOverlay('Αποθήκευση', 'Παρακαλώ περιμένετε - αποστολή στο server...'); }catch(e){}
-    e.target.submit();
+    
+    // Υπόδειγμα HTML form -> δημιούργησε FormData
+    const formData = new FormData(e.target);
+    
+    try {
+      const saveRes = await fetch(e.target.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData
+      });
+      
+      hideLoadingOverlay();
+      
+      if (!saveRes.ok) {
+        const t = await saveRes.text().catch(()=>'');
+        await showModalAlert('Σφάλμα', 'Αποτυχία αποθήκευσης (HTTP ' + saveRes.status + '): ' + t);
+        return;
+      }
+      
+      // Successful save - partial reload
+      const reloaded = await partiallyReloadInvoiceTable();
+      if (reloaded) {
+        try { if (typeof showFlash === 'function') showFlash('Παραστατικό χαρακτηρίστηκε με επιτυχία!', 'success', 2000); } catch(_) {}
+      } else {
+        window.location = window.location.pathname;
+      }
+    } catch (err) {
+      hideLoadingOverlay();
+      console.error('AJAX save error:', err);
+      await showModalAlert('Σφάλμα', 'Σφάλμα αποθήκευσης: ' + (err.message || err));
+    }
     return;
   }
   
@@ -7190,7 +7305,11 @@ RC.handleReceiptAfterScrape = async function(summaryObj, scrapeUrl){
     try { hideSummaryModal(); } catch(_){}
     try { document.getElementById('scrapeUrlInput').value = ''; } catch(_){}
     try { document.getElementById('markInput').value = ''; } catch(_){}
-    window.location = window.location.pathname;
+    // Partial reload instead of full page reload
+    const reloaded = await partiallyReloadInvoiceTable();
+    if (!reloaded) {
+      window.location = window.location.pathname;
+    }
     return true;
   } catch (e) {
     console.warn('handleReceiptAfterScrape failed', e);

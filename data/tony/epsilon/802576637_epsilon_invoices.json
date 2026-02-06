@@ -30,107 +30,6 @@
     ]
   },
   {
-    "mark": "400011823705209",
-    "issueDate": "01/12/2025",
-    "series": "ΤΔΑ",
-    "aa": "4653",
-    "AA": "4653",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "24,06",
-    "totalVatAmount": "5,77",
-    "totalValue": "29,83",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "",
-    "AFM_issuer": "800470153",
-    "Name_issuer": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
-    "AFM": "800470153",
-    "lines": [
-      {
-        "id": "400011823705209_inst0",
-        "description": "GALAXY HELLAS ΕΜΠΟΡΙΚΗ – ΕΙΣΑΓΩΓΙΚΗ Ε.Ε.",
-        "amount": "24,06",
-        "vat": "5,77",
-        "category": "γενικες_δαπανες",
-        "vat_category": "ΦΠΑ 24%"
-      }
-    ],
-    "_updated_at": "2025-12-09T20:36:00.384111+00:00"
-  },
-  {
-    "mark": "400011615024455",
-    "issueDate": "11/11/2025",
-    "series": "TΔA",
-    "aa": "60984",
-    "AA": "60984",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "104,99",
-    "totalVatAmount": "23,91",
-    "totalValue": "128,90",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "12",
-    "AFM_issuer": "800916954",
-    "Name_issuer": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
-    "AFM": "800916954",
-    "lines": [
-      {
-        "id": "400011615024455_inst0",
-        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
-        "amount": "97,83",
-        "vat": "23,48",
-        "category": "αγορες_εμπορευματων",
-        "vat_category": "ΦΠΑ 24%"
-      },
-      {
-        "id": "400011615024455_inst1",
-        "description": "ΑΦΟΙ ΛΑΓΟΥ ΧΡΩΜΑΤΑ ΙΚΕ",
-        "amount": "7,16",
-        "vat": "0,43",
-        "category": "γενικες_δαπανες",
-        "vat_category": "ΦΠΑ 6%"
-      }
-    ],
-    "_updated_at": "2025-12-10T13:43:22.070015+00:00"
-  },
-  {
-    "mark": "400011605611275",
-    "issueDate": "10/11/2025",
-    "series": "00ΤΔΓ",
-    "aa": "4885",
-    "AA": "4885",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "82,27",
-    "totalVatAmount": "19,74",
-    "totalValue": "102,01",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "12",
-    "AFM_issuer": "095736139",
-    "Name_issuer": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ",
-    "AFM": "095736139",
-    "lines": [
-      {
-        "id": "400011605611275_inst0",
-        "description": "ΕΜΠΗΛΕΧ ΜΟΝΟΠΡΟΣΩΠΗ ΕΠΕ ΗΛΕΚΤΡΟΛΟΓΙΚΩΝ ΕΙΔΩΝ",
-        "amount": "82,27",
-        "vat": "19,74",
-        "category": "αγορες_α_υλων",
-        "vat_category": "ΦΠΑ 24%"
-      }
-    ],
-    "_updated_at": "2025-12-11T10:45:01.827703+00:00"
-  },
-  {
     "mark": "400011830437904",
     "issueDate": "10/10/2025",
     "series": "ΑΛΠ",
@@ -162,15 +61,15 @@
   },
   {
     "mark": "400011830437905",
-    "issueDate": "16/12/2025",
+    "issueDate": "10/10/2025",
     "series": "ΑΛΠ",
-    "aa": "43954",
-    "AA": "43954",
+    "aa": "36671",
+    "AA": "36671",
     "type": "ΑΠΟΔΕΙΞΗ",
     "vatCategory": "",
-    "totalNetValue": "7,60",
+    "totalNetValue": "8,00",
     "totalVatAmount": "",
-    "totalValue": "7,60",
+    "totalValue": "8,00",
     "classification": "",
     "category": "αποδειξακια",
     "χαρακτηρισμός": "αποδειξακια",
@@ -183,7 +82,7 @@
       {
         "id": "r0",
         "description": "",
-        "amount": "7,60",
+        "amount": "8,00",
         "vat": "",
         "category": "αποδειξακια",
         "vat_category": ""
@@ -217,36 +116,6 @@
         "vat": "",
         "category": "αποδειξακια",
         "vat_category": ""
-      }
-    ]
-  },
-  {
-    "mark": "400011622878368",
-    "issueDate": "12/11/2025",
-    "series": "11Μ0ΤΔΑ",
-    "aa": "9480",
-    "AA": "9480",
-    "type": "Τιμολόγιο Πώλησης",
-    "vatCategory": "",
-    "totalNetValue": "69,29",
-    "totalVatAmount": "16,63",
-    "totalValue": "85,92",
-    "classification": "",
-    "category": "",
-    "χαρακτηρισμός": "",
-    "characteristic": "",
-    "mtype": "14",
-    "AFM_issuer": "094439854",
-    "Name_issuer": "ΤΡΑΚΑΔΑΣ Α.Ε.",
-    "AFM": "094439854",
-    "lines": [
-      {
-        "id": "400011622878368_inst0",
-        "description": "ΤΡΑΚΑΔΑΣ Α.Ε.",
-        "amount": "69,29",
-        "vat": "16,63",
-        "category": "αγορες_α_υλων",
-        "vat_category": "ΦΠΑ 24%"
       }
     ]
   }
