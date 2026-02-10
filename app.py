@@ -10000,6 +10000,8 @@ def _analyze_backup_zip(file_like) -> Dict[str, Any]:
         "sample_vats": [],
         "contains_credentials": False,
         "contains_settings": False,
+        "mode": "group",
+        "selected_vats": [],
         "modified_first": None,
         "modified_last": None,
     }
@@ -10048,6 +10050,20 @@ def _analyze_backup_zip(file_like) -> Dict[str, Any]:
             if rel == "credentials_settings.json":
                 summary["contains_settings"] = True
 
+            if rel == "backup_manifest.json":
+                try:
+                    with zf.open(info) as fh:
+                        manifest = json.loads(fh.read().decode("utf-8-sig"))
+                    if isinstance(manifest, dict):
+                        mode = str(manifest.get("mode") or "").strip().lower()
+                        if mode in {"group", "customer"}:
+                            summary["mode"] = mode
+                        vats = manifest.get("selected_vats")
+                        if isinstance(vats, list):
+                            summary["selected_vats"] = [str(v).strip() for v in vats if str(v).strip()]
+                except Exception:
+                    current_app.logger.warning("Failed to parse backup_manifest.json from backup", exc_info=True)
+
         summary["customers_total"] = customer_count
         summary["vat_total"] = len(vats)
         if vats:
@@ -10064,21 +10080,77 @@ def _analyze_backup_zip(file_like) -> Dict[str, Any]:
     return summary
 
 
+def _path_matches_selected_vat(rel_path: str, selected_vats: set[str]) -> bool:
+    """Best-effort check whether a file path belongs to one of the selected VATs."""
+    if not rel_path or not selected_vats:
+        return False
+    rel = str(rel_path).replace('\\', '/').lower()
+    for vat in selected_vats:
+        v = str(vat).strip().lower()
+        if not v:
+            continue
+        if f"/{v}_" in rel or f"/{v}." in rel or f"/{v}/" in rel:
+            return True
+        if rel.startswith(f"{v}_") or rel.startswith(f"{v}."):
+            return True
+        if f"_{v}_" in rel or rel.endswith(f"_{v}.json"):
+            return True
+    return False
+
+
 def _apply_backup_zip(zip_path: str) -> None:
     os.makedirs(get_group_base_dir(), exist_ok=True)
     base = os.path.normpath(get_group_base_dir())
     has_credentials = False
 
     with zipfile.ZipFile(zip_path) as zf:
+        selected_vats: set[str] = set()
+        mode = "group"
+        try:
+            if "backup_manifest.json" in zf.namelist():
+                with zf.open("backup_manifest.json") as mf:
+                    manifest = json.loads(mf.read().decode("utf-8-sig"))
+                if isinstance(manifest, dict):
+                    m = str(manifest.get("mode") or "").strip().lower()
+                    if m in {"group", "customer"}:
+                        mode = m
+                    vats = manifest.get("selected_vats")
+                    if isinstance(vats, list):
+                        selected_vats = {str(v).strip() for v in vats if str(v).strip()}
+        except Exception:
+            current_app.logger.warning("Failed to parse backup manifest during restore", exc_info=True)
+
         members = [info for info in zf.infolist() if not info.is_dir()]
         if not members:
             raise ValueError("Το backup δεν περιέχει αρχεία.")
+
+        customer_mode = mode == "customer" and bool(selected_vats)
+        restored_credentials_payload = None
+
         for info in members:
             rel = _normalize_backup_member(info.filename)
             if not rel:
                 continue
+            if rel == "backup_manifest.json":
+                continue
+
+            if customer_mode and rel in {"credentials_settings.json", "fiscal_meta.json", "activity.log"}:
+                # customer restore should not overwrite group-wide shared state files
+                continue
+
+            if customer_mode and rel not in {"credentials.json"} and not _path_matches_selected_vat(rel, selected_vats):
+                continue
+
             if rel == "credentials.json":
                 has_credentials = True
+                if customer_mode:
+                    try:
+                        with zf.open(info) as src:
+                            restored_credentials_payload = json.loads(src.read().decode("utf-8-sig"))
+                    except Exception:
+                        raise ValueError("Μη έγκυρο credentials.json στο backup.")
+                    continue
+
             dest = os.path.normpath(os.path.join(get_group_base_dir(), rel))
             if not dest.startswith(base + os.sep) and dest != base:
                 raise ValueError(f"Μη έγκυρη διαδρομή στο backup: {info.filename}")
@@ -10087,6 +10159,40 @@ def _apply_backup_zip(zip_path: str) -> None:
                 os.makedirs(dest_dir, exist_ok=True)
             with zf.open(info) as src, open(dest, "wb") as dst:
                 shutil.copyfileobj(src, dst)
+
+        if customer_mode and has_credentials:
+            cred_path = os.path.join(get_group_base_dir(), "credentials.json")
+            try:
+                current = _safe_json_read(cred_path, default=[])
+                current_list = current if isinstance(current, list) else []
+                incoming_list = restored_credentials_payload if isinstance(restored_credentials_payload, list) else []
+
+                incoming_by_vat = {}
+                for item in incoming_list:
+                    if isinstance(item, dict):
+                        v = str(item.get("vat") or "").strip()
+                        if v:
+                            incoming_by_vat[v] = item
+
+                merged = []
+                seen = set()
+                for item in current_list:
+                    if not isinstance(item, dict):
+                        continue
+                    v = str(item.get("vat") or "").strip()
+                    if v and v in incoming_by_vat and v in selected_vats:
+                        merged.append(incoming_by_vat[v])
+                        seen.add(v)
+                    else:
+                        merged.append(item)
+
+                for v in selected_vats:
+                    if v in incoming_by_vat and v not in seen:
+                        merged.append(incoming_by_vat[v])
+
+                _safe_json_write(cred_path, merged)
+            except Exception:
+                raise ValueError("Αποτυχία συγχώνευσης credentials κατά την επαναφορά.")
 
     if not has_credentials:
         raise ValueError("Το backup δεν περιέχει το αρχείο credentials.json.")
@@ -10117,17 +10223,47 @@ def data_backup_download():
             base = get_group_base_dir()
             
             if mode == 'customer' and selected_customers:
+                # Write lightweight manifest so restore can apply customer-scoped merge safely.
+                manifest = {
+                    "mode": "customer",
+                    "selected_vats": sorted(list(selected_customers)),
+                    "created_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                }
+                zf.writestr("backup_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+
+                # Build customer-scoped credentials.json (only selected customers).
+                creds_path = os.path.join(base, "credentials.json")
+                if os.path.exists(creds_path):
+                    try:
+                        creds_data = _safe_json_read(creds_path, default=[])
+                        creds_list = creds_data if isinstance(creds_data, list) else []
+                        filtered = []
+                        for c in creds_list:
+                            if not isinstance(c, dict):
+                                continue
+                            vat = str(c.get("vat") or "").strip()
+                            if vat in selected_customers:
+                                filtered.append(c)
+                        zf.writestr("credentials.json", json.dumps(filtered, ensure_ascii=False, indent=2).encode("utf-8"))
+                    except Exception:
+                        current_app.logger.warning("Failed to build filtered credentials.json for customer backup", exc_info=True)
+
                 # Only backup files related to selected customers
                 for root, _, files in os.walk(base):
                     for fname in files:
-                        # Include files if they match customer VATs or if they're metadata files
-                        if any(vat in fname for vat in selected_customers) or fname in {
-                            'credentials.json', 'credentials_settings.json', 'activity.log', 'fiscal_meta.json'
-                        }:
-                            path = os.path.join(root, fname)
-                            arc = os.path.relpath(path, base)
+                        if fname in {'credentials.json', 'credentials_settings.json', 'activity.log', 'fiscal_meta.json', 'backup_manifest.json'}:
+                            continue
+                        path = os.path.join(root, fname)
+                        arc = os.path.relpath(path, base)
+                        if _path_matches_selected_vat(arc, selected_customers):
                             zf.write(path, arc)
             else:
+                manifest = {
+                    "mode": "group",
+                    "selected_vats": [],
+                    "created_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                }
+                zf.writestr("backup_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
                 # Backup entire group directory (default: mode='group')
                 for root, _, files in os.walk(base):
                     for fname in files:
@@ -10769,6 +10905,11 @@ def export_fastimport_kinitseis():
                         os.remove(temp_path)
                     except OSError:
                         pass
+                    try:
+                        if out_path and os.path.exists(out_path):
+                            os.remove(out_path)
+                    except OSError:
+                        pass
                     return response
 
                 return send_file(temp_path, as_attachment=True, download_name=zip_filename)
@@ -10779,6 +10920,15 @@ def export_fastimport_kinitseis():
                     os.remove(temp_path)
                 except OSError:
                     pass
+
+        @after_this_request
+        def _cleanup_export_after_download(response):
+            try:
+                if out_path and os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            return response
 
         return send_file(out_path, as_attachment=True)
 
