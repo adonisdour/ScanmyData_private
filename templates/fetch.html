@@ -50,7 +50,7 @@
             {% for c in credentials %}
               {%- set selected_val = (request.form.get('use_credential') == c.name) or (not request.form.get('use_credential') and active_credential == c.name) -%}
               {%- set label = c.name ~ (c.vat and (' (' ~ c.vat ~ ')') or '') -%}
-              <option value="{{ c.name }}" {% if selected_val %}selected{% endif %}>{{ label }}</option>
+              <option value="{{ c.name }}" data-vat="{{ c.vat or "" }}" {% if selected_val %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </div>
@@ -208,7 +208,11 @@ document.addEventListener("DOMContentLoaded", function() {
       return;
     }
     try {
-      const res = await fetch('/api/last_fetch_date?credential=' + encodeURIComponent(credentialName));
+      const selectedOption = credentialSelect.options[credentialSelect.selectedIndex];
+      const vat = (selectedOption && selectedOption.dataset && selectedOption.dataset.vat) ? selectedOption.dataset.vat.trim() : '';
+      const query = new URLSearchParams({ credential: credentialName });
+      if (vat) query.set('vat', vat);
+      const res = await fetch('/api/last_fetch_date?' + query.toString());
       if (res.ok) {
         const data = await res.json();
         if (data.last_fetch_date) {
