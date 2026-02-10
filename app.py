@@ -3444,12 +3444,14 @@ def read_client_meta(base_dir=None):
     return None
 
 
-def write_client_meta(filename, uploaded_at_iso, base_dir=None):
-    """Write metadata (filename, uploaded_at iso) to meta file inside base_dir (or DATA_DIR)."""
+def write_client_meta(filename, uploaded_at_iso, base_dir=None, extra_meta=None):
+    """Write metadata for client_db inside base_dir (or DATA_DIR)."""
     meta = {
         'filename': filename,
         'uploaded_at': uploaded_at_iso
     }
+    if isinstance(extra_meta, dict) and extra_meta:
+        meta.update(extra_meta)
     meta_path = _client_meta_path(base_dir)
     try:
         os.makedirs(os.path.dirname(meta_path), exist_ok=True)
@@ -5952,11 +5954,10 @@ def api_save_receipt():
 @app.route('/upload_client_db', methods=['POST'])
 def upload_client_db():
     """
-    Accept multipart/form-data with field 'client_file' and save it into DATA_DIR
-    as client_db{.ext}. Existing client_db* files are moved to a single backup
-    (previous backups removed), and client_db.meta.json is written.
-    Returns JSON { success: bool, message: str, missing_columns: [...], detected_columns: [...],
-                   uploaded_at: str, total_rows: int, new_clients: int, existing_clients: int }
+    Accept multipart/form-data with field 'client_file' and save/update it in group DATA_DIR
+    as client_db{.ext}. Existing rows are merged by AFM (new upload updates same AFM,
+    unknown AFM rows are appended) and client_db.meta.json is updated.
+    Returns JSON with upload/merge stats.
     """
     # Permission check: only admins can upload client_db
     try:
@@ -5971,8 +5972,6 @@ def upload_client_db():
         return jsonify(success=False, message='Ο έλεγχος δικαιωμάτων απέτυχε.'), 403
 
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-
         if 'client_file' not in request.files:
             return jsonify(success=False, message='Δεν βρέθηκε το πεδίο client_file στο αίτημα.'), 400
 
@@ -5980,162 +5979,185 @@ def upload_client_db():
         if not f or not getattr(f, 'filename', '').strip():
             return jsonify(success=False, message='Δεν επιλέχθηκε αρχείο.'), 400
 
-        filename = secure_filename(f.filename)
-        base, ext = os.path.splitext(filename)
+        uploaded_original_name = secure_filename(f.filename)
+        _, ext = os.path.splitext(uploaded_original_name)
         ext = ext.lower()
         if ext not in ALLOWED_CLIENT_EXT:
             return jsonify(success=False, message='Μη επιτρεπτή επέκταση. Χρήση .xlsx, .xls ή .csv'), 400
 
-        # --- Έλεγχος headers ---
-        try:
-            stream = f.stream
-            success, headers, err = _extract_headers_from_upload(stream, ext)
-            if not success:
-                return jsonify(success=False, message=err or 'Αποτυχία ανάγνωσης αρχείου για έλεγχο headers.'), 400
+        # Resolve target group base once.
+        target_base = get_group_base_dir()
+        os.makedirs(target_base, exist_ok=True)
 
-            headers_set = {str(h).strip() for h in headers}
-            missing = sorted(list(REQUIRED_CLIENT_COLUMNS - headers_set))
-            if missing:
-                return jsonify(success=False,
-                               message='Λείπουν υποχρεωτικές στήλες.',
-                               missing_columns=missing,
-                               detected_columns=sorted(list(headers_set))), 400
-        except Exception as e:
-            log.exception("Error while extracting headers from uploaded client_file")
-            return jsonify(success=False, message=f'Σφάλμα κατά τον έλεγχο των στηλών: {e}'), 500
-
-        # --- Ανάγνωση client_file για επεξεργασία πελατών ---
+        # Read upload once (header validation is done on DataFrame columns to reduce I/O).
         try:
-            log.info("[Client DB Upload] Reading file with extension: %s", ext)
             f.stream.seek(0)
             if ext in ['.xls', '.xlsx']:
-                df = pd.read_excel(f.stream, dtype=str)
+                df_upload = pd.read_excel(f.stream, dtype=str)
             else:
-                df = pd.read_csv(f.stream, dtype=str)
-            df.fillna('', inplace=True)
-            log.info("[Client DB Upload] File read successfully: %d rows, %d columns", len(df), len(df.columns))
+                df_upload = pd.read_csv(f.stream, dtype=str)
+            df_upload.fillna('', inplace=True)
         except Exception as e:
-            log.exception("[Client DB Upload] Failed to read uploaded client_file")
+            log.exception('[Client DB Upload] Failed to read uploaded client_file')
             return jsonify(success=False, message=f'Σφάλμα κατά την ανάγνωση του αρχείου: {e}'), 500
 
-        total_rows = len(df)
-        log.info("[Client DB Upload] Total rows in file: %d", total_rows)
-        existing_clients_set = get_existing_client_ids()
-        new_clients_set = set()
-        already_existing_set = set()
+        headers_set = {str(h).strip() for h in df_upload.columns}
+        missing = sorted(list(REQUIRED_CLIENT_COLUMNS - headers_set))
+        if missing:
+            return jsonify(
+                success=False,
+                message='Λείπουν υποχρεωτικές στήλες.',
+                missing_columns=missing,
+                detected_columns=sorted(list(headers_set))
+            ), 400
 
-        for afm in df.get("ΑΦΜ", []):
-            afm_str = str(afm).strip()
-            if afm_str:
-                if afm_str in existing_clients_set:
-                    already_existing_set.add(afm_str)
-                else:
-                    new_clients_set.add(afm_str)
-        
-        log.info("[Client DB Upload] Processing complete: new=%d, existing=%d, total=%d", 
-                 len(new_clients_set), len(already_existing_set), total_rows)
+        # Determine existing client_db file (if any).
+        existing_path = None
+        existing_ext = None
+        for existing in os.listdir(target_base):
+            if not existing.startswith('client_db'):
+                continue
+            ext_candidate = os.path.splitext(existing)[1].lower()
+            if ext_candidate in ALLOWED_CLIENT_EXT and '.bak.' not in existing and not existing.endswith('.bak'):
+                existing_path = os.path.join(target_base, existing)
+                existing_ext = ext_candidate
+                break
 
-        # --- Backup: keep only one backup ---
-        # save into the user's group folder when possible
-        try:
-            from flask_login import current_user
-            target_base = DATA_DIR
-            requested_group = (request.form.get('group') or '').strip()
-            if getattr(current_user, 'is_authenticated', False):
-                user_groups = getattr(current_user, 'groups', [])
-                if requested_group:
-                    grp = None
-                    for g in user_groups:
-                        if g.name == requested_group:
-                            grp = g
-                            break
-                    if not grp:
-                        return jsonify(success=False, message='Δεν έχετε πρόσβαση στην επιλεγμένη ομάδα.'), 403
-                    target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
-                else:
-                    # Try to use active_group from session first
-                    active_group_name = session.get('active_group')
-                    if active_group_name:
-                        for g in user_groups:
-                            if g.name == active_group_name:
-                                target_base = os.path.join(BASE_DIR, 'data', g.data_folder or '')
-                                break
-                    else:
-                        # Fallback: if only 1 group, use it; otherwise require explicit group param
-                        if len(user_groups) == 1:
-                            target_base = os.path.join(BASE_DIR, 'data', user_groups[0].data_folder or '')
-                        else:
-                            return jsonify(success=False, message='Έχετε πολλές ομάδες. Συμπληρώστε το πεδίο group στο αίτημα.'), 400
-            os.makedirs(target_base, exist_ok=True)
+        # Keep stable naming convention client_db{.ext}; if a client_db already exists, preserve its extension.
+        final_ext = existing_ext or ext
+        dest_name = f'client_db{final_ext}'
+        dest_path = os.path.join(target_base, dest_name)
 
-            dest_name = f'client_db{ext}'
-            dest_path = os.path.join(target_base, dest_name)
+        # Merge strategy by AFM: upload updates existing AFM, new AFM appended.
+        merge_source_rows = len(df_upload)
+        merged_rows = merge_source_rows
+        updated_clients = 0
+        new_clients = 0
+        if 'ΑΦΜ' in df_upload.columns:
+            upload_afm = df_upload['ΑΦΜ'].astype(str).str.strip()
+            upload_unique_afm = set(a for a in upload_afm if a)
+        else:
+            upload_unique_afm = set()
 
-            # 1) remove any previous backups in target_base
-            for existing in os.listdir(target_base):
-                if not existing.startswith('client_db'):
-                    continue
-                if '.bak.' in existing or existing.endswith('.bak'):
-                    try:
-                        os.remove(os.path.join(target_base, existing))
-                        log.info("Removed old client_db backup: %s", existing)
-                    except Exception:
-                        log.exception("Failed to remove old backup %s (continuing)", existing)
-
-            # 2) move current client_db.* (if any) to a new single backup (timestamped)
-            for existing in os.listdir(target_base):
-                if existing.startswith('client_db'):
-                    existing_ext = os.path.splitext(existing)[1].lower()
-                    if existing_ext in ALLOWED_CLIENT_EXT:
-                        existing_path = os.path.join(target_base, existing)
-                        ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
-                        backup_name = f"{existing}.bak.{ts}"
-                        backup_path = os.path.join(target_base, backup_name)
-                        try:
-                            os.rename(existing_path, backup_path)
-                            log.info("Backed up previous client_db: %s -> %s", existing, backup_name)
-                        except Exception:
-                            log.exception("Failed to backup previous client_db %s (continuing)", existing)
-
-            # --- Save uploaded file to destination path ---
+        if existing_path and os.path.exists(existing_path):
             try:
-                f.stream.seek(0)
-                f.save(dest_path)
+                if existing_ext in ['.xls', '.xlsx']:
+                    df_existing = pd.read_excel(existing_path, dtype=str)
+                else:
+                    df_existing = pd.read_csv(existing_path, dtype=str)
+                df_existing.fillna('', inplace=True)
+
+                # Align schemas (keep all columns from both sources).
+                all_columns = list(dict.fromkeys([*df_existing.columns.tolist(), *df_upload.columns.tolist()]))
+                df_existing = df_existing.reindex(columns=all_columns, fill_value='')
+                df_upload = df_upload.reindex(columns=all_columns, fill_value='')
+
+                if 'ΑΦΜ' in df_existing.columns and 'ΑΦΜ' in df_upload.columns:
+                    existing_afm = df_existing['ΑΦΜ'].astype(str).str.strip()
+                    existing_afm_set = set(a for a in existing_afm if a)
+
+                    updated_clients = len(upload_unique_afm & existing_afm_set)
+                    new_clients = len(upload_unique_afm - existing_afm_set)
+
+                    # Keep existing rows only for AFMs not re-uploaded, then append full uploaded set.
+                    keep_mask = ~existing_afm.isin(upload_unique_afm)
+                    df_merged = pd.concat([df_existing.loc[keep_mask], df_upload], ignore_index=True)
+                else:
+                    # Missing AFM in one of datasets: safe append fallback.
+                    df_merged = pd.concat([df_existing, df_upload], ignore_index=True)
+                    new_clients = len(upload_unique_afm)
+
+                df_merged.fillna('', inplace=True)
+                merged_rows = len(df_merged)
             except Exception:
-                log.exception("Failed to save uploaded client_db to %s", dest_path)
-                return jsonify(success=False, message='Σφάλμα κατά την αποθήκευση του αρχείου.'), 500
+                log.exception('[Client DB Upload] Failed reading existing client_db; fallback to uploaded file only')
+                df_merged = df_upload.copy()
+                new_clients = len(upload_unique_afm)
+                updated_clients = 0
+                merged_rows = len(df_merged)
+        else:
+            df_merged = df_upload.copy()
+            new_clients = len(upload_unique_afm)
+            updated_clients = 0
 
-        except Exception:
-            log.exception("Failed while rotating client_db backups (continuing)")
+        # Rotate backups only after merge is ready.
+        for existing in os.listdir(target_base):
+            if not existing.startswith('client_db'):
+                continue
+            if '.bak.' in existing or existing.endswith('.bak'):
+                try:
+                    os.remove(os.path.join(target_base, existing))
+                except Exception:
+                    log.exception('Failed to remove old backup %s (continuing)', existing)
 
-        # --- Meta info ---
-        uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
-        try:
-            log.info("[Client DB Upload] Writing metadata to base_dir: %s", target_base)
+        if os.path.exists(dest_path):
+            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
+            backup_name = f"{dest_name}.bak.{ts}"
             try:
-                write_client_meta(filename, uploaded_at_iso, base_dir=target_base)
-                log.info("[Client DB Upload] Metadata written successfully")
-            except Exception as meta_err:
-                log.error("[Client DB Upload] Failed to write metadata to target_base, trying fallback: %s", meta_err)
-                # fallback to global meta write
-                write_client_meta(filename, uploaded_at_iso)
-                log.info("[Client DB Upload] Metadata written to fallback location")
+                os.rename(dest_path, os.path.join(target_base, backup_name))
+            except Exception:
+                log.exception('Failed to backup previous client_db %s (continuing)', dest_name)
+
+        # If existing file had different extension, archive it too (single active canonical file remains).
+        if existing_path and os.path.exists(existing_path) and os.path.abspath(existing_path) != os.path.abspath(dest_path):
+            ts = _dt.utcnow().strftime('%Y%m%dT%H%M%SZ')
+            try:
+                os.rename(existing_path, os.path.join(target_base, f"{os.path.basename(existing_path)}.bak.{ts}"))
+            except Exception:
+                log.exception('Failed to archive previous client_db variant %s', existing_path)
+
+        # Save merged dataset.
+        try:
+            if final_ext in ['.xls', '.xlsx']:
+                if final_ext == '.xlsx':
+                    df_merged.to_excel(dest_path, index=False, engine='openpyxl')
+                else:
+                    # Try legacy .xls writer; fallback to .xlsx if not available.
+                    try:
+                        df_merged.to_excel(dest_path, index=False)
+                    except Exception:
+                        log.warning('Legacy .xls writer unavailable, falling back to .xlsx')
+                        final_ext = '.xlsx'
+                        dest_name = f'client_db{final_ext}'
+                        dest_path = os.path.join(target_base, dest_name)
+                        df_merged.to_excel(dest_path, index=False, engine='openpyxl')
+            else:
+                df_merged.to_csv(dest_path, index=False, encoding='utf-8-sig')
         except Exception:
-            log.exception("[Client DB Upload] Failed to write client_db metadata (continuing anyway)")
+            log.exception('Failed to save merged client_db to %s', dest_path)
+            return jsonify(success=False, message='Σφάλμα κατά την αποθήκευση του ενημερωμένου αρχείου.'), 500
+
+        uploaded_at_iso = _dt.utcnow().replace(microsecond=0).isoformat() + 'Z'
+        meta_extra = {
+            'original_filename': uploaded_original_name,
+            'storage_filename': dest_name,
+            'total_rows': int(merged_rows),
+            'source_rows': int(merge_source_rows),
+            'new_clients': int(new_clients),
+            'existing_clients': int(updated_clients),
+            'merge_mode': 'upsert_by_afm'
+        }
+        try:
+            # Keep canonical naming in metadata too.
+            write_client_meta(dest_name, uploaded_at_iso, base_dir=target_base, extra_meta=meta_extra)
+        except Exception:
+            log.exception('[Client DB Upload] Failed to write client_db metadata (continuing anyway)')
 
         return jsonify(
             success=True,
-            message=f'Αποθηκεύτηκε: {dest_name}',
-            filename=filename,
+            message=f'Αποθηκεύτηκε/ενημερώθηκε: {dest_name}',
+            filename=dest_name,
+            original_filename=uploaded_original_name,
             uploaded_at=uploaded_at_iso,
             detected_columns=sorted(list(headers_set)),
-            total_rows=total_rows,
-            new_clients=len(new_clients_set),
-            existing_clients=len(already_existing_set)
+            total_rows=int(merged_rows),
+            source_rows=int(merge_source_rows),
+            new_clients=int(new_clients),
+            existing_clients=int(updated_clients)
         ), 200
 
     except Exception:
-        log.exception("Unhandled exception in upload_client_db")
+        log.exception('Unhandled exception in upload_client_db')
         return jsonify(success=False, message='Εσωτερικό σφάλμα server.'), 500
 
 
@@ -6278,7 +6300,8 @@ def _upload_chart_of_accounts_impl(category='G'):
             return jsonify(ok=False, error='Εσωτερικό σφάλμα: Μη έγκυρο πλήθος λογαριασμών.'), 500
             
         meta = {
-            'filename': filename,
+            'filename': dest_name,
+            'original_filename': filename,
             'uploaded_at': uploaded_at,
             'account_count': account_count,
             'category': category,
@@ -6299,7 +6322,8 @@ def _upload_chart_of_accounts_impl(category='G'):
         return jsonify(
             ok=True,
             message=f'Το λογιστικό σχέδιο {category_label} αποθηκεύτηκε επιτυχώς (κοινόχρηστο για όλη την ομάδα)',
-            filename=filename,
+            filename=dest_name,
+            original_filename=filename,
             uploaded_at=uploaded_at,
             account_count=account_count,
             category=category,
@@ -6749,33 +6773,29 @@ def client_db_info():
         counts = {'total_rows': 0, 'new_rows': 0, 'updated_rows': 0}
 
         if meta:
-            # αν υπάρχει client_db, διαβάζουμε για μέτρηση
-            p = os.path.join(target_base, f"client_db{os.path.splitext(meta.get('filename',''))[1]}")
-            if os.path.exists(p):
-                try:
-                    ext = os.path.splitext(p)[1].lower()
-                    if ext in ['.xls', '.xlsx']:
-                        df = pd.read_excel(p, dtype=str)
-                    else:
-                        df = pd.read_csv(p, dtype=str)
-                    df.fillna('', inplace=True)
-                    total_rows = len(df)
-                    existing_clients_set = set(get_existing_client_ids())
-                    new_rows = updated_rows = 0
-                    for idx, row in df.iterrows():
-                        client_id = str(row.get("ΑΦΜ", "")).strip()
-                        if not client_id:
-                            continue
-                        if client_id in existing_clients_set:
-                            updated_rows += 1
+            # Prefer precomputed counts from metadata (upload path stores these for low-resource environments).
+            if any(k in meta for k in ('total_rows', 'new_clients', 'existing_clients')):
+                counts.update({
+                    'total_rows': int(meta.get('total_rows') or 0),
+                    'new_rows': int(meta.get('new_clients') or 0),
+                    'updated_rows': int(meta.get('existing_clients') or 0),
+                })
+            else:
+                # Fallback only for old metadata versions.
+                p = os.path.join(target_base, str(meta.get('storage_filename') or meta.get('filename') or 'client_db.xlsx'))
+                if os.path.exists(p):
+                    try:
+                        ext = os.path.splitext(p)[1].lower()
+                        if ext in ['.xls', '.xlsx']:
+                            df = pd.read_excel(p, dtype=str)
                         else:
-                            new_rows += 1
-                            existing_clients_set.add(client_id)
-                    counts.update({'total_rows': total_rows, 'new_rows': new_rows, 'updated_rows': updated_rows})
-                except Exception:
-                    log.exception("Failed to count client_db rows")
+                            df = pd.read_csv(p, dtype=str)
+                        df.fillna('', inplace=True)
+                        counts['total_rows'] = len(df)
+                    except Exception:
+                        log.exception("Failed to count client_db rows")
 
-            return jsonify(exists=True, filename=meta.get('filename'),
+            return jsonify(exists=True, filename=meta.get('storage_filename') or meta.get('filename'),
                            uploaded_at=meta.get('uploaded_at'),
                            **counts), 200
 
