@@ -207,9 +207,16 @@ def _infer_vat_rate_for_line(ln: Dict[str, Any], rec: Dict[str, Any]) -> Tuple[O
         vat = float(str(ln.get("vat", ln.get("vat_amount") or 0)).replace(",", "."))
     except Exception:
         vat = 0.0
-    if net and vat:
+    # If we have a net amount, treat explicit zero vat as 0%.
+    # Previously the logic only computed rate when both net and vat were truthy,
+    # which skipped cases where vat==0 (0% VAT). This caused unresolved account
+    # errors for 0%-tax lines. Handle vat==0 explicitly.
+    if net:
         try:
-            return int(round((vat / net) * 100.0)), "calc"
+            if abs(vat) < 1e-9:
+                return 0, "calc"
+            if vat:
+                return int(round((vat / net) * 100.0)), "calc"
         except Exception:
             pass
     rate = _extract_rate_from_string(rec.get("vatCategory")) or _extract_rate_from_string(rec.get("type"))

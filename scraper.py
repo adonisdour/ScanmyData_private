@@ -648,9 +648,52 @@ def scrape_pegcloud(url):
 def scrape_einvoicing_gr(url):
     """
     Επιστρέφει (mark, counterpart_vat)
-    Για URLs όπως: https://e-invoicing.gr/edocuments/ViewInvoice?ct=PEPPOL&id=...&s=A&h=...
-    Μετατρέπει σε API endpoint και εξάγει δεδομένα από το HTML response.
+    Για URLs όπως: https://e-invoicing.gr/edocuments/ViewInvoice...
+    1) Ψάχνει για κουμπί "Παραστατικό (ΑΑΔΕ)" → πηγαίνει μέσω mydatapi
+    2) Αλλιώς χρησιμοποιεί API endpoint (για PEPPOL URLs)
     """
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+    
+    # Πρώτα, φόρτωσε τη σελίδα για να ψάξεις το κουμπί
+    try:
+        r_initial = sess.get(url, timeout=15)
+        r_initial.raise_for_status()
+        r_initial.encoding = 'utf-8'
+    except Exception as e:
+        print(f"[RequestError] {e}")
+        return None, None
+    
+    soup_initial = BeautifulSoup(r_initial.text, "html.parser")
+    
+    # Ψάξε για κουμπί "Παραστατικό (ΑΑΔΕ)" που οδηγεί σε mydatapi
+    mydatapi_button = soup_initial.find("span", class_=lambda c: c and "btn" in c, string=lambda s: s and "Παραστατικό" in s)
+    
+    if mydatapi_button:
+        # Βρες το parent link που έχει το href
+        parent_link = mydatapi_button.find_parent("a")
+        if parent_link and parent_link.get("href"):
+            mydatapi_url = parent_link.get("href")
+            try:
+                # κάνε GET request στο mydatapi URL
+                r_mydata = sess.get(mydatapi_url, timeout=15)
+                r_mydata.raise_for_status()
+                r_mydata.encoding = 'utf-8'
+                
+                # Χρησιμοποίησε τη συνάρτηση scrape_mydatapi για να εξάγεις τα δεδομένα
+                data = scrape_mydatapi(mydatapi_url)
+                if data:
+                    mark = (data.get("MARK") or "").strip()
+                    afm = (data.get("ΑΦΜ Πελάτη") or "").strip()
+                    afm = re.sub(r"\D", "", afm) if afm else None
+                    mark_str = mark if mark and mark != "N/A" else None
+                    if mark_str or afm:
+                        return mark_str, afm
+            except Exception as e:
+                print(f"[RequestError mydatapi] {e}")
+                pass  # fallback στην κανονική λογική
+    
+    # Fallback: χρησιμοποίησε την παλιά λογική (API endpoint ή HTML parsing)
     parsed = urlparse(url)
     
     # Αν είναι ήδη API URL, χρησιμοποίησέ το
@@ -669,9 +712,6 @@ def scrape_einvoicing_gr(url):
         
         base = f"{parsed.scheme}://{parsed.netloc}"
         api_url = f"{base}/api/GetInvoice?contentType={ct}&id={doc_id}&source={source}&isPreview=True&hashToken={hash_token}"
-    
-    sess = requests.Session()
-    sess.headers.update(HEADERS)
     
     try:
         r = sess.get(api_url, timeout=15)
@@ -815,6 +855,89 @@ def scrape_epsilon(url):
     return mark, counterpart_vat, {"attempt_url": getfile_url, "status_code": r.status_code}
 
 
+# -------------------- VS.GR --------------------
+def scrape_vsgr(url):
+    """
+    Επιστρέφει (marks, counterpart_vat)
+    Για URLs όπως: https://vs.gr/iv/invoice/download/.../...
+    Προσθέτει ?peppol=true και εξάγει MARK και ΑΦΜ πελάτη από PEPPOL visualization.
+    """
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+    
+    # Προσθέσε ?peppol=true parameter
+    peppol_url = url
+    if "?" not in url:
+        peppol_url = url + "?peppol=true"
+    else:
+        peppol_url = url + "&peppol=true"
+    
+    try:
+        r = sess.get(peppol_url, timeout=15)
+        r.raise_for_status()
+        r.encoding = 'utf-8'
+    except Exception as e:
+        print(f"[RequestError] {e}")
+        return None, None
+    
+    html = r.text
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 1) MARK - Αναζήτηση του 15ψήφιου νούμερου
+    mark = None
+    m = re.search(r'\b(\d{15})\b', html)
+    if m:
+        mark = m.group(1)
+    
+    # 2) ΑΦΜ Πελάτη - Ψάξε τις σειρές με structured approach
+    counterpart_vat = None
+    
+    # Pattern 1: Ψάξε ΑΚΡΙΒΩΣ για "Αναγνωριστικό ΦΠΑ Αγοραστή (ΒΤ-48)" label
+    # Αυτή η σειρά περιέχει το σωστό VAT του πελάτη
+    for row in soup.find_all("tr"):
+        row_text = row.get_text(" ", strip=True)
+        # Ψάξε για το ακριβές pattern
+        if re.search(r"Αναγνωριστικό ΦΠΑ Αγοραστή.*ΒΤ-48", row_text, re.I):
+            # Βρες το span/td που περιέχει το VAT (συνήθως το τελευταίο)
+            spans = row.find_all("span")
+            if spans:
+                for span in reversed(spans):  # αναζήτησε από τέλος προς αρχή
+                    text = span.get_text(strip=True)
+                    m_vat = re.search(r'(\d{9})', text)
+                    if m_vat:
+                        counterpart_vat = m_vat.group(1)
+                        break
+            if counterpart_vat:
+                break
+    
+    # Pattern 2: Fallback - ψάξε όλα τα table rows με "Αναγνωριστικό" label
+    if not counterpart_vat:
+        for row in soup.find_all("tr"):
+            row_text = row.get_text(" ", strip=True)
+            if re.search(r"Αναγνωριστικό ΦΠΑ Αγοραστή", row_text, re.I) or re.search(r"BT-48", row_text, re.I):
+                spans = row.find_all("span")
+                if spans:
+                    for span in reversed(spans):
+                        text = span.get_text(strip=True)
+                        m_vat = re.search(r'(\d{9})', text)
+                        if m_vat:
+                            counterpart_vat = m_vat.group(1)
+                            break
+                if counterpart_vat:
+                    break
+    
+    # Pattern 3: Last resort - αναζήτησε ΟΛΑ τα 9ψήφια και πάρε το δεύτερο (αγοραστή)
+    # ΑΛΛΑ μόνο αν υπάρχουν τουλάχιστον 2
+    if not counterpart_vat:
+        all_vats = re.findall(r'\b(\d{9})\b', html)
+        if len(all_vats) >= 2:
+            # Το πρώτο είναι πωλητής, το δεύτερο πελάτης
+            counterpart_vat = all_vats[1]
+    
+    marks = [mark] if mark else []
+    return marks, counterpart_vat
+
+
 # -------------------- MAIN --------------------
 def main():
     url = input("Εισάγετε το URL: ").strip()
@@ -861,6 +984,10 @@ def main():
         mark, counterpart_vat = scrape_einvoicing_gr(url)
         marks = [mark] if mark else []
 
+    elif "vs.gr" in domain:
+        source = "VS.gr"
+        marks, counterpart_vat = scrape_vsgr(url)
+
     else:
         print("Άγνωστο URL. Δεν μπορεί να γίνει scrape.")
         return
@@ -906,6 +1033,12 @@ def main():
             print("Δεν βρέθηκε ΑΦΜ πελάτη.")
 
     if source == "e-Invoicing.gr (PEPPOL)":
+        if counterpart_vat:
+            print("ΑΦΜ Πελάτη:", counterpart_vat)
+        else:
+            print("Δεν βρέθηκε ΑΦΜ πελάτη.")
+
+    if source == "VS.gr":
         if counterpart_vat:
             print("ΑΦΜ Πελάτη:", counterpart_vat)
         else:

@@ -112,7 +112,12 @@ class User(UserMixin, db.Model):
         self.user_groups.append(ug)
 
     def role_for_group(self, group):
-        # If Firebase is enabled and user has firebase_uid, get role from Firebase
+        # Prefer local database role (ensures template rendering matches local user_groups)
+        for ug in self.user_groups:
+            if ug.group_id == group.id:
+                return ug.role
+
+        # If not found locally, and Firebase is enabled for this user, try Firebase as a fallback
         if self.firebase_uid:
             try:
                 from firebase_auth_handlers_new import firebase_get_user_role_in_group
@@ -121,11 +126,7 @@ class User(UserMixin, db.Model):
                     return firebase_role
             except Exception as e:
                 print(f"Firebase role fetch error: {e}")
-        
-        # Fallback to local database
-        for ug in self.user_groups:
-            if ug.group_id == group.id:
-                return ug.role
+
         return None
 
     def remove_from_group(self, group):

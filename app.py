@@ -42,7 +42,7 @@ from flask import (
 import tempfile
 import zipfile
 import shutil
-from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr
+from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr
 import requests
 import pandas as pd
 from shutil import move
@@ -1033,6 +1033,58 @@ def api_sync_progress():
     except Exception as e:
         app.logger.error(f"Failed to get sync progress: {e}")
         return jsonify({'status': 'error', 'percent': 0, 'message': str(e)}), 500
+
+
+@app.route('/api/debug/role', methods=['GET'])
+@login_required
+def api_debug_role():
+    """Debug endpoint to check user role detection in active group."""
+    try:
+        from auth import get_active_group
+        from flask_login import current_user
+        
+        result = {
+            'user_id': current_user.id if current_user else None,
+            'username': current_user.username if current_user else None,
+            'is_authenticated': getattr(current_user, 'is_authenticated', False),
+            'session_active_group': session.get('active_group'),
+            'active_group': None,
+            'role_in_group': None,
+            'all_user_groups': [],
+            'errors': []
+        }
+        
+        # Get active group
+        grp = get_active_group()
+        if grp:
+            result['active_group'] = {
+                'id': grp.id,
+                'name': grp.name
+            }
+            # Get role
+            try:
+                role = current_user.role_for_group(grp)
+                result['role_in_group'] = role
+            except Exception as e:
+                result['errors'].append(f"role_for_group error: {e}")
+        else:
+            result['errors'].append("get_active_group returned None")
+        
+        # List all user groups
+        try:
+            for g in current_user.groups:
+                result['all_user_groups'].append({
+                    'id': g.id,
+                    'name': g.name,
+                    'role': current_user.role_for_group(g) if g else None
+                })
+        except Exception as e:
+            result['errors'].append(f"user.groups error: {e}")
+        
+        return jsonify(result), 200
+    except Exception as e:
+        app.logger.exception(f"Debug role endpoint error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 def _load_credentials():
     p = Path(credentials_path_for_request())
@@ -4123,14 +4175,24 @@ def inject_active_credential():
     try:
         from auth import get_active_group
         from flask_login import current_user
+        
+        # Έλεγχος αν ο χρήστης είναι authenticated
         if getattr(current_user, 'is_authenticated', False):
             grp = get_active_group()
             if grp:
+                # Πάρε το ρόλο του χρήστη στην ομάδα
                 role = current_user.role_for_group(grp)
-                if role:
+                if role in ('admin', 'member'):
                     user_role = role
-    except Exception:
-        pass
+                else:
+                    # Default if role is something else
+                    user_role = 'member'
+            # else: no active group, keep default 'member'
+        # else: not authenticated, keep default 'member'
+    except Exception as e:
+        # Log the error for debugging
+        log.warning(f"[auth] Failed to determine user_role: {e}")
+        user_role = "member"
     
     active_group_name = None
     try:
@@ -7572,6 +7634,13 @@ def search():
                         scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                         if not scraped_afm:
                             scraped_afm = scraped_afm_eg
+                    elif "vs.gr" in domain:
+                        scraped_marks, scraped_afm_vs = scrape_vsgr(mark)
+                        # Cleanup: ensure marks are valid 15-digit strings
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_vs
                     else:
                         # fallback try receipt detector
                         if detect_and_scrape_receipt:
