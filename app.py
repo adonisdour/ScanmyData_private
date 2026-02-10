@@ -2973,6 +2973,29 @@ def get_last_fetch_date(credential_name: str) -> Optional[str]:
         return None
 
 
+def _get_fetch_tracking_key(credential_name: str = '', credential_vat: str = '') -> str:
+    """Return stable key for last-fetch tracking (prefer VAT when available)."""
+    vat = str(credential_vat or '').strip()
+    if vat:
+        return vat
+
+    name = str(credential_name or '').strip()
+    if not name:
+        return ''
+
+    try:
+        creds = load_credentials() or []
+        found = next((c for c in creds if str(c.get('name', '')).strip() == name), None)
+        if found:
+            found_vat = str(found.get('vat', '')).strip()
+            if found_vat:
+                return found_vat
+    except Exception:
+        pass
+
+    return name
+
+
 def set_last_fetch_date(credential_name: str, date_str: Optional[str] = None) -> bool:
     """
     Set the last fetch date for a credential in fiscal_meta.json.
@@ -6653,10 +6676,15 @@ def api_last_fetch_date():
     """
     try:
         credential_name = (request.args.get("credential") or "").strip()
-        if not credential_name:
+        credential_vat = (request.args.get("vat") or "").strip()
+        if not credential_name and not credential_vat:
             return jsonify({"last_fetch_date": None}), 400
-        
-        last_date = get_last_fetch_date(credential_name)
+
+        fetch_key = _get_fetch_tracking_key(credential_name, credential_vat)
+        last_date = get_last_fetch_date(fetch_key) if fetch_key else None
+        if not last_date and credential_name and fetch_key != credential_name:
+            # Backward compatibility: older installs may have written by credential name.
+            last_date = get_last_fetch_date(credential_name)
         
         # Format for display if available
         if last_date:
@@ -6703,28 +6731,21 @@ def client_db_info():
     { exists: bool, filename: str|null, uploaded_at: str|null, total_rows: int, new_rows: int, updated_rows: int }
     """
     try:
-        # prefer per-user group meta when authenticated
+        # Always resolve against the active group first to avoid cross-group metadata mismatches.
+        target_base = get_group_base_dir()
+        requested_group = (request.args.get('group') or '').strip()
         try:
             from flask_login import current_user
-            target_base = DATA_DIR
-            requested_group = (request.args.get('group') or '').strip()
-            if getattr(current_user, 'is_authenticated', False):
+            if requested_group and getattr(current_user, 'is_authenticated', False):
                 user_groups = getattr(current_user, 'groups', [])
-                if requested_group:
-                    grp = None
-                    for g in user_groups:
-                        if g.name == requested_group:
-                            grp = g
-                            break
-                    if not grp:
-                        return jsonify({'ok': False, 'error': 'Δεν έχετε πρόσβαση στην επιλεγμένη ομάδα.'}), 403
-                    target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
-                else:
-                    if len(user_groups) == 1:
-                        target_base = os.path.join(BASE_DIR, 'data', user_groups[0].data_folder or '')
-            meta = read_client_meta(base_dir=target_base)
+                grp = next((g for g in user_groups if g.name == requested_group), None)
+                if not grp:
+                    return jsonify({'ok': False, 'error': 'Δεν έχετε πρόσβαση στην επιλεγμένη ομάδα.'}), 403
+                target_base = os.path.join(BASE_DIR, 'data', grp.data_folder or '')
         except Exception:
-            meta = read_client_meta()
+            pass
+
+        meta = read_client_meta(base_dir=target_base)
         counts = {'total_rows': 0, 'new_rows': 0, 'updated_rows': 0}
 
         if meta:
@@ -6759,9 +6780,9 @@ def client_db_info():
                            **counts), 200
 
         # fallback: if any client_db.* exists but no meta file
-        for existing in os.listdir(get_group_base_dir()):
+        for existing in os.listdir(target_base):
             if existing.startswith('client_db') and os.path.splitext(existing)[1].lower() in ALLOWED_CLIENT_EXT:
-                p = os.path.join(get_group_base_dir(), existing)
+                p = os.path.join(target_base, existing)
                 try:
                     mtime = _dt.utcfromtimestamp(os.path.getmtime(p)).replace(microsecond=0).isoformat() + 'Z'
                     counts.update({'total_rows': 0, 'new_rows': 0, 'updated_rows': 0})
@@ -7111,9 +7132,10 @@ def fetch():
                 if append_summary_to_customer_file(s, vat):
                     added_summaries += 1
 
-            # Track last fetch date for this credential
-            if selected:
-                set_last_fetch_date(selected)
+            # Track last fetch date for this selected client (prefer VAT key).
+            fetch_key = _get_fetch_tracking_key(selected, vat)
+            if fetch_key:
+                set_last_fetch_date(fetch_key)
             
             # Log fetch operation as structured activity (so admin UI shows details)
             try:
@@ -11372,4 +11394,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "5001"))
     debug_flag = True
     app.run(host="0.0.0.0", port=port, debug=debug_flag, use_reloader=True)
-
