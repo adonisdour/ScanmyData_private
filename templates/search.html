@@ -726,7 +726,9 @@ function katToPercent(k){
 
   function categoryAllowedForVat(cat, vatKey){
     if(!cat) return true;
-    const key = String(cat);
+    const key = String(cat).trim();
+    // Εγγυοδοσία: μόνο στο 0% στο repeat mapping modal.
+    if(key === 'εγγυοδοσια' && vatKey !== '0%') return false;
     const allowed = CATEGORY_VAT_CONSTRAINTS[key];
     if(!allowed || !allowed.length) return true;
     return allowed.includes(vatKey);
