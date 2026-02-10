@@ -758,13 +758,32 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
         
         def _get_file_name_with_extension(key_name):
             """
-            Convert key name to proper file name with extension.
-            E.g., 'credentials_settings_json' -> 'credentials_settings.json'
-                  '12345679_2024_invoices_xlsx' -> '12345679_2024_invoices.xlsx'
+            Convert Firebase key names back to local file names.
+            Handles both unsanitized keys (foo.xlsx.meta_json) and sanitized ones
+            produced by RTDB key rules (foo_xlsx_meta_json).
             """
             key_str = str(key_name).lstrip('/')
-            
-            # Map of suffixes to extensions
+
+            # Handle sanitized metadata keys first (critical for CoA/client_db metadata).
+            special_suffixes = {
+                '_xlsx_meta_json': '.xlsx.meta.json',
+                '_xls_meta_json': '.xls.meta.json',
+                '_csv_meta_json': '.csv.meta.json',
+            }
+            for suffix, ext in special_suffixes.items():
+                if key_str.endswith(suffix):
+                    return f"{key_str[:-len(suffix)]}{ext}"
+
+            # Also handle unsanitized metadata keys.
+            unsanitized_suffixes = {
+                '.xlsx.meta_json': '.xlsx.meta.json',
+                '.xls.meta_json': '.xls.meta.json',
+                '.csv.meta_json': '.csv.meta.json',
+            }
+            for suffix, ext in unsanitized_suffixes.items():
+                if key_str.endswith(suffix):
+                    return f"{key_str[:-len(suffix)]}{ext}"
+
             extension_map = {
                 '_json': '.json',
                 '_xlsx': '.xlsx',
@@ -775,15 +794,11 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                 '_xml': '.xml',
                 '_log': '.log',
             }
-            
-            # Check for known extensions at the end
+
             for suffix, ext in extension_map.items():
                 if key_str.endswith(suffix):
-                    # Replace the suffix with the extension
-                    base_name = key_str[:-len(suffix)]
-                    return f"{base_name}{ext}"
-            
-            # If no extension found, return as-is
+                    return f"{key_str[:-len(suffix)]}{ext}"
+
             return key_str
         
         # compute total files to process for progress estimation
