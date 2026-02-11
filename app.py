@@ -10001,8 +10001,8 @@ def _support_get_my_open_ticket(data: Dict[str, Any], user_id: str) -> Optional[
 
 
 def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
-    token = (os.getenv("DISCORD_BOT_TOKEN") or "").strip()
-    channel_id = (os.getenv("DISCORD_SUPPORT_CHANNEL_ID") or "").strip()
+    token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
+    channel_id = (os.getenv("DISCORD_SUPPORT_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "").strip()
     guild_id = (os.getenv("DISCORD_GUILD_ID") or "").strip()
     if not token or not channel_id:
         return None
@@ -10015,7 +10015,7 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
         seed = requests.post(
             f"https://discord.com/api/v10/channels/{channel_id}/messages",
             headers=headers,
-            json={"content": f"[Ticket #{ticket['id']}] Νέο αίτημα υποστήριξης από {ticket.get('username') or 'user'}"},
+            json={"content": f"[Ticket #{ticket['id']}] Νέο αίτημα υποστήριξης από {ticket.get('display_name') or ticket.get('username') or 'user'}"},
             timeout=12,
         )
         if not seed.ok:
@@ -10043,7 +10043,7 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
 
         content = (
             f"[Ticket #{ticket['id']}]\n"
-            f"User: {ticket.get('username') or 'user'}\n"
+            f"User: {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
             f"VAT: {ticket.get('vat') or '-'}\n"
             f"Group: {ticket.get('group_name') or '-'}\n"
             f"Message:\n{first_message}"
@@ -10086,8 +10086,11 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
 def api_support_open_ticket():
     payload = request.get_json(silent=True) or {}
     message = str(payload.get("message") or "").strip()
+    display_name = str(payload.get("display_name") or "").strip()
     if not message:
         return jsonify({"ok": False, "error": "Το μήνυμα είναι υποχρεωτικό."}), 400
+    if not display_name:
+        return jsonify({"ok": False, "error": "Δήλωσε όνομα πριν ξεκινήσεις συνομιλία."}), 400
 
     from auth import get_active_group
     grp = get_active_group()
@@ -10107,12 +10110,15 @@ def api_support_open_ticket():
             "discord_thread_id": None,
             "user_id": user_id,
             "username": getattr(current_user, "username", None) or getattr(current_user, "email", None) or "user",
+            "display_name": display_name[:120],
             "vat": str(active.get("vat") or ""),
             "group_name": getattr(grp, "name", None) if grp else None,
             "created_at": _support_now_iso(),
             "updated_at": _support_now_iso(),
         }
         data["tickets"].append(ticket)
+    else:
+        ticket["display_name"] = display_name[:120]
 
     data["messages"].append({
         "ticket_id": ticket["id"],
@@ -10587,7 +10593,8 @@ def data_backup_restore():
 
         with open(tmp_path, "rb") as fh:
             summary = _analyze_backup_zip(fh)
-        if not summary.get("contains_credentials"):
+        restore_mode = str(summary.get("mode") or "group").strip().lower()
+        if not summary.get("contains_credentials") and restore_mode != "customer":
             raise ValueError("Το backup δεν περιέχει credentials.json.")
 
         _apply_backup_zip(tmp_path)

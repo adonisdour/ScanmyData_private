@@ -2920,6 +2920,7 @@
 .help-msg.support{margin-right:auto;background:#e2e8f0;color:#0f172a;}
 #helpBotForm{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb;}
 #helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
+#helpBotName{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%;margin:10px 10px 0 10px;max-width:calc(100% - 20px);}
 #helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
 </style>
 <button id="helpBotFab" type="button" title="Help / Support">💬</button>
@@ -2928,6 +2929,7 @@
     <span>Help / Support</span>
     <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
   </div>
+  <input id="helpBotName" type="text" placeholder="Δήλωσε όνομα (θα εμφανίζεται στο support)" maxlength="120" />
   <div id="helpBotMessages"></div>
   <form id="helpBotForm">
     <input id="helpBotInput" type="text" placeholder="Γράψε το μήνυμά σου…" maxlength="2000" />
@@ -2941,9 +2943,11 @@
   const closeBtn=document.getElementById('helpBotClose');
   const form=document.getElementById('helpBotForm');
   const input=document.getElementById('helpBotInput');
+  const nameInput=document.getElementById('helpBotName');
   const box=document.getElementById('helpBotMessages');
   let open=false;
   let poller=null;
+  const NAME_KEY='support_display_name';
 
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
   function render(messages){
@@ -2962,11 +2966,14 @@
   }
 
   async function sendMsg(msg){
+    const displayName=(nameInput&&nameInput.value||'').trim();
+    if(!displayName){ throw new Error('Δήλωσε πρώτα όνομα support.'); }
+    try{ localStorage.setItem(NAME_KEY, displayName); }catch(_e){}
     const r=await fetch('/api/support/ticket/open',{
       method:'POST',
       credentials:'same-origin',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg})
+      body:JSON.stringify({message:msg, display_name:displayName})
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Σφάλμα αποστολής');
@@ -2984,6 +2991,10 @@
   }
 
   fab&&fab.addEventListener('click',()=>setOpen(!open));
+  try{
+    const savedName = localStorage.getItem(NAME_KEY) || '';
+    if(savedName && nameInput) nameInput.value = savedName;
+  }catch(_e){}
   closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
   form&&form.addEventListener('submit', async (e)=>{
     e.preventDefault();
