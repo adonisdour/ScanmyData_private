@@ -195,7 +195,12 @@
   }
 
   function categoriesForVat(vatKey, allTags){
-    return (allTags || []).filter(cat => allowedForVat(cat, vatKey));
+    return (allTags || []).filter(cat => {
+      const key = String(cat || '').trim();
+      // Εγγυοδοσία: επιτρέπεται μόνο στο 0%.
+      if(key === 'εγγυοδοσια' && vatKey !== '0%') return false;
+      return allowedForVat(key, vatKey);
+    });
   }
 
   function ensureOption(select, value, vatKey){
