@@ -9986,11 +9986,11 @@ def _support_load() -> Dict[str, Any]:
 
 
 def _support_save(data: Dict[str, Any]) -> None:
-    _safe_json_write(_support_store_path(), data or {})
+    json_write(_support_store_path(), data or {})
 
 
 def _support_now_iso() -> str:
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _support_get_my_open_ticket(data: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
@@ -10414,11 +10414,11 @@ def _apply_backup_zip(zip_path: str) -> None:
                     if v in incoming_by_vat and v not in seen:
                         merged.append(incoming_by_vat[v])
 
-                _safe_json_write(cred_path, merged)
+                json_write(cred_path, merged)
             except Exception:
                 raise ValueError("Αποτυχία συγχώνευσης credentials κατά την επαναφορά.")
 
-    if not has_credentials:
+    if not has_credentials and mode != "customer":
         raise ValueError("Το backup δεν περιέχει το αρχείο credentials.json.")
 
 
