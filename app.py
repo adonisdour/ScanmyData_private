@@ -9968,6 +9968,224 @@ def api_confirm_receipt():
 
 
 
+
+# ---------------- Help / Support Desk (Discord bridge) ----------------
+def _support_store_path() -> str:
+    return group_path("support_tickets.json")
+
+
+def _support_load() -> Dict[str, Any]:
+    p = _support_store_path()
+    data = _safe_json_read(p, default={})
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("tickets", [])
+    data.setdefault("messages", [])
+    data.setdefault("next_id", 1)
+    return data
+
+
+def _support_save(data: Dict[str, Any]) -> None:
+    _safe_json_write(_support_store_path(), data or {})
+
+
+def _support_now_iso() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _support_get_my_open_ticket(data: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
+    for t in (data.get("tickets") or []):
+        if str(t.get("user_id") or "") == str(user_id) and str(t.get("status") or "open") == "open":
+            return t
+    return None
+
+
+def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
+    token = (os.getenv("DISCORD_BOT_TOKEN") or "").strip()
+    channel_id = (os.getenv("DISCORD_SUPPORT_CHANNEL_ID") or "").strip()
+    guild_id = (os.getenv("DISCORD_GUILD_ID") or "").strip()
+    if not token or not channel_id:
+        return None
+
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        seed = requests.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            json={"content": f"[Ticket #{ticket['id']}] Νέο αίτημα υποστήριξης από {ticket.get('username') or 'user'}"},
+            timeout=12,
+        )
+        if not seed.ok:
+            current_app.logger.warning("Discord seed message failed: %s %s", seed.status_code, seed.text[:300])
+            return None
+        msg_id = (seed.json() or {}).get("id")
+        if not msg_id:
+            return None
+
+        th = requests.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages/{msg_id}/threads",
+            headers=headers,
+            json={
+                "name": f"ticket-{ticket['id']}-{(ticket.get('vat') or 'no-vat')[:9]}",
+                "auto_archive_duration": 1440,
+            },
+            timeout=12,
+        )
+        if not th.ok:
+            current_app.logger.warning("Discord thread creation failed: %s %s", th.status_code, th.text[:300])
+            return None
+        thread_id = (th.json() or {}).get("id")
+        if not thread_id:
+            return None
+
+        content = (
+            f"[Ticket #{ticket['id']}]\n"
+            f"User: {ticket.get('username') or 'user'}\n"
+            f"VAT: {ticket.get('vat') or '-'}\n"
+            f"Group: {ticket.get('group_name') or '-'}\n"
+            f"Message:\n{first_message}"
+        )
+        requests.post(
+            f"https://discord.com/api/v10/channels/{thread_id}/messages",
+            headers=headers,
+            json={"content": content[:1800]},
+            timeout=12,
+        )
+
+        # Optional: add support/admin roles to thread (best effort, if ids configured)
+        role_ids = [
+            (os.getenv("DISCORD_SUPPORT_ROLE_ID") or "").strip(),
+            (os.getenv("DISCORD_ADMIN_ROLE_ID") or "").strip(),
+        ]
+        if guild_id:
+            for rid in role_ids:
+                if not rid:
+                    continue
+                try:
+                    members = requests.get(
+                        f"https://discord.com/api/v10/guilds/{guild_id}/roles/{rid}",
+                        headers=headers,
+                        timeout=8,
+                    )
+                    if not members.ok:
+                        continue
+                except Exception:
+                    pass
+
+        return str(thread_id)
+    except Exception:
+        current_app.logger.warning("Discord thread integration failed", exc_info=True)
+        return None
+
+
+@app.post("/api/support/ticket/open")
+@login_required
+def api_support_open_ticket():
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return jsonify({"ok": False, "error": "Το μήνυμα είναι υποχρεωτικό."}), 400
+
+    from auth import get_active_group
+    grp = get_active_group()
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    if not user_id:
+        return jsonify({"ok": False, "error": "Μη έγκυρος χρήστης."}), 400
+
+    data = _support_load()
+    ticket = _support_get_my_open_ticket(data, user_id)
+    if not ticket:
+        tid = int(data.get("next_id") or 1)
+        data["next_id"] = tid + 1
+        active = get_active_credential_from_session() or {}
+        ticket = {
+            "id": tid,
+            "status": "open",
+            "discord_thread_id": None,
+            "user_id": user_id,
+            "username": getattr(current_user, "username", None) or getattr(current_user, "email", None) or "user",
+            "vat": str(active.get("vat") or ""),
+            "group_name": getattr(grp, "name", None) if grp else None,
+            "created_at": _support_now_iso(),
+            "updated_at": _support_now_iso(),
+        }
+        data["tickets"].append(ticket)
+
+    data["messages"].append({
+        "ticket_id": ticket["id"],
+        "sender": "user",
+        "content": message[:4000],
+        "timestamp": _support_now_iso(),
+    })
+    ticket["updated_at"] = _support_now_iso()
+
+    if not ticket.get("discord_thread_id"):
+        thread_id = _support_discord_create_thread(ticket, message)
+        if thread_id:
+            ticket["discord_thread_id"] = thread_id
+
+    _support_save(data)
+    return jsonify({"ok": True, "ticket": ticket})
+
+
+@app.get("/api/support/ticket/me")
+@login_required
+def api_support_my_ticket():
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    data = _support_load()
+    ticket = _support_get_my_open_ticket(data, user_id)
+    if not ticket:
+        return jsonify({"ok": True, "ticket": None, "messages": []})
+    msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0)]
+    msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
+    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:]})
+
+
+@app.post("/api/support/discord/reply")
+def api_support_discord_reply():
+    secret = (os.getenv("SUPPORT_WEBHOOK_SECRET") or "").strip()
+    provided = (request.headers.get("X-Support-Secret") or "").strip()
+    if secret and provided != secret:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "missing content"}), 400
+
+    data = _support_load()
+    ticket = None
+    ticket_id = payload.get("ticket_id")
+    thread_id = str(payload.get("discord_thread_id") or "").strip()
+
+    if ticket_id is not None:
+        for t in (data.get("tickets") or []):
+            if int(t.get("id") or 0) == int(ticket_id):
+                ticket = t
+                break
+    if ticket is None and thread_id:
+        for t in (data.get("tickets") or []):
+            if str(t.get("discord_thread_id") or "") == thread_id:
+                ticket = t
+                break
+    if ticket is None:
+        return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    data["messages"].append({
+        "ticket_id": int(ticket.get("id") or 0),
+        "sender": "support",
+        "content": content[:4000],
+        "timestamp": _support_now_iso(),
+    })
+    ticket["updated_at"] = _support_now_iso()
+    _support_save(data)
+    return jsonify({"ok": True})
+
+
+
 def _normalize_backup_member(name: str) -> str:
     name = (name or "").replace("\\", "/")
     name = name.lstrip("/")
@@ -10058,9 +10276,9 @@ def _analyze_backup_zip(file_like) -> Dict[str, Any]:
                         mode = str(manifest.get("mode") or "").strip().lower()
                         if mode in {"group", "customer"}:
                             summary["mode"] = mode
-                        vats = manifest.get("selected_vats")
-                        if isinstance(vats, list):
-                            summary["selected_vats"] = [str(v).strip() for v in vats if str(v).strip()]
+                        manifest_vats = manifest.get("selected_vats")
+                        if isinstance(manifest_vats, list):
+                            summary["selected_vats"] = [str(v).strip() for v in manifest_vats if str(v).strip()]
                 except Exception:
                     current_app.logger.warning("Failed to parse backup_manifest.json from backup", exc_info=True)
 

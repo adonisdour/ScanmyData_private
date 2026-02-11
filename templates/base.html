@@ -2907,6 +2907,98 @@
       } catch (e) { console.warn('side menu highlight error', e); }
     });
 </script>
+
+
+{% if current_user.is_authenticated %}
+<style>
+#helpBotFab{position:fixed;right:20px;bottom:20px;z-index:100200;background:#2563eb;color:#fff;border:none;border-radius:9999px;width:56px;height:56px;box-shadow:0 8px 24px rgba(37,99,235,.35);cursor:pointer;font-size:22px;}
+#helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,360px);height:min(70vh,520px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
+#helpBotHead{padding:10px 12px;background:#0f172a;color:#fff;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
+#helpBotMessages{flex:1;overflow:auto;padding:10px;background:#f8fafc;}
+.help-msg{margin-bottom:8px;padding:8px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word;font-size:13px;}
+.help-msg.user{margin-left:auto;background:#dbeafe;color:#1e3a8a;}
+.help-msg.support{margin-right:auto;background:#e2e8f0;color:#0f172a;}
+#helpBotForm{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb;}
+#helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
+#helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
+</style>
+<button id="helpBotFab" type="button" title="Help / Support">💬</button>
+<div id="helpBotPanel" role="dialog" aria-label="Help Support Chat">
+  <div id="helpBotHead">
+    <span>Help / Support</span>
+    <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
+  </div>
+  <div id="helpBotMessages"></div>
+  <form id="helpBotForm">
+    <input id="helpBotInput" type="text" placeholder="Γράψε το μήνυμά σου…" maxlength="2000" />
+    <button id="helpBotSend" type="submit">Αποστολή</button>
+  </form>
+</div>
+<script>
+(function(){
+  const fab=document.getElementById('helpBotFab');
+  const panel=document.getElementById('helpBotPanel');
+  const closeBtn=document.getElementById('helpBotClose');
+  const form=document.getElementById('helpBotForm');
+  const input=document.getElementById('helpBotInput');
+  const box=document.getElementById('helpBotMessages');
+  let open=false;
+  let poller=null;
+
+  function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+  function render(messages){
+    if(!box) return;
+    box.innerHTML = (messages||[]).map(m=>`<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content)}</div>`).join('');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function refresh(){
+    try{
+      const r=await fetch('/api/support/ticket/me',{credentials:'same-origin'});
+      if(!r.ok) return;
+      const j=await r.json();
+      render(j.messages||[]);
+    }catch(_e){}
+  }
+
+  async function sendMsg(msg){
+    const r=await fetch('/api/support/ticket/open',{
+      method:'POST',
+      credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Σφάλμα αποστολής');
+  }
+
+  function setOpen(v){
+    open=!!v;
+    if(panel) panel.style.display=open?'flex':'none';
+    if(open){
+      refresh();
+      if(!poller) poller=setInterval(refresh, 5000);
+    } else if(poller){
+      clearInterval(poller); poller=null;
+    }
+  }
+
+  fab&&fab.addEventListener('click',()=>setOpen(!open));
+  closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
+  form&&form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const msg=(input&&input.value||'').trim();
+    if(!msg) return;
+    if(input) input.value='';
+    try{
+      await sendMsg(msg);
+      await refresh();
+    }catch(err){ alert(err.message||err); }
+  });
+})();
+</script>
+{% endif %}
+
 <!-- Sync progress overlay (inserted by server to show firebase pull progress) -->
 <div id="syncProgressOverlay" style="display:none;position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;align-items:center;justify-content:center;background:rgba(0,0,0,0.45)">
   <div id="syncProgressPanel" style="width:90%;max-width:640px;background:var(--bg-secondary);color:var(--text-primary);padding:18px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.6);">
