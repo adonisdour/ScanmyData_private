@@ -2914,16 +2914,33 @@
 #helpBotFab{position:fixed;right:20px;bottom:20px;z-index:100200;background:#2563eb;color:#fff;border:none;border-radius:9999px;width:56px;height:56px;box-shadow:0 8px 24px rgba(37,99,235,.35);cursor:pointer;font-size:22px;}
 #helpBotFab.has-unread{animation:helpBotPulse 1.3s ease-in-out infinite;}
 #helpBotBadge{position:absolute;right:-2px;top:-2px;min-width:20px;height:20px;border-radius:9999px;background:#ef4444;color:#fff;font-size:11px;display:none;align-items:center;justify-content:center;padding:0 5px;border:2px solid #fff;}
-#helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,360px);height:min(70vh,520px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
+#helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,380px);height:min(75vh,560px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
 #helpBotHead{padding:10px 12px;background:#0f172a;color:#fff;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
 #helpBotMessages{flex:1;overflow:auto;padding:10px;background:#f8fafc;}
-.help-msg{margin-bottom:8px;padding:8px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word;font-size:13px;}
+.help-msg{margin-bottom:8px;padding:8px 10px;border-radius:10px;max-width:92%;white-space:pre-wrap;word-break:break-word;font-size:13px;}
 .help-msg.user{margin-left:auto;background:#dbeafe;color:#1e3a8a;}
 .help-msg.support{margin-right:auto;background:#e2e8f0;color:#0f172a;}
-#helpBotForm{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb;}
+.help-meta{margin-top:4px;font-size:10px;opacity:.8;}
+.help-attachments{margin-top:6px;display:flex;flex-direction:column;gap:4px;}
+.help-attachments a{font-size:12px;text-decoration:underline;color:inherit;opacity:.95;}
+#helpBotPresence{padding:0 10px 8px 10px;font-size:11px;color:#64748b;min-height:18px;}
+#helpBotForm{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb;align-items:center;}
 #helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
 #helpBotName{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%;margin:10px 10px 0 10px;max-width:calc(100% - 20px);}
+#helpBotFile{display:none;}
+#helpBotFileBtn{border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;border-radius:8px;padding:7px 9px;cursor:pointer;font-size:12px;}
+#helpBotFileState{padding:0 10px 8px 10px;font-size:11px;color:#64748b;min-height:17px;}
 #helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
+html[data-theme="dark"] #helpBotPanel{background:#111827;border-color:#334155;box-shadow:0 20px 45px rgba(0,0,0,.55);}
+html[data-theme="dark"] #helpBotHead{background:#020617;color:#e2e8f0;border-bottom:1px solid #334155;}
+html[data-theme="dark"] #helpBotMessages{background:#0b1220;color:#e2e8f0;}
+html[data-theme="dark"] .help-msg.user{background:#1d4ed8;color:#dbeafe;}
+html[data-theme="dark"] .help-msg.support{background:#1f2937;color:#e5e7eb;}
+html[data-theme="dark"] #helpBotForm{border-top-color:#334155;background:#0f172a;}
+html[data-theme="dark"] #helpBotInput,html[data-theme="dark"] #helpBotName{background:#1e293b;color:#e2e8f0;border-color:#475569;}
+html[data-theme="dark"] #helpBotInput::placeholder,html[data-theme="dark"] #helpBotName::placeholder{color:#94a3b8;}
+html[data-theme="dark"] #helpBotFileBtn{border-color:#475569;background:#1e293b;color:#e2e8f0;}
+html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileState{color:#94a3b8;}
 @keyframes helpBotPulse{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 </style>
 <button id="helpBotFab" type="button" title="Help / Support">
@@ -2944,7 +2961,11 @@
   </div>
   <input id="helpBotName" type="text" placeholder="Δήλωσε όνομα (θα εμφανίζεται στο support)" maxlength="120" />
   <div id="helpBotMessages"></div>
+  <div id="helpBotPresence"></div>
+  <div id="helpBotFileState"></div>
   <form id="helpBotForm">
+    <label id="helpBotFileBtn" for="helpBotFile">📎</label>
+    <input id="helpBotFile" type="file" multiple accept="image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip" />
     <input id="helpBotInput" type="text" placeholder="Γράψε το μήνυμά σου…" maxlength="2000" />
     <button id="helpBotSend" type="submit">Αποστολή</button>
   </form>
@@ -2958,26 +2979,53 @@
   const titleEl=document.getElementById('helpBotTitle');
   const badge=document.getElementById('helpBotBadge');
   const threadLabel=document.getElementById('helpBotThreadLabel');
+  const presenceEl=document.getElementById('helpBotPresence');
+  const fileStateEl=document.getElementById('helpBotFileState');
   const form=document.getElementById('helpBotForm');
   const input=document.getElementById('helpBotInput');
   const nameInput=document.getElementById('helpBotName');
+  const fileInput=document.getElementById('helpBotFile');
   const box=document.getElementById('helpBotMessages');
   let open=false;
   let poller=null;
+  let lastPresence={support_typing:false};
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
   let lastTicket=null;
 
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+  function formatStatus(m){
+    if(m.sender!=='user') return '';
+    if(m.read_by_support_at) return 'Διαβάστηκε από support';
+    if(m.discord_delivered_at || m.discord_delivered) return 'Παραλήφθηκε από Discord';
+    return 'Σε αναμονή αποστολής στο Discord';
+  }
   function render(messages){
     if(!box) return;
-    box.innerHTML = (messages||[]).map(m=>`<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content)}</div>`).join('');
+    box.innerHTML = (messages||[]).map(m=>{
+      const attachments = (m.attachments||[]).map(a=>{
+        const href = esc(a.url||'#');
+        const nm = esc(a.name||'attachment');
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">📎 ${nm}</a>`;
+      }).join('');
+      const meta = formatStatus(m);
+      return `<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content||'')}${attachments?`<div class="help-attachments">${attachments}</div>`:''}${meta?`<div class="help-meta">${esc(meta)}</div>`:''}</div>`;
+    }).join('');
     box.scrollTop = box.scrollHeight;
   }
 
   function parseTs(ts){
     const v = Date.parse(ts||'');
     return Number.isFinite(v) ? v : 0;
+  }
+
+  function updatePresence(){
+    if(!presenceEl) return;
+    if(lastPresence && lastPresence.support_typing){
+      presenceEl.textContent = 'Ο support agent πληκτρολογεί…';
+    } else {
+      presenceEl.textContent = '';
+    }
   }
 
   function updateBadge(messages){
@@ -3019,31 +3067,50 @@
     }
   }
 
+  function updateSelectedFiles(){
+    if(!fileStateEl) return;
+    const f = (fileInput && fileInput.files) ? Array.from(fileInput.files) : [];
+    if(!f.length){ fileStateEl.textContent=''; return; }
+    fileStateEl.textContent = `Επισυναπτόμενα: ${f.map(x=>x.name).join(', ')}`;
+  }
+
   async function refresh(){
     try{
-      const r=await fetch('/api/support/ticket/me',{credentials:'same-origin'});
+      const r=await fetch(`/api/support/ticket/me?mark_read=${open?'1':'0'}`,{credentials:'same-origin'});
       if(!r.ok) return;
       const j=await r.json();
       lastTicket = j.ticket || null;
+      lastPresence = j.presence || {support_typing:false};
       updateTitle(lastTicket);
       render(j.messages||[]);
       updateBadge(j.messages||[]);
+      updatePresence();
       if(open){ markSeen(j.messages||[]); }
     }catch(_e){}
   }
 
   async function sendMsg(msg){
     const displayName=(nameInput&&nameInput.value||'').trim();
+    const files = (fileInput && fileInput.files) ? Array.from(fileInput.files) : [];
     if(!displayName){ throw new Error('Δήλωσε πρώτα όνομα support.'); }
+    if(!msg && !files.length){ throw new Error('Γράψε μήνυμα ή πρόσθεσε αρχείο.'); }
     try{ localStorage.setItem(NAME_KEY, displayName); }catch(_e){}
+
+    const fd = new FormData();
+    fd.append('message', msg || '');
+    fd.append('display_name', displayName);
+    files.forEach(f => fd.append('files', f));
+
     const r=await fetch('/api/support/ticket/open',{
       method:'POST',
       credentials:'same-origin',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg, display_name:displayName})
+      body:fd
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Σφάλμα αποστολής');
+    if(j.discord_delivered===false){ throw new Error('Το ticket αποθηκεύτηκε αλλά απέτυχε η αποστολή στο Discord.'); }
+    if(fileInput) fileInput.value='';
+    updateSelectedFiles();
   }
 
   function setOpen(v){
@@ -3056,6 +3123,7 @@
   }
 
   fab&&fab.addEventListener('click',()=>setOpen(!open));
+  fileInput&&fileInput.addEventListener('change', updateSelectedFiles);
   try{
     const savedName = localStorage.getItem(NAME_KEY) || '';
     if(savedName && nameInput) nameInput.value = savedName;
@@ -3076,10 +3144,9 @@
   form&&form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const msg=(input&&input.value||'').trim();
-    if(!msg) return;
-    if(input) input.value='';
     try{
       await sendMsg(msg);
+      if(input) input.value='';
       await refresh();
       markSeen([]);
     }catch(err){ alert(err.message||err); }
@@ -3087,6 +3154,7 @@
 })();
 </script>
 {% endif %}
+
 
 <!-- Sync progress overlay (inserted by server to show firebase pull progress) -->
 <div id="syncProgressOverlay" style="display:none;position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;align-items:center;justify-content:center;background:rgba(0,0,0,0.45)">
