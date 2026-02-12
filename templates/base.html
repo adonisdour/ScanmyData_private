@@ -2912,6 +2912,8 @@
 {% if current_user.is_authenticated %}
 <style>
 #helpBotFab{position:fixed;right:20px;bottom:20px;z-index:100200;background:#2563eb;color:#fff;border:none;border-radius:9999px;width:56px;height:56px;box-shadow:0 8px 24px rgba(37,99,235,.35);cursor:pointer;font-size:22px;}
+#helpBotFab.has-unread{animation:helpBotPulse 1.3s ease-in-out infinite;}
+#helpBotBadge{position:absolute;right:-2px;top:-2px;min-width:20px;height:20px;border-radius:9999px;background:#ef4444;color:#fff;font-size:11px;display:none;align-items:center;justify-content:center;padding:0 5px;border:2px solid #fff;}
 #helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,360px);height:min(70vh,520px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
 #helpBotHead{padding:10px 12px;background:#0f172a;color:#fff;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
 #helpBotMessages{flex:1;overflow:auto;padding:10px;background:#f8fafc;}
@@ -2922,12 +2924,23 @@
 #helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
 #helpBotName{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%;margin:10px 10px 0 10px;max-width:calc(100% - 20px);}
 #helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
+@keyframes helpBotPulse{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 </style>
-<button id="helpBotFab" type="button" title="Help / Support">💬</button>
+<button id="helpBotFab" type="button" title="Help / Support">
+  💬
+  <span id="helpBotBadge">0</span>
+</button>
 <div id="helpBotPanel" role="dialog" aria-label="Help Support Chat">
   <div id="helpBotHead">
-    <span>Help / Support</span>
-    <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
+    <div>
+      <div>Help / Support</div>
+      <div id="helpBotTitle">Νέα συνομιλία</div>
+      <div id="helpBotThreadLabel" style="font-size:11px;opacity:.8;">Συμπλήρωσε όνομα και ξεκίνα συνομιλία</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="helpBotEnd" type="button" style="background:#ef4444;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Λήξη</button>
+      <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
+    </div>
   </div>
   <input id="helpBotName" type="text" placeholder="Δήλωσε όνομα (θα εμφανίζεται στο support)" maxlength="120" />
   <div id="helpBotMessages"></div>
@@ -2941,6 +2954,10 @@
   const fab=document.getElementById('helpBotFab');
   const panel=document.getElementById('helpBotPanel');
   const closeBtn=document.getElementById('helpBotClose');
+  const endBtn=document.getElementById('helpBotEnd');
+  const titleEl=document.getElementById('helpBotTitle');
+  const badge=document.getElementById('helpBotBadge');
+  const threadLabel=document.getElementById('helpBotThreadLabel');
   const form=document.getElementById('helpBotForm');
   const input=document.getElementById('helpBotInput');
   const nameInput=document.getElementById('helpBotName');
@@ -2948,6 +2965,8 @@
   let open=false;
   let poller=null;
   const NAME_KEY='support_display_name';
+  const SEEN_KEY='support_last_seen';
+  let lastTicket=null;
 
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
   function render(messages){
@@ -2956,12 +2975,60 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  function parseTs(ts){
+    const v = Date.parse(ts||'');
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function updateBadge(messages){
+    if(!badge) return;
+    const lastSeen = parseTs(localStorage.getItem(SEEN_KEY) || '');
+    const incoming = (messages||[]).filter(m => m.sender==='support' && parseTs(m.timestamp) > lastSeen).length;
+    if(incoming > 0 && !open){
+      badge.style.display='inline-flex';
+      badge.textContent = incoming > 99 ? '99+' : String(incoming);
+      fab && fab.classList.add('has-unread');
+      fab && fab.setAttribute('title', `Help / Support (${incoming} νέο${incoming===1?'':'α'} μήνυμα${incoming===1?'':'τα'})`);
+    } else {
+      badge.style.display='none';
+      fab && fab.classList.remove('has-unread');
+      fab && fab.setAttribute('title', 'Help / Support');
+    }
+  }
+
+  function markSeen(messages){
+    const last = (messages||[]).slice().reverse().find(m => m.sender==='support');
+    if(last && last.timestamp){
+      try{ localStorage.setItem(SEEN_KEY, String(last.timestamp)); }catch(_e){}
+    }
+    updateBadge(messages||[]);
+  }
+
+  function updateTitle(ticket){
+    if(!titleEl) return;
+    if(!ticket){
+      titleEl.textContent = 'Νέα συνομιλία';
+      if(threadLabel) threadLabel.textContent = 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
+      return;
+    }
+    const status = String(ticket.status||'open') === 'closed' ? 'Κλειστό' : 'Ανοικτό';
+    titleEl.textContent = `Ticket #${ticket.id} · ${status}`;
+    if(threadLabel){
+      const who = String(ticket.display_name || ticket.username || 'Χρήστης');
+      threadLabel.textContent = `Συνομιλία: ${who}`;
+    }
+  }
+
   async function refresh(){
     try{
       const r=await fetch('/api/support/ticket/me',{credentials:'same-origin'});
       if(!r.ok) return;
       const j=await r.json();
+      lastTicket = j.ticket || null;
+      updateTitle(lastTicket);
       render(j.messages||[]);
+      updateBadge(j.messages||[]);
+      if(open){ markSeen(j.messages||[]); }
     }catch(_e){}
   }
 
@@ -2984,9 +3051,7 @@
     if(panel) panel.style.display=open?'flex':'none';
     if(open){
       refresh();
-      if(!poller) poller=setInterval(refresh, 5000);
-    } else if(poller){
-      clearInterval(poller); poller=null;
+      setTimeout(()=>markSeen([]), 50);
     }
   }
 
@@ -2996,6 +3061,18 @@
     if(savedName && nameInput) nameInput.value = savedName;
   }catch(_e){}
   closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
+
+  refresh();
+  if(!poller) poller=setInterval(refresh, 5000);
+  endBtn&&endBtn.addEventListener('click', async ()=>{
+    if(!confirm('Να λήξει η συνομιλία;')) return;
+    try{
+      const r = await fetch('/api/support/ticket/close', { method:'POST', credentials:'same-origin' });
+      const j = await r.json().catch(()=>({}));
+      if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αποτυχία λήξης ticket');
+      await refresh();
+    }catch(err){ alert(err.message||err); }
+  });
   form&&form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const msg=(input&&input.value||'').trim();
@@ -3004,6 +3081,7 @@
     try{
       await sendMsg(msg);
       await refresh();
+      markSeen([]);
     }catch(err){ alert(err.message||err); }
   });
 })();

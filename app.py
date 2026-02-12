@@ -10000,10 +10000,50 @@ def _support_get_my_open_ticket(data: Dict[str, Any], user_id: str) -> Optional[
     return None
 
 
+def _support_slug(text: str, fallback: str = "user") -> str:
+    raw = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(text or "").strip())
+    raw = re.sub(r"-+", "-", raw).strip("-")
+    return (raw or fallback)[:48]
+
+
+def _support_close_ticket_record(ticket: Dict[str, Any], closed_by: str = "user") -> None:
+    ticket["status"] = "closed"
+    ticket["closed_at"] = _support_now_iso()
+    ticket["closed_by"] = closed_by
+    ticket["updated_at"] = _support_now_iso()
+
+
+def _support_discord_archive_thread(thread_id: str) -> bool:
+    token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
+    if not token or not thread_id:
+        return False
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.patch(
+            f"https://discord.com/api/v10/channels/{thread_id}",
+            headers=headers,
+            json={"archived": True, "locked": True},
+            timeout=12,
+        )
+        if not r.ok:
+            current_app.logger.warning("Discord archive thread failed: %s %s", r.status_code, r.text[:300])
+            return False
+        return True
+    except Exception:
+        current_app.logger.warning("Discord archive thread failed", exc_info=True)
+        return False
+
+
 def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
     token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
-    channel_id = (os.getenv("DISCORD_SUPPORT_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "").strip()
-    guild_id = (os.getenv("DISCORD_GUILD_ID") or "").strip()
+    channel_id = (
+        os.getenv("DISCORD_SUPPORT_CHANNEL_ID")
+        or os.getenv("DISCORD_CHANNEL_ID")
+        or "1471125053524414536"
+    ).strip()
     if not token or not channel_id:
         return None
 
@@ -10012,28 +10052,41 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
         "Content-Type": "application/json",
     }
     try:
-        seed = requests.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers=headers,
-            json={"content": f"[Ticket #{ticket['id']}] Νέο αίτημα υποστήριξης από {ticket.get('display_name') or ticket.get('username') or 'user'}"},
-            timeout=12,
-        )
-        if not seed.ok:
-            current_app.logger.warning("Discord seed message failed: %s %s", seed.status_code, seed.text[:300])
-            return None
-        msg_id = (seed.json() or {}).get("id")
-        if not msg_id:
-            return None
-
+        thread_name = f"ticket-{ticket['id']}-{_support_slug(ticket.get('display_name') or ticket.get('username') or 'user')}"
         th = requests.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages/{msg_id}/threads",
+            f"https://discord.com/api/v10/channels/{channel_id}/threads",
             headers=headers,
             json={
-                "name": f"ticket-{ticket['id']}-{(ticket.get('vat') or 'no-vat')[:9]}",
+                "name": thread_name[:100],
                 "auto_archive_duration": 1440,
+                "type": 12,
+                "invitable": False,
             },
             timeout=12,
         )
+        if not th.ok:
+            seed = requests.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=headers,
+                json={"content": f"[Ticket #{ticket['id']}] Νέο αίτημα υποστήριξης από {ticket.get('display_name') or ticket.get('username') or 'user'}"},
+                timeout=12,
+            )
+            if not seed.ok:
+                current_app.logger.warning("Discord seed message failed: %s %s", seed.status_code, seed.text[:300])
+                return None
+            msg_id = (seed.json() or {}).get("id")
+            if not msg_id:
+                return None
+            th = requests.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages/{msg_id}/threads",
+                headers=headers,
+                json={
+                    "name": thread_name[:100],
+                    "auto_archive_duration": 1440,
+                },
+                timeout=12,
+            )
+
         if not th.ok:
             current_app.logger.warning("Discord thread creation failed: %s %s", th.status_code, th.text[:300])
             return None
@@ -10054,27 +10107,6 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
             json={"content": content[:1800]},
             timeout=12,
         )
-
-        # Optional: add support/admin roles to thread (best effort, if ids configured)
-        role_ids = [
-            (os.getenv("DISCORD_SUPPORT_ROLE_ID") or "").strip(),
-            (os.getenv("DISCORD_ADMIN_ROLE_ID") or "").strip(),
-        ]
-        if guild_id:
-            for rid in role_ids:
-                if not rid:
-                    continue
-                try:
-                    members = requests.get(
-                        f"https://discord.com/api/v10/guilds/{guild_id}/roles/{rid}",
-                        headers=headers,
-                        timeout=8,
-                    )
-                    if not members.ok:
-                        continue
-                except Exception:
-                    pass
-
         return str(thread_id)
     except Exception:
         current_app.logger.warning("Discord thread integration failed", exc_info=True)
@@ -10150,6 +10182,23 @@ def api_support_my_ticket():
     return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:]})
 
 
+@app.post("/api/support/ticket/close")
+@login_required
+def api_support_close_ticket():
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    data = _support_load()
+    ticket = _support_get_my_open_ticket(data, user_id)
+    if not ticket:
+        return jsonify({"ok": True, "closed": False, "message": "Δεν υπάρχει ανοικτό ticket."})
+
+    thread_id = str(ticket.get("discord_thread_id") or "")
+    _support_close_ticket_record(ticket, closed_by="user")
+    _support_save(data)
+    if thread_id:
+        _support_discord_archive_thread(thread_id)
+    return jsonify({"ok": True, "closed": True, "ticket": ticket})
+
+
 @app.post("/api/support/discord/reply")
 def api_support_discord_reply():
     secret = (os.getenv("SUPPORT_WEBHOOK_SECRET") or "").strip()
@@ -10158,8 +10207,9 @@ def api_support_discord_reply():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "reply").strip().lower()
     content = str(payload.get("content") or "").strip()
-    if not content:
+    if action == "reply" and not content:
         return jsonify({"ok": False, "error": "missing content"}), 400
 
     data = _support_load()
@@ -10179,6 +10229,20 @@ def api_support_discord_reply():
                 break
     if ticket is None:
         return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    if action == "close":
+        if content:
+            data["messages"].append({
+                "ticket_id": int(ticket.get("id") or 0),
+                "sender": "support",
+                "content": content[:4000],
+                "timestamp": _support_now_iso(),
+            })
+        _support_close_ticket_record(ticket, closed_by="admin")
+        _support_save(data)
+        if thread_id:
+            _support_discord_archive_thread(thread_id)
+        return jsonify({"ok": True, "closed": True})
 
     data["messages"].append({
         "ticket_id": int(ticket.get("id") or 0),
@@ -10372,7 +10436,8 @@ def _apply_backup_zip(zip_path: str) -> None:
                         with zf.open(info) as src:
                             restored_credentials_payload = json.loads(src.read().decode("utf-8-sig"))
                     except Exception:
-                        raise ValueError("Μη έγκυρο credentials.json στο backup.")
+                        current_app.logger.warning("Invalid credentials.json in customer backup; continuing without credentials merge", exc_info=True)
+                        restored_credentials_payload = None
                     continue
 
             dest = os.path.normpath(os.path.join(get_group_base_dir(), rel))
