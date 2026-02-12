@@ -10342,38 +10342,6 @@ def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str
         return False
 
 
-@app.get("/api/support/attachment/<attachment_id>")
-@login_required
-def api_support_attachment(attachment_id: str):
-    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
-    if not user_id:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    data = _support_load()
-    my_ticket = _support_get_my_open_ticket(data, user_id)
-    owned_ticket_ids = set()
-    if my_ticket:
-        owned_ticket_ids.add(int(my_ticket.get("id") or 0))
-    for t in (data.get("tickets") or []):
-        if str(t.get("user_id") or "") == user_id:
-            owned_ticket_ids.add(int(t.get("id") or 0))
-
-    target = None
-    for m in (data.get("messages") or []):
-        if int(m.get("ticket_id") or 0) not in owned_ticket_ids:
-            continue
-        for a in (m.get("attachments") or []):
-            if str(a.get("id") or "") == str(attachment_id):
-                target = a
-                break
-        if target:
-            break
-    if not target:
-        return jsonify({"ok": False, "error": "not found"}), 404
-    rel = str(target.get("path") or "")
-    abs_path = os.path.join(_support_upload_dir(), rel)
-    if not os.path.exists(abs_path):
-        return jsonify({"ok": False, "error": "missing file"}), 404
-    return send_file(abs_path, mimetype=target.get("mime") or "application/octet-stream", as_attachment=False, download_name=target.get("name") or "attachment")
 
 
 def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, Optional[str]]:
