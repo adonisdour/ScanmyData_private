@@ -9974,6 +9974,12 @@ def _support_store_path() -> str:
     return group_path("support_tickets.json")
 
 
+def _support_upload_dir() -> str:
+    p = group_path("support_uploads")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
 def _support_load() -> Dict[str, Any]:
     p = _support_store_path()
     data = _safe_json_read(p, default={})
@@ -9982,6 +9988,7 @@ def _support_load() -> Dict[str, Any]:
     data.setdefault("tickets", [])
     data.setdefault("messages", [])
     data.setdefault("next_id", 1)
+    data.setdefault("next_message_id", 1)
     return data
 
 
@@ -10013,6 +10020,43 @@ def _support_close_ticket_record(ticket: Dict[str, Any], closed_by: str = "user"
     ticket["updated_at"] = _support_now_iso()
 
 
+def _support_next_message_id(data: Dict[str, Any]) -> int:
+    mid = int(data.get("next_message_id") or 1)
+    data["next_message_id"] = mid + 1
+    return mid
+
+
+def _support_store_uploaded_files(files: List[Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not files:
+        return out
+    root = _support_upload_dir()
+    for f in files:
+        if not getattr(f, "filename", None):
+            continue
+        original = secure_filename(f.filename or "")[:120]
+        if not original:
+            continue
+        ext = os.path.splitext(original)[1][:10]
+        token = secrets.token_hex(12)
+        disk_name = f"{token}{ext}"
+        disk_path = os.path.join(root, disk_name)
+        f.save(disk_path)
+        try:
+            size = int(os.path.getsize(disk_path) or 0)
+        except Exception:
+            size = 0
+        out.append({
+            "id": token,
+            "name": original,
+            "size": size,
+            "mime": str(getattr(f, "mimetype", "") or "application/octet-stream"),
+            "path": disk_name,
+            "url": f"/api/support/attachment/{token}",
+        })
+    return out
+
+
 def _support_discord_archive_thread(thread_id: str) -> bool:
     token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
     if not token or not thread_id:
@@ -10037,20 +10081,79 @@ def _support_discord_archive_thread(thread_id: str) -> bool:
         return False
 
 
-def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
+def _support_discord_headers() -> Optional[Dict[str, str]]:
     token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
-    channel_id = (
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+
+
+def _support_discord_channel_id() -> str:
+    return (
         os.getenv("DISCORD_SUPPORT_CHANNEL_ID")
         or os.getenv("DISCORD_CHANNEL_ID")
         or "1471125053524414536"
     ).strip()
-    if not token or not channel_id:
+
+
+def _support_discord_send_message(channel_id: str, content: str, headers: Dict[str, str], attachments: Optional[List[Dict[str, Any]]] = None) -> bool:
+    if not channel_id:
+        return False
+    content = (content or "")[:1800]
+    files = []
+    handles = []
+    try:
+        if attachments:
+            payload = {"content": content}
+            for i, a in enumerate(attachments[:5]):
+                rel = str(a.get("path") or "")
+                if not rel:
+                    continue
+                abs_path = os.path.join(_support_upload_dir(), rel)
+                if not os.path.exists(abs_path):
+                    continue
+                h = open(abs_path, "rb")
+                handles.append(h)
+                files.append((f"files[{len(files)}]", (a.get("name") or f"file-{i}", h, a.get("mime") or "application/octet-stream")))
+            post_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+            r = requests.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=post_headers,
+                data={"payload_json": json.dumps(payload)},
+                files=files or None,
+                timeout=20,
+            )
+        else:
+            r = requests.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=headers,
+                json={"content": content},
+                timeout=12,
+            )
+        if not r.ok:
+            current_app.logger.warning("Discord send message failed: %s %s", r.status_code, r.text[:300])
+            return False
+        return True
+    except Exception:
+        current_app.logger.warning("Discord send message failed", exc_info=True)
+        return False
+    finally:
+        for h in handles:
+            try:
+                h.close()
+            except Exception:
+                pass
+
+
+def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
         return None
 
-    headers = {
-        "Authorization": f"Bot {token}",
-        "Content-Type": "application/json",
-    }
     try:
         thread_name = f"ticket-{ticket['id']}-{_support_slug(ticket.get('display_name') or ticket.get('username') or 'user')}"
         th = requests.post(
@@ -10101,26 +10204,189 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
             f"Group: {ticket.get('group_name') or '-'}\n"
             f"Message:\n{first_message}"
         )
-        requests.post(
-            f"https://discord.com/api/v10/channels/{thread_id}/messages",
-            headers=headers,
-            json={"content": content[:1800]},
-            timeout=12,
-        )
+        if not _support_discord_send_message(str(thread_id), content, headers, attachments=attachments):
+            return None
         return str(thread_id)
     except Exception:
         current_app.logger.warning("Discord thread integration failed", exc_info=True)
         return None
 
 
+def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, Optional[str]]:
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
+        return False, None
+
+    thread_id = str(ticket.get("discord_thread_id") or "").strip()
+    if not thread_id:
+        thread_id = _support_discord_create_thread(ticket, message, attachments=attachments) or ""
+        if thread_id:
+            ticket["discord_thread_id"] = thread_id
+            return True, thread_id
+
+        fallback = (
+            f"[Ticket #{ticket.get('id')}] από {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+            f"VAT: {ticket.get('vat') or '-'}\n"
+            f"Group: {ticket.get('group_name') or '-'}\n"
+            f"{message}"
+        )
+        return _support_discord_send_message(channel_id, fallback, headers, attachments=attachments), None
+
+    content = (
+        f"[Ticket #{ticket.get('id')}] {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+        f"{message}"
+    )
+    return _support_discord_send_message(thread_id, content, headers, attachments=attachments), thread_id
+
+
+def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str, Any], force: bool = False) -> bool:
+    """Pull latest human replies from Discord thread into local ticket storage."""
+    thread_id = str(ticket.get("discord_thread_id") or "").strip()
+    headers = _support_discord_headers()
+    if not thread_id or not headers:
+        return False
+
+    if not force:
+        last_sync = str(ticket.get("last_discord_sync_at") or "")
+        if last_sync:
+            try:
+                dt = datetime.datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+                if (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() < 6:
+                    return False
+            except Exception:
+                pass
+
+    existing = {
+        str(m.get("discord_message_id") or "")
+        for m in (data.get("messages") or [])
+        if str(m.get("ticket_id") or "") == str(ticket.get("id") or "") and m.get("discord_message_id")
+    }
+    bot_user_id = str(os.getenv("DISCORD_BOT_USER_ID") or "").strip()
+
+    try:
+        r = requests.get(
+            f"https://discord.com/api/v10/channels/{thread_id}/messages",
+            headers=headers,
+            params={"limit": 50},
+            timeout=12,
+        )
+        if not r.ok:
+            current_app.logger.warning("Discord sync failed: %s %s", r.status_code, r.text[:240])
+            return False
+        arr = r.json() or []
+        if not isinstance(arr, list):
+            return False
+
+        changed = False
+        support_replied = False
+        for item in reversed(arr):
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "")
+            if not mid or mid in existing:
+                continue
+            author = item.get("author") or {}
+            author_id = str(author.get("id") or "")
+            if bot_user_id and author_id == bot_user_id:
+                continue
+            if bool(author.get("bot")):
+                continue
+
+            content = str(item.get("content") or "").strip()
+            atts = []
+            for a in (item.get("attachments") or []):
+                if not isinstance(a, dict):
+                    continue
+                atts.append({
+                    "id": str(a.get("id") or secrets.token_hex(8)),
+                    "name": str(a.get("filename") or "attachment"),
+                    "url": str(a.get("url") or "").strip(),
+                    "mime": str(a.get("content_type") or "application/octet-stream"),
+                    "size": int(a.get("size") or 0),
+                    "path": None,
+                })
+
+            if not content and not atts:
+                continue
+
+            data["messages"].append({
+                "id": _support_next_message_id(data),
+                "ticket_id": int(ticket.get("id") or 0),
+                "sender": "support",
+                "content": content[:4000],
+                "attachments": atts,
+                "timestamp": str(item.get("timestamp") or _support_now_iso()),
+                "read_by_user_at": None,
+                "discord_message_id": mid,
+                "source": "discord_sync",
+            })
+            existing.add(mid)
+            changed = True
+            support_replied = True
+
+        if support_replied:
+            now = _support_now_iso()
+            for m in (data.get("messages") or []):
+                if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0) and m.get("sender") == "user" and not m.get("read_by_support_at"):
+                    m["read_by_support_at"] = now
+            ticket["last_support_read_at"] = now
+
+        if changed:
+            ticket["updated_at"] = _support_now_iso()
+        ticket["last_discord_sync_at"] = _support_now_iso()
+        _support_save(data)
+        return changed
+    except Exception:
+        current_app.logger.warning("Discord thread sync exception", exc_info=True)
+        return False
+
+
+@app.get("/api/support/attachment/<attachment_id>")
+@login_required
+def api_support_attachment(attachment_id: str):
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    if not user_id:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    data = _support_load()
+    my_ticket = _support_get_my_open_ticket(data, user_id)
+    owned_ticket_ids = set()
+    if my_ticket:
+        owned_ticket_ids.add(int(my_ticket.get("id") or 0))
+    for t in (data.get("tickets") or []):
+        if str(t.get("user_id") or "") == user_id:
+            owned_ticket_ids.add(int(t.get("id") or 0))
+
+    target = None
+    for m in (data.get("messages") or []):
+        if int(m.get("ticket_id") or 0) not in owned_ticket_ids:
+            continue
+        for a in (m.get("attachments") or []):
+            if str(a.get("id") or "") == str(attachment_id):
+                target = a
+                break
+        if target:
+            break
+    if not target:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    rel = str(target.get("path") or "")
+    abs_path = os.path.join(_support_upload_dir(), rel)
+    if not os.path.exists(abs_path):
+        return jsonify({"ok": False, "error": "missing file"}), 404
+    return send_file(abs_path, mimetype=target.get("mime") or "application/octet-stream", as_attachment=False, download_name=target.get("name") or "attachment")
+
+
 @app.post("/api/support/ticket/open")
 @login_required
 def api_support_open_ticket():
-    payload = request.get_json(silent=True) or {}
+    is_multipart = request.content_type and "multipart/form-data" in request.content_type
+    payload = request.form if is_multipart else (request.get_json(silent=True) or {})
     message = str(payload.get("message") or "").strip()
     display_name = str(payload.get("display_name") or "").strip()
-    if not message:
-        return jsonify({"ok": False, "error": "Το μήνυμα είναι υποχρεωτικό."}), 400
+    files = request.files.getlist("files") if is_multipart else []
+
+    if not message and not files:
+        return jsonify({"ok": False, "error": "Το μήνυμα ή αρχείο είναι υποχρεωτικό."}), 400
     if not display_name:
         return jsonify({"ok": False, "error": "Δήλωσε όνομα πριν ξεκινήσεις συνομιλία."}), 400
 
@@ -10147,39 +10413,72 @@ def api_support_open_ticket():
             "group_name": getattr(grp, "name", None) if grp else None,
             "created_at": _support_now_iso(),
             "updated_at": _support_now_iso(),
+            "support_typing_until": None,
+            "last_support_read_at": None,
+            "last_user_read_at": None,
         }
         data["tickets"].append(ticket)
     else:
         ticket["display_name"] = display_name[:120]
 
-    data["messages"].append({
+    attachments = _support_store_uploaded_files(files)
+    msg_obj = {
+        "id": _support_next_message_id(data),
         "ticket_id": ticket["id"],
         "sender": "user",
         "content": message[:4000],
+        "attachments": attachments,
         "timestamp": _support_now_iso(),
-    })
+        "discord_delivered": False,
+        "discord_delivered_at": None,
+        "read_by_support_at": None,
+        "read_by_user_at": None,
+    }
+    data["messages"].append(msg_obj)
     ticket["updated_at"] = _support_now_iso()
 
-    if not ticket.get("discord_thread_id"):
-        thread_id = _support_discord_create_thread(ticket, message)
-        if thread_id:
-            ticket["discord_thread_id"] = thread_id
+    delivered, _ = _support_discord_deliver_message(ticket, message or "(attachment)", attachments=attachments)
+    msg_obj["discord_delivered"] = bool(delivered)
+    if delivered:
+        msg_obj["discord_delivered_at"] = _support_now_iso()
 
     _support_save(data)
-    return jsonify({"ok": True, "ticket": ticket})
+    return jsonify({"ok": True, "ticket": ticket, "discord_delivered": bool(delivered), "message": msg_obj})
 
 
 @app.get("/api/support/ticket/me")
 @login_required
 def api_support_my_ticket():
     user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    mark_read = str(request.args.get("mark_read") or "0") in ("1", "true", "yes")
     data = _support_load()
     ticket = _support_get_my_open_ticket(data, user_id)
     if not ticket:
-        return jsonify({"ok": True, "ticket": None, "messages": []})
+        return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}})
+
+    # Pull direct Discord thread replies (admin/mod messages) even if webhook bridge did not post them.
+    _support_discord_sync_thread_messages(data, ticket)
+
     msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0)]
     msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
-    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:]})
+
+    changed = False
+    if mark_read:
+        now = _support_now_iso()
+        for m in msgs:
+            if m.get("sender") == "support" and not m.get("read_by_user_at"):
+                m["read_by_user_at"] = now
+                changed = True
+        ticket["last_user_read_at"] = now
+        changed = True
+
+    typing_until = str(ticket.get("support_typing_until") or "")
+    support_typing = bool(typing_until and typing_until > _support_now_iso())
+
+    if changed:
+        _support_save(data)
+
+    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:], "presence": {"support_typing": support_typing}})
 
 
 @app.post("/api/support/ticket/close")
@@ -10209,8 +10508,6 @@ def api_support_discord_reply():
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "reply").strip().lower()
     content = str(payload.get("content") or "").strip()
-    if action == "reply" and not content:
-        return jsonify({"ok": False, "error": "missing content"}), 400
 
     data = _support_load()
     ticket = None
@@ -10230,13 +10527,52 @@ def api_support_discord_reply():
     if ticket is None:
         return jsonify({"ok": False, "error": "ticket not found"}), 404
 
+    now = _support_now_iso()
+    if action == "typing_start":
+        ttl = max(5, min(45, int(payload.get("ttl_sec") or 15)))
+        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=ttl)
+        ticket["support_typing_until"] = expires.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        _support_save(data)
+        return jsonify({"ok": True, "typing": True})
+
+    if action == "typing_stop":
+        ticket["support_typing_until"] = None
+        _support_save(data)
+        return jsonify({"ok": True, "typing": False})
+
+    if action == "read":
+        for m in (data.get("messages") or []):
+            if int(m.get("ticket_id") or 0) != int(ticket.get("id") or 0):
+                continue
+            if m.get("sender") == "user" and not m.get("read_by_support_at"):
+                m["read_by_support_at"] = now
+        ticket["last_support_read_at"] = now
+        _support_save(data)
+        return jsonify({"ok": True, "read": True})
+
+    attachments = []
+    for a in (payload.get("attachments") or []):
+        if not isinstance(a, dict):
+            continue
+        attachments.append({
+            "id": str(a.get("id") or secrets.token_hex(8)),
+            "name": str(a.get("filename") or a.get("name") or "attachment"),
+            "url": str(a.get("url") or "").strip(),
+            "mime": str(a.get("content_type") or a.get("mime") or "application/octet-stream"),
+            "size": int(a.get("size") or 0),
+            "path": None,
+        })
+
     if action == "close":
-        if content:
+        if content or attachments:
             data["messages"].append({
+                "id": _support_next_message_id(data),
                 "ticket_id": int(ticket.get("id") or 0),
                 "sender": "support",
                 "content": content[:4000],
-                "timestamp": _support_now_iso(),
+                "attachments": attachments,
+                "timestamp": now,
+                "read_by_user_at": None,
             })
         _support_close_ticket_record(ticket, closed_by="admin")
         _support_save(data)
@@ -10244,16 +10580,28 @@ def api_support_discord_reply():
             _support_discord_archive_thread(thread_id)
         return jsonify({"ok": True, "closed": True})
 
+    if action == "reply" and not content and not attachments:
+        return jsonify({"ok": False, "error": "missing content"}), 400
+
     data["messages"].append({
+        "id": _support_next_message_id(data),
         "ticket_id": int(ticket.get("id") or 0),
         "sender": "support",
         "content": content[:4000],
-        "timestamp": _support_now_iso(),
+        "attachments": attachments,
+        "timestamp": now,
+        "read_by_user_at": None,
     })
-    ticket["updated_at"] = _support_now_iso()
+    ticket["support_typing_until"] = None
+    ticket["updated_at"] = now
+
+    for m in (data.get("messages") or []):
+        if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0) and m.get("sender") == "user" and not m.get("read_by_support_at"):
+            m["read_by_support_at"] = now
+    ticket["last_support_read_at"] = now
+
     _support_save(data)
     return jsonify({"ok": True})
-
 
 
 def _normalize_backup_member(name: str) -> str:
