@@ -10240,6 +10240,170 @@ def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attac
     return _support_discord_send_message(thread_id, content, headers, attachments=attachments), thread_id
 
 
+def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str, Any], force: bool = False) -> bool:
+    """Pull latest human replies from Discord thread into local ticket storage."""
+    thread_id = str(ticket.get("discord_thread_id") or "").strip()
+    headers = _support_discord_headers()
+    if not thread_id or not headers:
+        return False
+
+    if not force:
+        last_sync = str(ticket.get("last_discord_sync_at") or "")
+        if last_sync:
+            try:
+                dt = datetime.datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+                if (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() < 6:
+                    return False
+            except Exception:
+                pass
+
+    existing = {
+        str(m.get("discord_message_id") or "")
+        for m in (data.get("messages") or [])
+        if str(m.get("ticket_id") or "") == str(ticket.get("id") or "") and m.get("discord_message_id")
+    }
+    bot_user_id = str(os.getenv("DISCORD_BOT_USER_ID") or "").strip()
+
+    try:
+        r = requests.get(
+            f"https://discord.com/api/v10/channels/{thread_id}/messages",
+            headers=headers,
+            params={"limit": 50},
+            timeout=12,
+        )
+        if not r.ok:
+            current_app.logger.warning("Discord sync failed: %s %s", r.status_code, r.text[:240])
+            return False
+        arr = r.json() or []
+        if not isinstance(arr, list):
+            return False
+
+        changed = False
+        support_replied = False
+        for item in reversed(arr):
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "")
+            if not mid or mid in existing:
+                continue
+            author = item.get("author") or {}
+            author_id = str(author.get("id") or "")
+            if bot_user_id and author_id == bot_user_id:
+                continue
+            if bool(author.get("bot")):
+                continue
+
+            content = str(item.get("content") or "").strip()
+            atts = []
+            for a in (item.get("attachments") or []):
+                if not isinstance(a, dict):
+                    continue
+                atts.append({
+                    "id": str(a.get("id") or secrets.token_hex(8)),
+                    "name": str(a.get("filename") or "attachment"),
+                    "url": str(a.get("url") or "").strip(),
+                    "mime": str(a.get("content_type") or "application/octet-stream"),
+                    "size": int(a.get("size") or 0),
+                    "path": None,
+                })
+
+            if not content and not atts:
+                continue
+
+            data["messages"].append({
+                "id": _support_next_message_id(data),
+                "ticket_id": int(ticket.get("id") or 0),
+                "sender": "support",
+                "content": content[:4000],
+                "attachments": atts,
+                "timestamp": str(item.get("timestamp") or _support_now_iso()),
+                "read_by_user_at": None,
+                "discord_message_id": mid,
+                "source": "discord_sync",
+            })
+            existing.add(mid)
+            changed = True
+            support_replied = True
+
+        if support_replied:
+            now = _support_now_iso()
+            for m in (data.get("messages") or []):
+                if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0) and m.get("sender") == "user" and not m.get("read_by_support_at"):
+                    m["read_by_support_at"] = now
+            ticket["last_support_read_at"] = now
+
+        if changed:
+            ticket["updated_at"] = _support_now_iso()
+        ticket["last_discord_sync_at"] = _support_now_iso()
+        _support_save(data)
+        return changed
+    except Exception:
+        current_app.logger.warning("Discord thread sync exception", exc_info=True)
+        return False
+
+
+@app.get("/api/support/attachment/<attachment_id>")
+@login_required
+def api_support_attachment(attachment_id: str):
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    if not user_id:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    data = _support_load()
+    my_ticket = _support_get_my_open_ticket(data, user_id)
+    owned_ticket_ids = set()
+    if my_ticket:
+        owned_ticket_ids.add(int(my_ticket.get("id") or 0))
+    for t in (data.get("tickets") or []):
+        if str(t.get("user_id") or "") == user_id:
+            owned_ticket_ids.add(int(t.get("id") or 0))
+
+    target = None
+    for m in (data.get("messages") or []):
+        if int(m.get("ticket_id") or 0) not in owned_ticket_ids:
+            continue
+        for a in (m.get("attachments") or []):
+            if str(a.get("id") or "") == str(attachment_id):
+                target = a
+                break
+        if target:
+            break
+    if not target:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    rel = str(target.get("path") or "")
+    abs_path = os.path.join(_support_upload_dir(), rel)
+    if not os.path.exists(abs_path):
+        return jsonify({"ok": False, "error": "missing file"}), 404
+    return send_file(abs_path, mimetype=target.get("mime") or "application/octet-stream", as_attachment=False, download_name=target.get("name") or "attachment")
+
+
+def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, Optional[str]]:
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
+        return False, None
+
+    thread_id = str(ticket.get("discord_thread_id") or "").strip()
+    if not thread_id:
+        thread_id = _support_discord_create_thread(ticket, message, attachments=attachments) or ""
+        if thread_id:
+            ticket["discord_thread_id"] = thread_id
+            return True, thread_id
+
+        fallback = (
+            f"[Ticket #{ticket.get('id')}] από {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+            f"VAT: {ticket.get('vat') or '-'}\n"
+            f"Group: {ticket.get('group_name') or '-'}\n"
+            f"{message}"
+        )
+        return _support_discord_send_message(channel_id, fallback, headers, attachments=attachments), None
+
+    content = (
+        f"[Ticket #{ticket.get('id')}] {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+        f"{message}"
+    )
+    return _support_discord_send_message(thread_id, content, headers, attachments=attachments), thread_id
+
+
 @app.get("/api/support/attachment/<attachment_id>")
 @login_required
 def api_support_attachment(attachment_id: str):
@@ -10353,6 +10517,9 @@ def api_support_my_ticket():
     ticket = _support_get_my_open_ticket(data, user_id)
     if not ticket:
         return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}})
+
+    # Pull direct Discord thread replies (admin/mod messages) even if webhook bridge did not post them.
+    _support_discord_sync_thread_messages(data, ticket)
 
     msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0)]
     msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
