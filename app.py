@@ -10037,20 +10037,49 @@ def _support_discord_archive_thread(thread_id: str) -> bool:
         return False
 
 
-def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
+def _support_discord_headers() -> Optional[Dict[str, str]]:
     token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_KEY") or "").strip()
-    channel_id = (
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+
+
+def _support_discord_channel_id() -> str:
+    return (
         os.getenv("DISCORD_SUPPORT_CHANNEL_ID")
         or os.getenv("DISCORD_CHANNEL_ID")
         or "1471125053524414536"
     ).strip()
-    if not token or not channel_id:
+
+
+def _support_discord_send_message(channel_id: str, content: str, headers: Dict[str, str]) -> bool:
+    if not channel_id:
+        return False
+    try:
+        r = requests.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            json={"content": (content or "")[:1800]},
+            timeout=12,
+        )
+        if not r.ok:
+            current_app.logger.warning("Discord send message failed: %s %s", r.status_code, r.text[:300])
+            return False
+        return True
+    except Exception:
+        current_app.logger.warning("Discord send message failed", exc_info=True)
+        return False
+
+
+def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -> Optional[str]:
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
         return None
 
-    headers = {
-        "Authorization": f"Bot {token}",
-        "Content-Type": "application/json",
-    }
     try:
         thread_name = f"ticket-{ticket['id']}-{_support_slug(ticket.get('display_name') or ticket.get('username') or 'user')}"
         th = requests.post(
@@ -10101,16 +10130,40 @@ def _support_discord_create_thread(ticket: Dict[str, Any], first_message: str) -
             f"Group: {ticket.get('group_name') or '-'}\n"
             f"Message:\n{first_message}"
         )
-        requests.post(
-            f"https://discord.com/api/v10/channels/{thread_id}/messages",
-            headers=headers,
-            json={"content": content[:1800]},
-            timeout=12,
-        )
+        if not _support_discord_send_message(str(thread_id), content, headers):
+            return None
         return str(thread_id)
     except Exception:
         current_app.logger.warning("Discord thread integration failed", exc_info=True)
         return None
+
+
+def _support_discord_deliver_message(ticket: Dict[str, Any], message: str) -> Tuple[bool, Optional[str]]:
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
+        return False, None
+
+    thread_id = str(ticket.get("discord_thread_id") or "").strip()
+    if not thread_id:
+        thread_id = _support_discord_create_thread(ticket, message) or ""
+        if thread_id:
+            ticket["discord_thread_id"] = thread_id
+            return True, thread_id
+
+        fallback = (
+            f"[Ticket #{ticket.get('id')}] από {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+            f"VAT: {ticket.get('vat') or '-'}\n"
+            f"Group: {ticket.get('group_name') or '-'}\n"
+            f"{message}"
+        )
+        return _support_discord_send_message(channel_id, fallback, headers), None
+
+    content = (
+        f"[Ticket #{ticket.get('id')}] {ticket.get('display_name') or ticket.get('username') or 'user'}\n"
+        f"{message}"
+    )
+    return _support_discord_send_message(thread_id, content, headers), thread_id
 
 
 @app.post("/api/support/ticket/open")
@@ -10160,13 +10213,10 @@ def api_support_open_ticket():
     })
     ticket["updated_at"] = _support_now_iso()
 
-    if not ticket.get("discord_thread_id"):
-        thread_id = _support_discord_create_thread(ticket, message)
-        if thread_id:
-            ticket["discord_thread_id"] = thread_id
+    delivered, _ = _support_discord_deliver_message(ticket, message)
 
     _support_save(data)
-    return jsonify({"ok": True, "ticket": ticket})
+    return jsonify({"ok": True, "ticket": ticket, "discord_delivered": bool(delivered)})
 
 
 @app.get("/api/support/ticket/me")

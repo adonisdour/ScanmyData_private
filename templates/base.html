@@ -2924,6 +2924,14 @@
 #helpBotInput{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;}
 #helpBotName{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;width:100%;margin:10px 10px 0 10px;max-width:calc(100% - 20px);}
 #helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
+html[data-theme="dark"] #helpBotPanel{background:#111827;border-color:#334155;box-shadow:0 20px 45px rgba(0,0,0,.55);}
+html[data-theme="dark"] #helpBotHead{background:#020617;color:#e2e8f0;border-bottom:1px solid #334155;}
+html[data-theme="dark"] #helpBotMessages{background:#0b1220;color:#e2e8f0;}
+html[data-theme="dark"] .help-msg.user{background:#1d4ed8;color:#dbeafe;}
+html[data-theme="dark"] .help-msg.support{background:#1f2937;color:#e5e7eb;}
+html[data-theme="dark"] #helpBotForm{border-top-color:#334155;background:#0f172a;}
+html[data-theme="dark"] #helpBotInput,html[data-theme="dark"] #helpBotName{background:#1e293b;color:#e2e8f0;border-color:#475569;}
+html[data-theme="dark"] #helpBotInput::placeholder,html[data-theme="dark"] #helpBotName::placeholder{color:#94a3b8;}
 @keyframes helpBotPulse{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 </style>
 <button id="helpBotFab" type="button" title="Help / Support">
@@ -3044,6 +3052,7 @@
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Σφάλμα αποστολής');
+    if(j.discord_delivered===false){ throw new Error('Το ticket αποθηκεύτηκε αλλά απέτυχε η αποστολή στο Discord.'); }
   }
 
   function setOpen(v){
