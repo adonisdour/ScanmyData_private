@@ -10502,8 +10502,9 @@ def api_support_my_ticket():
         ticket["last_user_read_at"] = now
         changed = True
 
-    typing_until = str(ticket.get("support_typing_until") or "")
-    support_typing = bool(typing_until and typing_until > _support_now_iso())
+    typing_until_dt = _support_parse_iso_utc(ticket.get("support_typing_until"))
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    support_typing = bool(typing_until_dt and typing_until_dt > now_dt)
 
     if changed:
         _support_save(data)
@@ -10528,6 +10529,47 @@ def api_support_close_ticket():
     return jsonify({"ok": True, "closed": True, "ticket": ticket})
 
 
+def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    tickets = data.get("tickets") or []
+    candidates = []
+
+    for key in ("ticket_id", "ticket", "id"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            candidates.append(("id", int(str(value).strip())))
+        except Exception:
+            pass
+
+    for key in ("discord_thread_id", "thread_id", "channel_id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            candidates.append(("thread", value))
+
+    for match_type, value in candidates:
+        for t in tickets:
+            if match_type == "id" and int(t.get("id") or 0) == int(value):
+                return t
+            if match_type == "thread" and str(t.get("discord_thread_id") or "").strip() == str(value):
+                return t
+    return None
+
+
+def _support_parse_iso_utc(value: str) -> Optional[datetime.datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+
 @app.post("/api/support/discord/reply")
 def api_support_discord_reply():
     secret = (os.getenv("SUPPORT_WEBHOOK_SECRET") or "").strip()
@@ -10540,22 +10582,24 @@ def api_support_discord_reply():
     content = str(payload.get("content") or "").strip()
 
     data = _support_load()
-    ticket = None
-    ticket_id = payload.get("ticket_id")
-    thread_id = str(payload.get("discord_thread_id") or "").strip()
-
-    if ticket_id is not None:
-        for t in (data.get("tickets") or []):
-            if int(t.get("id") or 0) == int(ticket_id):
-                ticket = t
-                break
-    if ticket is None and thread_id:
-        for t in (data.get("tickets") or []):
-            if str(t.get("discord_thread_id") or "") == thread_id:
-                ticket = t
-                break
+    ticket = _support_find_ticket_for_payload(data, payload)
     if ticket is None:
         return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    thread_id = str(ticket.get("discord_thread_id") or payload.get("discord_thread_id") or payload.get("thread_id") or payload.get("channel_id") or "").strip()
+
+    action_aliases = {
+        "typing": "typing_start",
+        "typing_on": "typing_start",
+        "start_typing": "typing_start",
+        "typing_end": "typing_stop",
+        "stop_typing": "typing_stop",
+        "typing_off": "typing_stop",
+        "mark_read": "read",
+        "seen": "read",
+        "message_read": "read",
+    }
+    action = action_aliases.get(action, action)
 
     now = _support_now_iso()
     if action == "typing_start":
