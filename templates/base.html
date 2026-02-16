@@ -2955,6 +2955,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       <div id="helpBotThreadLabel" style="font-size:11px;opacity:.8;">Συμπλήρωσε όνομα και ξεκίνα συνομιλία</div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;">
+      <button id="helpBotArchive" type="button" style="background:#334155;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Αρχείο</button>
       <button id="helpBotEnd" type="button" style="background:#ef4444;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Λήξη</button>
       <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
     </div>
@@ -2976,6 +2977,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   const panel=document.getElementById('helpBotPanel');
   const closeBtn=document.getElementById('helpBotClose');
   const endBtn=document.getElementById('helpBotEnd');
+  const archiveBtn=document.getElementById('helpBotArchive');
   const titleEl=document.getElementById('helpBotTitle');
   const badge=document.getElementById('helpBotBadge');
   const threadLabel=document.getElementById('helpBotThreadLabel');
@@ -2991,7 +2993,25 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   let lastPresence={support_typing:false};
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
+  const CLOSED_NOTICE_KEY='support_closed_notice_seen';
   let lastTicket=null;
+  let archivedTickets=[];
+
+  function updateNameFieldState(ticket){
+    if(!nameInput) return;
+    const hasLockedName = !!(ticket && (ticket.id || ticket.display_name));
+    if(hasLockedName){
+      const who = String(ticket.display_name || nameInput.value || '').trim();
+      if(who) nameInput.value = who;
+      nameInput.disabled = true;
+      nameInput.style.display = 'none';
+      if(endBtn) endBtn.style.display = '';
+    } else {
+      nameInput.disabled = false;
+      nameInput.style.display = '';
+      if(endBtn) endBtn.style.display = 'none';
+    }
+  }
 
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
   function formatStatus(m){
@@ -3056,7 +3076,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     if(!titleEl) return;
     if(!ticket){
       titleEl.textContent = 'Νέα συνομιλία';
-      if(threadLabel) threadLabel.textContent = 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
+      if(threadLabel) threadLabel.textContent = archivedTickets.length ? `Αρχειοθετημένα tickets: ${archivedTickets.length}` : 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
       return;
     }
     const status = String(ticket.status||'open') === 'closed' ? 'Κλειστό' : 'Ανοικτό';
@@ -3080,12 +3100,29 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       if(!r.ok) return;
       const j=await r.json();
       lastTicket = j.ticket || null;
+      archivedTickets = Array.isArray(j.archived_tickets) ? j.archived_tickets : [];
       lastPresence = j.presence || {support_typing:false};
       updateTitle(lastTicket);
-      render(j.messages||[]);
-      updateBadge(j.messages||[]);
+      updateNameFieldState(lastTicket);
+      const messages = lastTicket ? (j.messages||[]) : [];
+      render(messages);
+      updateBadge(messages);
+      if (!lastTicket && input) {
+        input.value = '';
+      }
+      if (j.closed_notice && open) {
+        const refTicket = j.latest_closed_ticket || {};
+        const noticeKey = `${CLOSED_NOTICE_KEY}:${refTicket.id || '0'}:${refTicket.closed_at || ''}`;
+        const already = localStorage.getItem(noticeKey);
+        if(!already){
+          const byRaw = String(refTicket.closed_by || 'support');
+          const by = (byRaw === 'admin' || byRaw === 'admin/support') ? 'admin/support' : byRaw;
+          alert(`Το ticket έκλεισε από ${by}. Η συνομιλία αρχειοθετήθηκε και μπορείς να τη δεις από το Αρχείο.`);
+          localStorage.setItem(noticeKey, '1');
+        }
+      }
       updatePresence();
-      if(open){ markSeen(j.messages||[]); }
+      if(open){ markSeen(messages); }
     }catch(_e){}
   }
 
@@ -3113,6 +3150,60 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     updateSelectedFiles();
   }
 
+  async function openArchivedTicket(ticketId){
+    const r = await fetch(`/api/support/ticket/history/${encodeURIComponent(ticketId)}`, { credentials:'same-origin' });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αδυναμία φόρτωσης αρχείου ticket');
+
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
+    const msgs = Array.isArray(j.messages) ? j.messages : [];
+    const msgHtml = msgs.map(m => `<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content||'')}</div>`).join('') || '<div class="text-sm text-gray-500">Δεν υπάρχουν μηνύματα.</div>';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-2xl max-h-[80vh] overflow-auto">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold">Αρχειοθετημένο Ticket #${esc(j.ticket?.id || ticketId)}</h3>
+          <button class="px-2 py-1 border rounded" id="closeArchivedTicketModal">Κλείσιμο</button>
+        </div>
+        <div>${msgHtml}</div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector('#closeArchivedTicketModal')?.addEventListener('click', ()=>modal.remove());
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.remove(); });
+  }
+
+  function openArchiveList(){
+    if(!archivedTickets.length){
+      alert('Δεν υπάρχουν αρχειοθετημένα tickets.');
+      return;
+    }
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
+    const listHtml = archivedTickets.map(t => {
+      const when = t.closed_at ? ` · ${esc(t.closed_at)}` : '';
+      return `<button data-ticket-id="${esc(t.id)}" class="w-full text-left px-3 py-2 border rounded hover:bg-gray-50">Ticket #${esc(t.id)}${when}</button>`;
+    }).join('');
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-lg">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold">Αρχειοθετημένα Tickets</h3>
+          <button class="px-2 py-1 border rounded" id="closeArchiveListModal">Κλείσιμο</button>
+        </div>
+        <div class="space-y-2 max-h-[60vh] overflow-auto">${listHtml}</div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector('#closeArchiveListModal')?.addEventListener('click', ()=>modal.remove());
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.remove(); });
+    modal.querySelectorAll('[data-ticket-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tid = btn.getAttribute('data-ticket-id');
+        try { await openArchivedTicket(tid); } catch(err){ alert(err.message||err); }
+      });
+    });
+  }
+
   function setOpen(v){
     open=!!v;
     if(panel) panel.style.display=open?'flex':'none';
@@ -3128,7 +3219,9 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     const savedName = localStorage.getItem(NAME_KEY) || '';
     if(savedName && nameInput) nameInput.value = savedName;
   }catch(_e){}
+  updateNameFieldState(null);
   closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
+  archiveBtn&&archiveBtn.addEventListener('click', ()=>openArchiveList());
 
   refresh();
   if(!poller) poller=setInterval(refresh, 5000);
