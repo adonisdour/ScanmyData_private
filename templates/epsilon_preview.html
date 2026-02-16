@@ -14,6 +14,7 @@
 .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;border:1px solid #d1d5db}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-primary{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+.btn-danger{background:#ef4444;color:#fff;border-color:#ef4444}
 
 /* Dark mode table styling */
 [data-theme="dark"] #epsilonTable {
@@ -79,12 +80,22 @@
     </div>
 
     <div class="flex items-center gap-2">
+      <button id="resetRemovedRowsBtn" class="btn" disabled>Επαναφορά διαγραφών</button>
       <button id="exportBridgeBtn" class="btn btn-primary" disabled
               title="Απενεργό: απαιτείται κάθε γραμμή να έχει CUSTID, Χαρακτηρισμούς & Λογαριασμούς">
         Λήψη Γέφυρας (Strict)
       </button>
     </div>
   </div>
+
+  {% if missing_excel_marks %}
+    <div class="mb-3 p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-sm">
+      Εντοπίστηκαν <strong>{{ missing_excel_marks|length }}</strong> παραστατικά στο epsilon json που δεν υπάρχουν στο invoices.xlsx.
+      Μπορείς να τα αφαιρέσεις προσωρινά από την προεπισκόπηση με το κουμπί «Διαγραφή».
+    </div>
+  {% endif %}
+
+  <div id="removedRowsInfo" class="hidden mb-3 p-2 rounded border border-sky-200 bg-sky-50 text-sky-800 text-sm"></div>
 
   <div class="text-sm text-gray-500 mb-2">Σύνολα προσαρμόζονται στο φίλτρο αναζήτησης</div>
 
@@ -120,6 +131,7 @@
         <th>Είδος παραστατικού</th>
         <th>Χαρακτηρισμοί</th>
         <th>Λογαριασμοί</th>
+        <th>Ενέργειες</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -202,6 +214,7 @@ const TABLE_DATA = {{ table_rows|tojson|safe }};
 const ACTIVE_VAT = "{{ vat or '' }}";
 const BRIDGE_ISSUES = {{ (bridge_issues or [])|tojson|safe }};
 const CATEGORY_LABELS = {{ (category_labels or {})|tojson|safe }};
+const EXCLUDED_MARKS = new Set();
 
 function money(n){
   const v = Number(n)||0;
@@ -347,6 +360,24 @@ function updateTotalsAndExportState(api){
       ? "Όλα εντάξει — κάνε λήψη γέφυρας"
       : "Απενεργό: απαιτείται κάθε γραμμή να έχει CUSTID, Χαρακτηρισμούς & Λογαριασμούς";
   }
+
+  updateRemovedRowsInfo();
+}
+
+function updateRemovedRowsInfo(){
+  const info = document.getElementById('removedRowsInfo');
+  const resetBtn = document.getElementById('resetRemovedRowsBtn');
+  if(!info || !resetBtn) return;
+  const count = EXCLUDED_MARKS.size;
+  if(!count){
+    info.classList.add('hidden');
+    info.textContent = '';
+    resetBtn.disabled = true;
+    return;
+  }
+  info.classList.remove('hidden');
+  info.textContent = `Έχεις αφαιρέσει ${count} παραστατικά από την προεπισκόπηση. Η εξαγωγή θα τα αγνοήσει.`;
+  resetBtn.disabled = false;
 }
 
 function extractFilenameFromDisposition(disposition){
@@ -494,7 +525,8 @@ $(function(){
         _missChar: missChar,
         _missVat: missVat,
         _missLcodes: missAcc,
-        _isReceipt: isRec
+        _isReceipt: isRec,
+        _markKey: String(r.MARK || '').trim()
       };
     }),
     columns: [
@@ -539,6 +571,13 @@ $(function(){
           return warnIfEmpty(baseTxt,'Λείπουν λογαριασμοί');
         } 
       },
+      { data: null, orderable:false, searchable:false, render:(d,t,row)=> {
+          if(!row._markKey){
+            return '<span class="text-xs text-gray-400">—</span>';
+          }
+          return '<button class="btn btn-danger btn-delete-preview-row text-xs px-2 py-1">Διαγραφή</button>';
+        }
+      },
     ],
     order: [[2,'desc']],
     pageLength: 25,
@@ -562,6 +601,21 @@ $(function(){
     }
   });
 
+  $('#epsilonTable tbody').on('click', '.btn-delete-preview-row', function(e){
+    e.preventDefault();
+    const tr = $(this).closest('tr');
+    const row = dt.row(tr);
+    const rdata = row.data() || {};
+    const mark = String(rdata._markKey || '').trim();
+    if(!mark){
+      showFlash('Δεν βρέθηκε MARK για τη γραμμή που επέλεξες.', 'error', 4000);
+      return;
+    }
+    EXCLUDED_MARKS.add(mark);
+    row.remove().draw(false);
+    showFlash(`Το MARK ${mark} αφαιρέθηκε από την προεπισκόπηση.`, 'info', 2500);
+  });
+
   // initial compute
   updateTotalsAndExportState(dt);
 
@@ -570,6 +624,11 @@ $(function(){
     searchInput.addEventListener('input', function(){ dt.search(this.value).draw(); });
   }
 
+  document.getElementById('resetRemovedRowsBtn')?.addEventListener('click', function(){
+    const baseUrl = '/epsilon/preview?vat=' + encodeURIComponent(ACTIVE_VAT);
+    window.location.href = baseUrl;
+  });
+
   // Export
   const exportBtn = document.getElementById('exportBridgeBtn');
   exportBtn?.addEventListener('click', async function(){
@@ -577,6 +636,9 @@ $(function(){
     const baseUrl = "/export/fastimport/kinitseis?vat=" + encodeURIComponent(ACTIVE_VAT);
     const mode = this.dataset.exportMode || 'strict';
     let targetUrl = baseUrl;
+    if (EXCLUDED_MARKS.size > 0){
+      targetUrl += '&excluded_marks=' + encodeURIComponent(Array.from(EXCLUDED_MARKS).join(','));
+    }
     if (mode === 'partners'){
       const proceed = await showModalConfirm(
         'Επιβεβαίωση δημιουργίας συναλλασσόμενων',

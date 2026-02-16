@@ -11434,19 +11434,66 @@ def epsilon_preview():
         base_invoices_dir=group_path("epsilon"),
         fiscal_year=fiscal_year,
     )
+
+    # Έλεγχος ασυμφωνίας: εγγραφές στο epsilon json που δεν υπάρχουν στο invoices.xlsx
+    missing_excel_marks: List[str] = []
+    try:
+        excel_path = excel_path_for(vat=vat)
+        if os.path.exists(excel_path):
+            df_excel = pd.read_excel(excel_path, engine="openpyxl", dtype=str).fillna("")
+            excel_marks = set(df_excel.get("MARK", pd.Series(dtype=str)).astype(str).str.strip().tolist())
+            preview_marks = [str(r.get("MARK") or "").strip() for r in (rows or []) if str(r.get("MARK") or "").strip()]
+            missing_excel_marks = sorted({m for m in preview_marks if m not in excel_marks})
+    except Exception:
+        current_app.logger.exception("Failed to compare epsilon preview against excel MARK column")
+
     # πέρασέ τα στο template
     return render_template("epsilon_preview.html",
                            vat=vat,
                            table_rows=rows,
                            bridge_ok=(not issues and len(rows)>0),
                            bridge_issues=issues,
-                           category_labels=category_labels)
+                           category_labels=category_labels,
+                           missing_excel_marks=missing_excel_marks)
 
 
 @app.route("/export/fastimport/kinitseis")
 def export_fastimport_kinitseis():
     vat = request.args.get("vat") or ""
     confirm = request.args.get("confirm_new_partners") == "1"
+
+    # Προαιρετικό φιλτράρισμα από το preview: MARKs που ο χρήστης διέγραψε πριν το export
+    excluded_marks_raw = (request.args.get("excluded_marks") or "").strip()
+    excluded_marks = {m.strip() for m in excluded_marks_raw.split(",") if m.strip()}
+    temp_invoices_json: Optional[str] = None
+
+    if excluded_marks:
+        try:
+            from epsilon_bridge_multiclient_strict import resolve_paths_for_vat, load_epsilon_invoices
+            paths_for_invoices = resolve_paths_for_vat(vat, None, None, None, group_path("epsilon"))
+            all_invoices = load_epsilon_invoices(paths_for_invoices["invoices"])
+            filtered_invoices = []
+            for rec in (all_invoices or []):
+                rec_mark = str(rec.get("MARK") or rec.get("mark") or "").strip()
+                if rec_mark and rec_mark in excluded_marks:
+                    continue
+                filtered_invoices.append(rec)
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix="_filtered_epsilon_invoices.json", delete=False, encoding="utf-8") as tf:
+                json.dump(filtered_invoices, tf, ensure_ascii=False, indent=2)
+                temp_invoices_json = tf.name
+        except Exception:
+            current_app.logger.exception("Failed to apply excluded MARKs filter for epsilon export")
+            temp_invoices_json = None
+
+    @after_this_request
+    def _cleanup_temp_filtered_file(response):
+        if temp_invoices_json:
+            try:
+                os.remove(temp_invoices_json)
+            except Exception:
+                pass
+        return response
 
     # Διάβασε active credential για να δούμε αν είμαστε σε AFM mode και book_category
     apod_type = ""
@@ -11493,7 +11540,7 @@ def export_fastimport_kinitseis():
         vat=vat,
         credentials_json=credentials_path_for_request(),
         cred_settings_json=settings_file_path(),
-        invoices_json=None,
+        invoices_json=temp_invoices_json,
         client_db=base_client_db,
         base_invoices_dir=group_path("epsilon"),
         fiscal_year=fiscal_year,
@@ -11536,7 +11583,7 @@ def export_fastimport_kinitseis():
         vat=vat,
         credentials_json=credentials_path_for_request(),
         cred_settings_json=settings_file_path(),
-        invoices_json=None,
+        invoices_json=temp_invoices_json,
         client_db=client_db_path,
         out_xlsx=None,
         base_invoices_dir=group_path("epsilon"),
