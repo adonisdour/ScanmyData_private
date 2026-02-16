@@ -1873,8 +1873,6 @@ def _looks_like_receipt(rec: dict) -> bool:
 def _collect_missing_afm_from_preview(rows):
     missing = {}
     for r in rows or []:
-        if not _looks_like_receipt(r):
-            continue
         cid = r.get("CUSTID")
         if cid not in (None, "", 0):
             continue
@@ -10555,7 +10553,22 @@ def api_support_my_ticket():
     data = _support_load()
     ticket = _support_get_my_open_ticket(data, user_id)
     if not ticket:
-        return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}})
+        user_tickets = [t for t in (data.get("tickets") or []) if str(t.get("user_id") or "") == user_id]
+        if not user_tickets:
+            return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}})
+
+        user_tickets.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
+        latest = user_tickets[0]
+        latest_msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(latest.get("id") or 0)]
+        latest_msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
+        closed_notice = bool(str(latest.get("status") or "").lower() == "closed" and str(latest.get("closed_by") or "") in ("admin", "support", "admin/support"))
+        return jsonify({
+            "ok": True,
+            "ticket": latest,
+            "messages": latest_msgs[-100:],
+            "presence": {"support_typing": False},
+            "closed_notice": closed_notice,
+        })
 
     # Pull direct Discord thread replies (admin/mod messages) even if webhook bridge did not post them.
     _support_discord_sync_thread_messages(data, ticket)
@@ -11527,6 +11540,7 @@ def epsilon_preview():
 
     # Έλεγχος ασυμφωνίας: εγγραφές στο epsilon json που δεν υπάρχουν στο invoices.xlsx
     missing_excel_marks: List[str] = []
+    missing_excel_rows: List[Dict[str, Any]] = []
     try:
         excel_path = excel_path_for(vat=vat)
         if os.path.exists(excel_path):
@@ -11534,6 +11548,22 @@ def epsilon_preview():
             excel_marks = set(df_excel.get("MARK", pd.Series(dtype=str)).astype(str).str.strip().tolist())
             preview_marks = [str(r.get("MARK") or "").strip() for r in (rows or []) if str(r.get("MARK") or "").strip()]
             missing_excel_marks = sorted({m for m in preview_marks if m not in excel_marks})
+            if missing_excel_marks:
+                rows_by_mark: Dict[str, List[Dict[str, Any]]] = {}
+                for r in (rows or []):
+                    mk = str(r.get("MARK") or "").strip()
+                    if not mk:
+                        continue
+                    rows_by_mark.setdefault(mk, []).append(r)
+                for mk in missing_excel_marks:
+                    for rec in rows_by_mark.get(mk, [{}]):
+                        missing_excel_rows.append({
+                            "mark": mk,
+                            "aa": str(rec.get("AA") or "").strip(),
+                            "afm": str(rec.get("AFM_ISSUER") or "").strip(),
+                            "issuer_name": str(rec.get("ISSUER_NAME") or "").strip(),
+                            "date": str(rec.get("DATE") or "").strip(),
+                        })
     except Exception:
         current_app.logger.exception("Failed to compare epsilon preview against excel MARK column")
 
@@ -11544,7 +11574,8 @@ def epsilon_preview():
                            bridge_ok=(not issues and len(rows)>0),
                            bridge_issues=issues,
                            category_labels=category_labels,
-                           missing_excel_marks=missing_excel_marks)
+                           missing_excel_marks=missing_excel_marks,
+                           missing_excel_rows=missing_excel_rows)
 
 
 @app.route("/export/fastimport/kinitseis")
@@ -12355,6 +12386,134 @@ def api_admin_activity_logs():
     
     logs = admin_panel.admin_get_activity_logs(group_name, limit)
     return jsonify({'logs': logs})
+
+
+@app.route('/api/admin/activity-logs/clear', methods=['POST'])
+@login_required
+def api_admin_activity_logs_clear():
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'ok': False, 'error': 'Admin access required'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    period = str(payload.get('period') or '').strip().lower()
+    start_date = str(payload.get('start_date') or '').strip()
+    end_date = str(payload.get('end_date') or '').strip()
+
+    now = datetime.now(timezone.utc)
+    cutoff_start = None
+    cutoff_end = None
+
+    def _sub_months(dt: datetime, months: int) -> datetime:
+        y = dt.year
+        m = dt.month - months
+        while m <= 0:
+            y -= 1
+            m += 12
+        import calendar
+        d = min(dt.day, calendar.monthrange(y, m)[1])
+        return dt.replace(year=y, month=m, day=d)
+
+    try:
+        if period in ('1m', '2m', '3m'):
+            cutoff_start = _sub_months(now, int(period[0]))
+        elif period == 'custom':
+            if not start_date or not end_date:
+                return jsonify({'ok': False, 'error': 'Απαιτούνται start_date και end_date για custom διάστημα.'}), 400
+            cutoff_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            cutoff_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            cutoff_end = cutoff_end.replace(hour=23, minute=59, second=59)
+        else:
+            return jsonify({'ok': False, 'error': 'Μη έγκυρο period. Επιτρεπτά: 1m, 2m, 3m, custom'}), 400
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Μη έγκυρες ημερομηνίες.'}), 400
+
+    def _parse_ts(ts: str):
+        if not ts:
+            return None
+        variants = [str(ts).strip(), str(ts).strip().replace('Z', '+00:00')]
+        for v in variants:
+            try:
+                dt = datetime.fromisoformat(v)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
+            except Exception:
+                continue
+        return None
+
+    def _should_delete(dt: datetime) -> bool:
+        if not dt:
+            return False
+        if cutoff_end is not None:
+            return cutoff_start <= dt <= cutoff_end
+        return dt >= cutoff_start
+
+    total_deleted = 0
+    groups = Group.query.all()
+    for grp in groups:
+        folder = getattr(grp, 'data_folder', None) or grp.name
+
+        # Firebase activity logs per group
+        try:
+            path = f'/activity_logs/{folder}'
+            remote = firebase_config.firebase_read_data(path) or {}
+            if isinstance(remote, dict):
+                kept = {}
+                for key, val in remote.items():
+                    ts = _parse_ts((val or {}).get('timestamp') if isinstance(val, dict) else '')
+                    if _should_delete(ts):
+                        total_deleted += 1
+                    else:
+                        kept[key] = val
+                firebase_config.firebase_delete_data(path)
+                if kept:
+                    firebase_config.firebase_write_data(path, kept)
+        except Exception:
+            current_app.logger.exception('Failed clearing Firebase activity logs for %s', folder)
+
+        # Local JSONL/plain file fallback logs
+        try:
+            group_dir = os.path.join(os.getcwd(), 'data', str(folder))
+            for file_name in ('activity.log.jsonl', 'activity.log'):
+                fpath = os.path.join(group_dir, file_name)
+                if not os.path.exists(fpath):
+                    continue
+                kept_lines = []
+                with open(fpath, 'r', encoding='utf-8') as fh:
+                    for line in fh:
+                        line_stripped = line.strip()
+                        if not line_stripped:
+                            continue
+                        parsed = None
+                        ts = None
+                        try:
+                            parsed = json.loads(line_stripped)
+                            if isinstance(parsed, dict):
+                                ts = _parse_ts(parsed.get('timestamp') or '')
+                        except Exception:
+                            parsed = None
+                        if ts is None and ' - ' in line_stripped:
+                            ts = _parse_ts(line_stripped.split(' - ', 1)[0])
+                        if _should_delete(ts):
+                            total_deleted += 1
+                            continue
+                        kept_lines.append(line)
+                with open(fpath, 'w', encoding='utf-8') as fw:
+                    fw.writelines(kept_lines)
+        except Exception:
+            current_app.logger.exception('Failed clearing local activity logs for %s', folder)
+
+    try:
+        firebase_config.firebase_log_activity(str(getattr(current_user, 'id', 'admin')), 'admin', 'activity_logs_cleared', {
+            'period': period,
+            'start_date': start_date,
+            'end_date': end_date,
+            'deleted_entries': total_deleted,
+        })
+    except Exception:
+        pass
+
+    return jsonify({'ok': True, 'deleted_entries': total_deleted})
 
 
 @app.route("/admin/send-email", methods=['GET', 'POST'])

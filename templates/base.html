@@ -2991,7 +2991,22 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   let lastPresence={support_typing:false};
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
+  const CLOSED_NOTICE_KEY='support_closed_notice_seen';
   let lastTicket=null;
+
+  function updateNameFieldState(ticket){
+    if(!nameInput) return;
+    const hasLockedName = !!(ticket && (ticket.id || ticket.display_name));
+    if(hasLockedName){
+      const who = String(ticket.display_name || nameInput.value || '').trim();
+      if(who) nameInput.value = who;
+      nameInput.disabled = true;
+      nameInput.style.display = 'none';
+    } else {
+      nameInput.disabled = false;
+      nameInput.style.display = '';
+    }
+  }
 
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
   function formatStatus(m){
@@ -3082,8 +3097,18 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       lastTicket = j.ticket || null;
       lastPresence = j.presence || {support_typing:false};
       updateTitle(lastTicket);
+      updateNameFieldState(lastTicket);
       render(j.messages||[]);
       updateBadge(j.messages||[]);
+      if (j.closed_notice && open && lastTicket && String(lastTicket.status||'') === 'closed') {
+        const noticeKey = `${CLOSED_NOTICE_KEY}:${lastTicket.id || '0'}:${lastTicket.closed_at || ''}`;
+        const already = localStorage.getItem(noticeKey);
+        if(!already){
+          const by = String(lastTicket.closed_by || 'support');
+          alert(`Το ticket έκλεισε από ${by === 'admin' ? 'admin/support' : by}. Μπορείς να ξεκινήσεις νέο ticket στέλνοντας νέο μήνυμα.`);
+          localStorage.setItem(noticeKey, '1');
+        }
+      }
       updatePresence();
       if(open){ markSeen(j.messages||[]); }
     }catch(_e){}
@@ -3128,6 +3153,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     const savedName = localStorage.getItem(NAME_KEY) || '';
     if(savedName && nameInput) nameInput.value = savedName;
   }catch(_e){}
+  updateNameFieldState(null);
   closeBtn&&closeBtn.addEventListener('click',()=>setOpen(false));
 
   refresh();

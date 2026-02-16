@@ -1751,16 +1751,101 @@ async function testEmailConfiguration() {
 }
 
 async function clearActivityLogsConfirm() {
-  if (!await showModalConfirm('Διαγραφή Activity Logs', 'Είστε σίγουρος; Αυτό δεν μπορεί να αναιρεθεί.', 'Διαγραφή', 'Άκυρο')) return;
-  clearActivityLogs();
+  const choice = await showActivityDeleteRangeModal();
+  if (!choice) return;
+  clearActivityLogs(choice);
 }
 
-async function clearActivityLogs() {
+function showActivityDeleteRangeModal() {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg p-6 max-w-lg w-full mx-4">
+        <div class="flex items-center mb-4">
+          <div class="text-red-600 text-2xl mr-3">⚠️</div>
+          <h3 class="text-lg font-bold">Διαγραφή Δραστηριότητας</h3>
+        </div>
+        <p class="text-gray-700 mb-4">Επέλεξε για ποιο διάστημα θέλεις να διαγράψεις activity logs:</p>
+
+        <div class="space-y-2 mb-4 text-sm">
+          <label class="flex items-center gap-2"><input type="radio" name="activity-delete-period" value="1m" checked> Τελευταίος 1 μήνας</label>
+          <label class="flex items-center gap-2"><input type="radio" name="activity-delete-period" value="2m"> Τελευταίοι 2 μήνες</label>
+          <label class="flex items-center gap-2"><input type="radio" name="activity-delete-period" value="3m"> Τελευταίοι 3 μήνες</label>
+          <label class="flex items-center gap-2"><input type="radio" name="activity-delete-period" value="custom"> Custom ημερομηνίες</label>
+        </div>
+
+        <div id="customActivityRange" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Από</label>
+            <input id="activityDeleteStartDate" type="date" class="w-full px-3 py-2 border rounded">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Έως</label>
+            <input id="activityDeleteEndDate" type="date" class="w-full px-3 py-2 border rounded">
+          </div>
+        </div>
+
+        <div class="flex gap-3 justify-end">
+          <button id="activityDeleteCancelBtn" class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400">Ακύρωση</button>
+          <button id="activityDeleteConfirmBtn" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">Διαγραφή</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const periodInputs = modal.querySelectorAll('input[name="activity-delete-period"]');
+    const customWrap = modal.querySelector('#customActivityRange');
+    const startInput = modal.querySelector('#activityDeleteStartDate');
+    const endInput = modal.querySelector('#activityDeleteEndDate');
+
+    const updateCustomVisibility = () => {
+      const selected = modal.querySelector('input[name="activity-delete-period"]:checked')?.value;
+      customWrap.classList.toggle('hidden', selected !== 'custom');
+    };
+    periodInputs.forEach(inp => inp.addEventListener('change', updateCustomVisibility));
+    updateCustomVisibility();
+
+    modal.querySelector('#activityDeleteCancelBtn')?.addEventListener('click', () => {
+      modal.remove();
+      resolve(null);
+    });
+
+    modal.querySelector('#activityDeleteConfirmBtn')?.addEventListener('click', () => {
+      const selected = modal.querySelector('input[name="activity-delete-period"]:checked')?.value || '1m';
+      if (selected === 'custom') {
+        if (!startInput.value || !endInput.value) {
+          showErrorModal('❌ Λείπουν ημερομηνίες', 'Συμπλήρωσε ημερομηνίες για custom διάστημα.');
+          return;
+        }
+      }
+      modal.remove();
+      resolve({
+        period: selected,
+        start_date: startInput.value || null,
+        end_date: endInput.value || null,
+      });
+    });
+  });
+}
+
+async function clearActivityLogs(rangePayload) {
   try {
-    // TODO: Implement clear activity logs
-    showErrorModal('🚧 Not Implemented', 'Clear activity logs feature not yet implemented');
+    const response = await fetch('/api/admin/activity-logs/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rangePayload || { period: '1m' })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'Αποτυχία διαγραφής logs');
+    }
+    showSuccessModal('✅ Ολοκληρώθηκε', `Διαγράφηκαν ${data.deleted_entries || 0} εγγραφές δραστηριότητας.`);
+    loadActivity();
+    loadStats();
   } catch (err) {
-    showErrorModal('❌ Σφάλμα', 'Error clearing logs');
+    showErrorModal('❌ Σφάλμα', err.message || 'Error clearing logs');
   }
 }
 
