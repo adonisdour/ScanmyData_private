@@ -15,6 +15,8 @@
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-primary{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
 .btn-danger{background:#ef4444;color:#fff;border-color:#ef4444}
+.btn-link{border:none;background:transparent;color:#1d4ed8;text-decoration:underline;cursor:pointer;padding:0}
+.count-highlight{display:inline-flex;align-items:center;justify-content:center;min-width:22px;padding:2px 8px;border-radius:999px;background:#b91c1c;color:#fff;font-weight:700;box-shadow:0 0 0 3px rgba(239,68,68,.25)}
 
 /* Dark mode table styling */
 [data-theme="dark"] #epsilonTable {
@@ -70,6 +72,17 @@
   </div>
 </div>
 
+<!-- Epsilon vs Excel diffs modal -->
+<div id="missingMarksModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+  <div class="bg-white rounded-xl shadow-xl max-w-3xl w-[92vw] p-4">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-lg font-semibold">Διαφορές epsilon json ↔ invoices.xlsx</h3>
+      <button id="missingMarksCloseBtn" class="px-2 py-1 border rounded">Κλείσιμο</button>
+    </div>
+    <div id="missingMarksList" class="max-h-[60vh] overflow-auto space-y-2 text-sm"></div>
+  </div>
+</div>
+
 <div class="bg-white rounded shadow p-6">
   <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-3">
@@ -90,7 +103,11 @@
 
   {% if missing_excel_marks %}
     <div class="mb-3 p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-sm">
-      Εντοπίστηκαν <strong>{{ missing_excel_marks|length }}</strong> παραστατικά στο epsilon json που δεν υπάρχουν στο invoices.xlsx.
+      Εντοπίστηκαν
+      <button type="button" id="openMissingMarksModal" class="btn-link align-baseline" title="Προβολή λίστας διαφορών">
+        <span class="count-highlight">{{ missing_excel_marks|length }}</span>
+      </button>
+      παραστατικά στο epsilon json που δεν υπάρχουν στο invoices.xlsx.
       Μπορείς να τα αφαιρέσεις προσωρινά από την προεπισκόπηση με το κουμπί «Διαγραφή».
     </div>
   {% endif %}
@@ -214,6 +231,7 @@ const TABLE_DATA = {{ table_rows|tojson|safe }};
 const ACTIVE_VAT = "{{ vat or '' }}";
 const BRIDGE_ISSUES = {{ (bridge_issues or [])|tojson|safe }};
 const CATEGORY_LABELS = {{ (category_labels or {})|tojson|safe }};
+const MISSING_EXCEL_ROWS = {{ (missing_excel_rows or [])|tojson|safe }};
 const EXCLUDED_MARKS = new Set();
 
 function money(n){
@@ -665,6 +683,41 @@ $(function(){
     }).join('');
     wrap.classList.remove('hidden'); wrap.classList.add('flex');
     document.getElementById('issuesCloseBtn')?.addEventListener('click', ()=> wrap.classList.add('hidden'));
+  })();
+
+  (function(){
+    const openBtn = document.getElementById('openMissingMarksModal');
+    const wrap = document.getElementById('missingMarksModal');
+    const closeBtn = document.getElementById('missingMarksCloseBtn');
+    const list = document.getElementById('missingMarksList');
+    if(!openBtn || !wrap || !list) return;
+
+    const rows = Array.isArray(MISSING_EXCEL_ROWS) ? MISSING_EXCEL_ROWS : [];
+    list.innerHTML = rows.length
+      ? rows.map((r, idx) => {
+          const mark = String(r.mark || '');
+          const aa = String(r.aa || '—');
+          const afm = String(r.afm || '—');
+          const name = String(r.issuer_name || '—').replace(/</g,'&lt;');
+          const date = String(r.date || '—');
+          return `<div class="p-2 rounded border bg-amber-50 border-amber-200">${idx+1}. MARK=<strong>${mark}</strong> · AA=${aa} · ΑΦΜ=${afm} · ${name} · ${date}</div>`;
+        }).join('')
+      : '<div class="p-2 rounded border bg-gray-50 border-gray-200">Δεν υπάρχουν διαθέσιμες λεπτομέρειες.</div>';
+
+    const closeModal = () => {
+      wrap.classList.add('hidden');
+      wrap.classList.remove('flex');
+    };
+    const openModal = () => {
+      wrap.classList.remove('hidden');
+      wrap.classList.add('flex');
+    };
+
+    openBtn.addEventListener('click', openModal);
+    closeBtn?.addEventListener('click', closeModal);
+    wrap.addEventListener('click', (e) => {
+      if(e.target === wrap) closeModal();
+    });
   })();
 });
 </script>
