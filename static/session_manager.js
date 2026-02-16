@@ -12,8 +12,8 @@
 
   // Configuration
   const CONFIG = {
-    INACTIVITY_TIMEOUT: 30 * 60 * 1000, // 30 minutes in milliseconds
-    CHECK_INTERVAL: 20 * 1000, // Check every 1 minute
+    INACTIVITY_TIMEOUT: 15 * 60 * 1000, // 15 minutes in milliseconds
+    CHECK_INTERVAL: 20 * 1000, // Check every 20 seconds
     LOGOUT_WARNING_TIME: 2 * 60 * 1000, // Warn 2 minutes before logout
     STORAGE_KEY: 'fbp_session_activity',
     STORAGE_KEY_TAB: 'fbp_session_tab_id',
@@ -46,7 +46,7 @@
     // Detect tab/browser close
     attachUnloadListener();
 
-    console.info('SessionManager initialized. Inactivity timeout: 30 minutes');
+    console.info('SessionManager initialized. Inactivity timeout: 15 minutes');
   }
 
   /**
@@ -83,6 +83,7 @@
    */
   function updateActivityTime() {
     lastActivityTime = Date.now();
+    resetWarningFlag();
     try {
       localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify({
         timestamp: lastActivityTime,
@@ -206,8 +207,8 @@
         
         // Use sendBeacon if available (most reliable for logout on unload)
         if (navigator.sendBeacon) {
-          const blob = new Blob([logoutData], { type: 'application/x-www-form-urlencoded' });
-          navigator.sendBeacon(CONFIG.LOGOUT_ENDPOINT, blob);
+          const payload = new URLSearchParams({ reason: 'tab_close' });
+          navigator.sendBeacon(CONFIG.LOGOUT_ENDPOINT, payload);
         } else {
           // Fallback: use fetch with keepalive
           fetch(CONFIG.LOGOUT_ENDPOINT, {

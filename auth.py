@@ -239,7 +239,7 @@ def login():
             # If the user already has a live session (recent heartbeat), block login.
             # Allow takeover if the existing session appears stale (> timeout).
             from models import db as _db
-            SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 300))
+            SESSION_TIMEOUT = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
             existing_sid = getattr(user, 'current_session_id', None)
             last_active = getattr(user, 'last_active_at', None)
             if existing_sid and last_active:

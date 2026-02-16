@@ -69,6 +69,7 @@
                         <button class="btn btn-sm btn-info" onclick="showEditUserModal({{ user.id }}, '{{ user.username }}', '{{ user.email }}', {{ user.is_admin|lower }})">Edit</button>
                         <button class="btn btn-sm btn-primary" onclick="showUserActivityModal({{ user.id }}, '{{ user.username }}')">Activity</button>
                         {% if user.id != current_user.id %}
+                        <button class="btn btn-sm btn-warning" onclick="forceLogoutAjax({{ user.id }}, '{{ user.username }}')">Force Logout</button>
                         <button class="btn btn-sm btn-danger" onclick="deleteUserAjax({{ user.id }}, '{{ user.username }}')">Delete</button>
                         {% endif %}
                     </td>
@@ -261,6 +262,25 @@ async function deleteUserAjax(userId, username) {
     });
 }
 
+async function forceLogoutAjax(userId, username) {
+    if (!await showModalConfirm('Force Logout', `Να γίνει force logout στον χρήστη ${username};`, 'Force Logout', 'Άκυρο')) return;
+
+    fetch(`/admin/api/users/${userId}/force_unlock`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showModalAlert('Επιτυχία', 'Ο χρήστης αποσυνδέθηκε επιτυχώς.');
+            location.reload();
+        } else {
+            showErrorModal('Σφάλμα', 'Αποτυχία force logout: ' + (data.error || 'Άγνωστο σφάλμα'));
+        }
+    })
+    .catch(err => showErrorModal('Σφάλμα', 'Σφάλμα force logout: ' + err));
+}
+
 function showUserActivityModal(userId, username) {
     document.getElementById('activityUsername').textContent = username;
     document.getElementById('userActivityContent').innerHTML = 'Loading...';
@@ -299,17 +319,5 @@ function showUserActivityModal(userId, username) {
     $('#userActivityModal').modal('show');
 }
 </script>
-
-{% endblock %}
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <!-- Content loaded dynamically -->
-            </div>
-        </div>
-    </div>
-</div>
-
-<script src="/static/admin_users.js"></script>
 
 {% endblock %}
