@@ -10555,19 +10555,32 @@ def api_support_my_ticket():
     if not ticket:
         user_tickets = [t for t in (data.get("tickets") or []) if str(t.get("user_id") or "") == user_id]
         if not user_tickets:
-            return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}})
+            return jsonify({"ok": True, "ticket": None, "messages": [], "presence": {"support_typing": False}, "archived_tickets": [], "closed_notice": False})
 
         user_tickets.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
-        latest = user_tickets[0]
-        latest_msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(latest.get("id") or 0)]
-        latest_msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
-        closed_notice = bool(str(latest.get("status") or "").lower() == "closed" and str(latest.get("closed_by") or "") in ("admin", "support", "admin/support"))
+        archived_tickets = []
+        for t in user_tickets:
+            if str(t.get("status") or "").lower() != "closed":
+                continue
+            archived_tickets.append({
+                "id": t.get("id"),
+                "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
+                "closed_at": t.get("closed_at"),
+                "closed_by": t.get("closed_by"),
+            })
+            if len(archived_tickets) >= 20:
+                break
+
+        latest_closed = archived_tickets[0] if archived_tickets else None
+        closed_notice = bool(latest_closed and str(latest_closed.get("closed_by") or "") in ("admin", "support", "admin/support"))
         return jsonify({
             "ok": True,
-            "ticket": latest,
-            "messages": latest_msgs[-100:],
+            "ticket": None,
+            "messages": [],
             "presence": {"support_typing": False},
             "closed_notice": closed_notice,
+            "archived_tickets": archived_tickets,
+            "latest_closed_ticket": latest_closed,
         })
 
     # Pull direct Discord thread replies (admin/mod messages) even if webhook bridge did not post them.
@@ -10614,6 +10627,26 @@ def api_support_close_ticket():
         _support_discord_archive_thread(thread_id)
     _support_discord_log_event(f"🔴 Ticket #{ticket_id} έκλεισε από χρήστη: {who}")
     return jsonify({"ok": True, "closed": True, "ticket": ticket})
+
+
+@app.get("/api/support/ticket/history/<int:ticket_id>")
+@login_required
+def api_support_ticket_history(ticket_id: int):
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    data = _support_load()
+
+    ticket = None
+    for t in (data.get("tickets") or []):
+        if int(t.get("id") or 0) == int(ticket_id) and str(t.get("user_id") or "") == user_id:
+            ticket = t
+            break
+
+    if not ticket:
+        return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(ticket_id)]
+    msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
+    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-200:]})
 
 
 def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

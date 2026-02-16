@@ -589,6 +589,10 @@ def build_preview_rows_for_ui(
     else:
         issues.append({"code":"client_db_missing","modal":True,"message":"Δεν βρέθηκε client_db για αντιστοίχιση CUSTID (κοίτα τον φάκελο data/)."})
 
+    # Tracking για προσωρινούς/νέους συναλλασσόμενους (όπως Γ κατηγορία)
+    new_suppliers: Dict[str, Dict[str, Any]] = {}
+    next_custid = (max(client_map["by_id"]) + 1) if (client_map["by_id"] or set()) else 1
+
     rows: List[Dict[str, Any]] = []
 
     for rec in invoices:
@@ -627,7 +631,28 @@ def build_preview_rows_for_ui(
         else:
             custid_val = client_map["by_afm"].get(afm_norm)
             if custid_val is None:
-                issues.append({"code":"custid_missing","modal":True,"message":f"Δεν βρέθηκε CUSTID για ΑΦΜ {afm_norm} (AA={aa})."})
+                if afm_norm in new_suppliers:
+                    custid_val = new_suppliers[afm_norm]["custid"]
+                else:
+                    custid_val = next_custid
+                    counterpart_name = str(
+                        rec.get("Name_issuer")
+                        or rec.get("issuerName")
+                        or rec.get("issuer_name")
+                        or rec.get("Name")
+                        or rec.get("name")
+                        or f"Συναλλασσόμενος {afm_norm}"
+                    ).strip()
+                    new_suppliers[afm_norm] = {
+                        "custid": custid_val,
+                        "name": counterpart_name,
+                    }
+                    next_custid += 1
+                    issues.append({
+                        "code": "auto_created_supplier",
+                        "modal": False,
+                        "message": f"Δημιουργήθηκε αυτόματα νέος συναλλασσόμενος: CUSTID={custid_val}, AFM={afm_norm}, NAME={counterpart_name}",
+                    })
 
         # Supplier header account
         lcode_p = _account_header_P(settings_all, is_receipt)
@@ -757,7 +782,7 @@ def export_multiclient_strict(
         client_db=client_db,
         base_invoices_dir=base_invoices_dir,
         fiscal_year=fiscal_year)
-    nonfatal_codes = {"filtered_out_by_year"}
+    nonfatal_codes = {"filtered_out_by_year", "auto_created_supplier"}
     fatals = [i for i in preview["issues"] if str(i.get("code","")) not in nonfatal_codes]
     if fatals:
         return False, "", fatals
