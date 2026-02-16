@@ -3013,6 +3013,20 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     }
   }
 
+  function updateNameFieldState(ticket){
+    if(!nameInput) return;
+    const hasLockedName = !!(ticket && (ticket.id || ticket.display_name));
+    if(hasLockedName){
+      const who = String(ticket.display_name || nameInput.value || '').trim();
+      if(who) nameInput.value = who;
+      nameInput.disabled = true;
+      nameInput.style.display = 'none';
+    } else {
+      nameInput.disabled = false;
+      nameInput.style.display = '';
+    }
+  }
+
   function esc(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
   function formatStatus(m){
     if(m.sender!=='user') return '';
