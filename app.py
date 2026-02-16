@@ -1272,6 +1272,59 @@ def session_heartbeat():
     except Exception:
         # fail silently
         pass
+
+
+@app.before_request
+def enforce_active_session_claim():
+    """Enforce single active session per user and inactivity timeout (default 30')."""
+    try:
+        from flask_login import current_user, logout_user
+        if not getattr(current_user, 'is_authenticated', False):
+            return None
+
+        path = (request.path or "")
+        if path.startswith('/static/') or path in ('/auth/login', '/auth/api/logout', '/logout'):
+            return None
+
+        sid = session.get('session_id')
+        claimed_sid = getattr(current_user, 'current_session_id', None)
+
+        # Missing or mismatched claim means user logged in from another browser/device.
+        if not sid or not claimed_sid or str(sid) != str(claimed_sid):
+            try:
+                logout_user()
+            except Exception:
+                pass
+            for key in ('active_credential', '_remote_qr_owner', 'session_id', '_last_heartbeat_ts'):
+                session.pop(key, None)
+            if path.startswith('/api/'):
+                return jsonify({'ok': False, 'error': 'session_conflict', 'message': 'Εντοπίστηκε σύνδεση από άλλη συσκευή.'}), 401
+            return redirect(url_for('auth.login', session_conflict='1'))
+
+        timeout_seconds = int(current_app.config.get('SESSION_TIMEOUT_SECONDS', 900))
+        now = datetime.datetime.utcnow()
+        last_active = getattr(current_user, 'last_active_at', None)
+        if last_active and (now - last_active).total_seconds() > timeout_seconds:
+            try:
+                from models import db as _db
+                current_user.end_session(sid)
+                _db.session.commit()
+            except Exception:
+                try:
+                    _db.session.rollback()
+                except Exception:
+                    pass
+            try:
+                logout_user()
+            except Exception:
+                pass
+            for key in ('active_credential', '_remote_qr_owner', 'session_id', '_last_heartbeat_ts'):
+                session.pop(key, None)
+            if path.startswith('/api/'):
+                return jsonify({'ok': False, 'error': 'session_expired', 'message': 'Η συνεδρία έληξε λόγω αδράνειας.'}), 401
+            return redirect(url_for('auth.login', session_expired='1'))
+    except Exception:
+        return None
 # --- Logging (Europe/Athens timezone) ---
 import datetime
 import logging
@@ -10099,6 +10152,15 @@ def _support_discord_channel_id() -> str:
     ).strip()
 
 
+def _support_discord_log_event(event_text: str) -> bool:
+    """Send lightweight lifecycle logs (open/close/readable events) in support channel."""
+    headers = _support_discord_headers()
+    channel_id = _support_discord_channel_id()
+    if not headers or not channel_id:
+        return False
+    return _support_discord_send_message(channel_id, event_text, headers)
+
+
 def _support_discord_send_message(channel_id: str, content: str, headers: Dict[str, str], attachments: Optional[List[Dict[str, Any]]] = None) -> bool:
     if not channel_id:
         return False
@@ -10428,6 +10490,7 @@ def api_support_open_ticket():
 
     data = _support_load()
     ticket = _support_get_my_open_ticket(data, user_id)
+    was_new_ticket = False
     if not ticket:
         tid = int(data.get("next_id") or 1)
         data["next_id"] = tid + 1
@@ -10448,6 +10511,7 @@ def api_support_open_ticket():
             "last_user_read_at": None,
         }
         data["tickets"].append(ticket)
+        was_new_ticket = True
     else:
         ticket["display_name"] = display_name[:120]
 
@@ -10473,6 +10537,13 @@ def api_support_open_ticket():
         msg_obj["discord_delivered_at"] = _support_now_iso()
 
     _support_save(data)
+
+    if was_new_ticket:
+        who = ticket.get('display_name') or ticket.get('username') or 'user'
+        _support_discord_log_event(
+            f"🟢 Ticket #{ticket.get('id')} άνοιξε από {who} · VAT: {ticket.get('vat') or '-'} · Group: {ticket.get('group_name') or '-'}"
+        )
+
     return jsonify({"ok": True, "ticket": ticket, "discord_delivered": bool(delivered), "message": msg_obj})
 
 
@@ -10522,10 +10593,13 @@ def api_support_close_ticket():
         return jsonify({"ok": True, "closed": False, "message": "Δεν υπάρχει ανοικτό ticket."})
 
     thread_id = str(ticket.get("discord_thread_id") or "")
+    ticket_id = ticket.get("id")
+    who = ticket.get('display_name') or ticket.get('username') or 'user'
     _support_close_ticket_record(ticket, closed_by="user")
     _support_save(data)
     if thread_id:
         _support_discord_archive_thread(thread_id)
+    _support_discord_log_event(f"🔴 Ticket #{ticket_id} έκλεισε από χρήστη: {who}")
     return jsonify({"ok": True, "closed": True, "ticket": ticket})
 
 
@@ -10533,7 +10607,9 @@ def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, An
     tickets = data.get("tickets") or []
     candidates = []
 
-    for key in ("ticket_id", "ticket", "id"):
+    nested = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+    for key in ("ticket_id", "ticket", "id", "ticketId"):
         value = payload.get(key)
         if value is None:
             continue
@@ -10541,11 +10617,20 @@ def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, An
             candidates.append(("id", int(str(value).strip())))
         except Exception:
             pass
+        try:
+            nested_value = nested.get(key) if isinstance(nested, dict) else None
+            if nested_value is not None:
+                candidates.append(("id", int(str(nested_value).strip())))
+        except Exception:
+            pass
 
-    for key in ("discord_thread_id", "thread_id", "channel_id"):
+    for key in ("discord_thread_id", "thread_id", "channel_id", "threadId", "channelId"):
         value = str(payload.get(key) or "").strip()
         if value:
             candidates.append(("thread", value))
+        nested_val = str(nested.get(key) or "").strip() if isinstance(nested, dict) else ""
+        if nested_val:
+            candidates.append(("thread", nested_val))
 
     for match_type, value in candidates:
         for t in tickets:
@@ -10606,6 +10691,10 @@ def api_support_discord_reply():
         ttl = max(5, min(45, int(payload.get("ttl_sec") or 15)))
         expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=ttl)
         ticket["support_typing_until"] = expires.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for m in (data.get("messages") or []):
+            if int(m.get("ticket_id") or 0) == int(ticket.get("id") or 0) and m.get("sender") == "user" and not m.get("read_by_support_at"):
+                m["read_by_support_at"] = now
+        ticket["last_support_read_at"] = now
         _support_save(data)
         return jsonify({"ok": True, "typing": True})
 
@@ -10652,6 +10741,7 @@ def api_support_discord_reply():
         _support_save(data)
         if thread_id:
             _support_discord_archive_thread(thread_id)
+        _support_discord_log_event(f"🔴 Ticket #{ticket.get('id')} έκλεισε από admin/support")
         return jsonify({"ok": True, "closed": True})
 
     if action == "reply" and not content and not attachments:

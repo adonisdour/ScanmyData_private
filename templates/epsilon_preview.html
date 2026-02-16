@@ -339,7 +339,7 @@ function updateTotalsAndExportState(api){
   document.getElementById('tRows').textContent = data.length;
 
   const btn = document.getElementById('exportBridgeBtn');
-  const allowPartnersFlow = hasCustIdMissing();                    // υπάρχει custid_missing;
+  const allowPartnersFlow = hasCustIdMissing(); // επιτρέπεται και για τιμολόγια
   const okStrict           = allRowsValid(api);                    // όλα οκ (παραδοσιακά)
   const okExceptCust       = allRowsValidExceptCust(api);          // τα πάντα οκ εκτός από CUSTID
 
