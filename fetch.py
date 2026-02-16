@@ -7,6 +7,7 @@ from dateutil.relativedelta import relativedelta
 from dateutil.parser import parse
 from typing import Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 
 try:
     from lxml import etree as ET
@@ -194,6 +195,90 @@ def _fetch_transmitted_docs(mark: str, date_from: str, date_to: str, aade_user: 
                     transmitted_marks.add(text)
     return transmitted_marks
 
+
+def _fetch_e3_info(mark: str, date_from: str, date_to: str, aade_user: str, aade_key: str, debug: bool = False) -> dict:
+    """Fetch RequestE3Info (paginated) and derive per-mark classification using E3 columns.
+
+    Rule: If E3 column 'κατηγορία' == 'ΜΗ' AND description column contains
+    'ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ ΕΞΟΔΑ' then treat mark as 'αχαρακτηριστο', otherwise 'χαρακτηρισμενο'.
+    Returns mapping: mark -> classification ('αχαρακτηριστο'|'χαρακτηρισμενο').
+    """
+    URL_REQUEST_E3 = "https://mydatapi.aade.gr/myDATA/RequestE3Info"
+    headers = {"aade-user-id": aade_user, "Ocp-Apim-Subscription-Key": aade_key}
+
+    date_to_docs = datetime.strptime(date_to, "%d/%m/%Y")
+    date_to_trans = date_to_docs + relativedelta(months=3)
+    DATE_TO_TRANS = date_to_trans.strftime("%d/%m/%Y")
+    params = {"mark": mark, "dateFrom": date_from, "dateTo": DATE_TO_TRANS}
+
+    mark_class = {}
+
+    ns = {'ns': 'http://www.aade.gr/myDATA/invoice/v1.0'}
+
+    while True:
+        resp = requests.get(URL_REQUEST_E3, params=params, headers=headers)
+        if debug: print(f"[RequestE3Info] Status: {resp.status_code}")
+        if resp.status_code != 200:
+            # nothing to parse on error; return what we have
+            if debug: print(f"[RequestE3Info] HTTP {resp.status_code}")
+            return mark_class
+
+        if resp.content:
+            try:
+                root = ET.fromstring(resp.content)
+            except Exception:
+                return mark_class
+
+            # Prefer structured parsing: each <E3Info> contains V_Mark and V_Class_Category
+            for e3 in root.findall('.//ns:E3Info', ns) or root.findall('.//E3Info'):
+                try:
+                    vm = e3.findtext('ns:V_Mark', default=None, namespaces=ns) or e3.findtext('V_Mark') or ""
+                except Exception:
+                    vm = e3.findtext('V_Mark') if e3.find('V_Mark') is not None else ""
+                vm = _safe_strip(vm)
+
+                try:
+                    vcat = e3.findtext('ns:V_Class_Category', default=None, namespaces=ns) or e3.findtext('V_Class_Category') or ""
+                except Exception:
+                    vcat = e3.findtext('V_Class_Category') if e3.find('V_Class_Category') is not None else ""
+                vcat = _safe_strip(vcat).upper()
+
+                if not vm:
+                    # fallback: search for a 15-digit mark anywhere inside this E3Info
+                    text_blob = ''.join([_safe_strip(x.text) for x in e3.iter() if x.text])
+                    m = re.search(r"(\d{15})", text_blob)
+                    vm = m.group(1) if m else ""
+
+                if not vm:
+                    continue
+
+                # default classification
+                classification = "χαρακτηρισμενο"
+                if vcat.startswith("ΜΗ") and "ΧΑΡΑΚΤΗΡΙΣΜΕΝΑ" in vcat:
+                    classification = "αχαρακτηριστο"
+
+                # If multiple E3Info rows for same mark, prefer any αχαρακτηριστο
+                prev = mark_class.get(vm)
+                if prev != "αχαρακτηριστο":
+                    mark_class[vm] = classification
+
+        # pagination: find nextPartitionToken by local name irrespective of namespace
+        next_token = None
+        for elem in root.iter():
+            tag = elem.tag
+            lname = tag.split('}', 1)[-1] if '}' in tag else tag
+            if lname == 'nextPartitionToken' and elem.text:
+                next_token = elem.text.strip()
+                break
+
+        if next_token:
+            params["nextPartitionToken"] = next_token
+            if debug: print("[RequestE3Info] NextPartitionToken:", params["nextPartitionToken"])
+            continue
+        break
+
+    return mark_class
+
 def request_docs(
     date_from: str,
     date_to: str,
@@ -210,16 +295,22 @@ def request_docs(
     Also saves Excel with numeric columns for Καθαρή Αξία, ΦΠΑ, Σύνολο
     """
     # --- Step 1 & 2: Parallel fetch ---
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         docs_future = executor.submit(_fetch_request_docs, mark, date_from, date_to, aade_user, aade_key, debug)
         trans_future = executor.submit(_fetch_transmitted_docs, mark, date_from, date_to, aade_user, aade_key)
-        
+        e3_future = executor.submit(_fetch_e3_info, mark, date_from, date_to, aade_user, aade_key, debug)
+
         all_rows = docs_future.result()
         transmitted_marks = trans_future.result()
+        e3_map = e3_future.result()
 
     # --- Step 3: Classification update ---
+    # Apply E3-based classification first (authoritative per user rule)
     for row in all_rows:
-        if row["mark"].strip() in transmitted_marks:
+        m = row["mark"].strip()
+        if m in e3_map:
+            row["classification"] = e3_map.get(m, row["classification"])
+        elif m in transmitted_marks:
             row["classification"] = "χαρακτηρισμενο"
 
     # --- Step 4: Summary aggregation ---
