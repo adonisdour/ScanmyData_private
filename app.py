@@ -10356,12 +10356,18 @@ def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attac
 
 
 def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str, Any], force: bool = False) -> bool:
-    """Pull latest human replies from Discord thread into local ticket storage."""
+    """Pull latest human replies from Discord thread into local ticket storage.
+
+    Additionally, query thread metadata and if the Discord thread is archived/locked
+    propagate that state locally (mark ticket closed) so the UI reflects closures
+    performed on the Discord side even when no new reply is posted.
+    """
     thread_id = str(ticket.get("discord_thread_id") or "").strip()
     headers = _support_discord_headers()
     if not thread_id or not headers:
         return False
 
+    # lightweight rate-limiting for syncs
     if not force:
         last_sync = str(ticket.get("last_discord_sync_at") or "")
         if last_sync:
@@ -10371,6 +10377,25 @@ def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str
                     return False
             except Exception:
                 pass
+
+    # First: check thread metadata to detect archived/locked state (mirror Discord-side close)
+    try:
+        meta_r = requests.get(f"https://discord.com/api/v10/channels/{thread_id}", headers=headers, timeout=8)
+        if meta_r.ok:
+            meta = meta_r.json() or {}
+            # thread objects include an "archived" flag for threads
+            if bool(meta.get("archived") or meta.get("locked")):
+                if str(ticket.get("status") or "").lower() != "closed":
+                    _support_close_ticket_record(ticket, closed_by="admin")
+                    ticket["updated_at"] = _support_now_iso()
+                    _support_save(data)
+                    _support_discord_log_event(f"🔴 Ticket #{ticket.get('id')} έκλεισε (detected archived thread)")
+                    # mark last sync so UI will pick this up immediately
+                    ticket["last_discord_sync_at"] = _support_now_iso()
+                    return True
+    except Exception:
+        # metadata check is best-effort; continue to attempt message sync
+        current_app.logger.debug("Discord thread meta check failed", exc_info=True)
 
     existing = {
         str(m.get("discord_message_id") or "")
@@ -10661,7 +10686,37 @@ def api_support_my_ticket():
     if changed:
         _support_save(data)
 
-    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:], "presence": {"support_typing": support_typing}})
+    # Also include archived tickets metadata so the client can show the archive
+    archived_tickets = []
+    try:
+        user_tickets = [t for t in (data.get("tickets") or []) if str(t.get("user_id") or "") == user_id]
+        user_tickets.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
+        for t in user_tickets:
+            if str(t.get("status") or "").lower() != "closed":
+                continue
+            archived_tickets.append({
+                "id": t.get("id"),
+                "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
+                "closed_at": t.get("closed_at"),
+                "closed_by": t.get("closed_by"),
+            })
+            if len(archived_tickets) >= 20:
+                break
+    except Exception:
+        archived_tickets = []
+
+    latest_closed = archived_tickets[0] if archived_tickets else None
+    closed_notice = bool(latest_closed and str(latest_closed.get("closed_by") or "") in ("admin", "support", "admin/support"))
+
+    return jsonify({
+        "ok": True,
+        "ticket": ticket,
+        "messages": msgs[-100:],
+        "presence": {"support_typing": support_typing},
+        "archived_tickets": archived_tickets,
+        "closed_notice": closed_notice,
+        "latest_closed_ticket": latest_closed,
+    })
 
 
 @app.post("/api/support/ticket/close")

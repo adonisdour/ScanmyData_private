@@ -55,7 +55,7 @@
           </select>
         </div>
         <div class="flex flex-col">
-          <label for="vat_input" class="text-sm font-medium text-gray-700 mb-2">ΑΦΜ Πελάτη (προαιρετικό)</label>
+          <label for="vat_input" class="text-sm font-medium text-gray-700 mb-2">ΑΦΜ Πελάτη </label>
           <input id="vat_input" name="vat_number" type="text" value="{{ request.form.get('vat_number','') }}" placeholder="π.χ. 802576637" class="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-300">
         </div>
         <div class="flex items-end justify-center">
@@ -197,11 +197,26 @@ document.addEventListener("DOMContentLoaded", function() {
   async function lockCredentialToActive() {
     // Αν υπάρχει ήδη επιλεγμένο credential, κλείδωσέ το
     const currentValue = credentialSelect.value;
+    const vatInput = document.getElementById('vat_input');
     if (currentValue) {
       credentialSelect.disabled = true;
       credentialSelect.setAttribute('title', 'Κλειδωμένο στον ενεργό πελάτη');
       credentialSelect.style.cursor = 'not-allowed';
       credentialSelect.style.opacity = '0.7';
+      // also lock VAT input to match credential locking
+      if (vatInput) {
+        vatInput.disabled = true;
+        vatInput.setAttribute('title', 'Κλειδωμένο στον ενεργό πελάτη');
+        vatInput.style.cursor = 'not-allowed';
+        vatInput.style.opacity = '0.7';
+      }
+    } else {
+      if (vatInput) {
+        vatInput.disabled = false;
+        vatInput.removeAttribute('title');
+        vatInput.style.cursor = '';
+        vatInput.style.opacity = '';
+      }
     }
   }
   
@@ -254,15 +269,29 @@ document.addEventListener("DOMContentLoaded", function() {
   
   // Αποτρέψου αλλαγή του credential αν είναι κλειδωμένο
   credentialSelect.addEventListener('change', (e) => {
+    const vatInput = document.getElementById('vat_input');
     if (credentialSelect.disabled) {
       e.preventDefault();
       credentialSelect.value = credentialSelect.getAttribute('data-original-value') || credentialSelect.value;
+      // keep VAT input locked when credential is locked
+      if (vatInput) {
+        vatInput.disabled = true;
+        vatInput.setAttribute('title', 'Κλειδωμένο στον ενεργό πελάτη');
+        vatInput.style.cursor = 'not-allowed';
+        vatInput.style.opacity = '0.7';
+      }
     } else {
       // when credential changes, update VAT input from option and reload last fetch
       const opt = credentialSelect.options[credentialSelect.selectedIndex];
       if (opt && opt.dataset && opt.dataset.vat) {
-        const vatInput = document.getElementById('vat_input');
         if (vatInput && !vatInput.value) vatInput.value = opt.dataset.vat || '';
+      }
+      // ensure VAT input is editable when credential is not locked
+      if (vatInput) {
+        vatInput.disabled = false;
+        vatInput.removeAttribute('title');
+        vatInput.style.cursor = '';
+        vatInput.style.opacity = '';
       }
       loadLastFetch();
     }
