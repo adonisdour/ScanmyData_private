@@ -191,6 +191,7 @@
             <div class="flex justify-end gap-2">
                 <form method="POST" action="{{ url_for('save_summary') }}" id="saveSummaryForm">
                     <input type="hidden" name="summary_json" id="summaryJsonInput" value='{{ modal_summary | tojson | safe if modal_summary else "{}" }}'>
+                    <input type="hidden" id="summaryDataInput" name="summary_data" value='{}'>
                     <button type="submit" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση στο Cache</button>
                     <input type="hidden" id="scrapeUrlField" name="scrape_url" value="">
                     <input type="hidden" id="scrapeCategoryField" name="scrape_category" value="">
@@ -1314,6 +1315,15 @@ try {
     const backendMtype = await loadReceiptMtypeFromBackend();
     const currentMtype = backendMtype || loadReceiptMtype();
     populateMtypeDropdown(select, currentMtype);
+
+    // Ensure user interactions on this select update the hidden summary inputs
+    try {
+      if (!select.__rc_mtype_bound) {
+        select.addEventListener('change', function(){ try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_){} }, true);
+        select.addEventListener('input', function(){ try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_){} }, true);
+        select.__rc_mtype_bound = true;
+      }
+    } catch(_) {}
     
     modal.style.display = 'flex';
     document.documentElement.style.overflow = 'hidden';
@@ -1369,6 +1379,14 @@ try {
           if(typeof showFlash === 'function'){
             showFlash('Αποθηκεύτηκε ο κωδικός κίνησης για αποδείξεις: ' + (mtype || '(κενό)'), 'success', 3000);
           }
+          // Mirror saved receipt MTYPE into any visible summary selects/hidden inputs
+          try {
+            const compSel = document.getElementById('receiptMtypeSelectSummary');
+            if (compSel) {
+              compSel.value = mtype;
+            }
+            if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom();
+          } catch(_) {}
         } else {
           throw new Error('Failed to save receipt MTYPE to backend');
         }
@@ -4326,6 +4344,16 @@ function prefillSummaryModal(){
         }
       }
     } catch(e) { /* ignore */ }
+
+    // Ensure invoice/receipt MTYPE dropdowns are updated when modal is prefilled
+    try {
+      if (typeof setupInvoiceMtype === 'function') {
+        try { setupInvoiceMtype(data); } catch(_) { console.warn('setupInvoiceMtype failed'); }
+      }
+      if (typeof setupReceiptMtype === 'function') {
+        try { setupReceiptMtype(data); } catch(_) { console.warn('setupReceiptMtype failed'); }
+      }
+    } catch(e) { /* ignore */ }
   } catch(err){
     console.warn('prefillSummaryModal error', err);
   }
@@ -4397,6 +4425,15 @@ function prefillSummaryModal(){
       }
 
       input.value = JSON.stringify(data);
+      // Mirror legacy -> component input so both hidden inputs stay in sync. This
+      // prevents cases where the template-based handlers update only the legacy
+      // `summaryJsonInput` while `summaryDataInput` remains empty (causing
+      // component-state merges to lose user selections).
+      try {
+        const compInput = document.getElementById('summaryDataInput');
+        if (compInput) compInput.value = JSON.stringify(data);
+      } catch(_) {}
+
     } catch(err){
       console.warn('updateSummaryFromDom error', err);
     }
@@ -4478,6 +4515,26 @@ function prefillSummaryModal(){
   if(saveForm){
     saveForm.addEventListener('submit', function(e){
       try {
+        // If the newer SummaryModal is open it keeps a parallel hidden input
+        // (`summaryDataInput`). Merge any MTYPE/invoice/receipt values from that
+        // input into the legacy `summaryJsonInput` so server-side saves cannot
+        // miss the user's selection.
+        try {
+          const comp = (function(){ try { return JSON.parse(document.getElementById('summaryDataInput')?.value || '{}'); } catch(_) { return {}; } })();
+          const legacyEl = document.getElementById('summaryJsonInput');
+          if (legacyEl && comp && Object.keys(comp).length > 0) {
+            const legacyObj = (function(){ try { return JSON.parse(legacyEl.value || '{}'); } catch(_) { return {}; } })();
+            // copy relevant mtype fields (support camelCase from component)
+            if (comp.mtype) legacyObj.mtype = comp.mtype;
+            if (comp.receipt_mtype) legacyObj.receipt_mtype = comp.receipt_mtype;
+            if (comp.invoice_mtype) legacyObj.invoice_mtype = comp.invoice_mtype;
+            if (comp.receiptMtype) legacyObj.receipt_mtype = comp.receiptMtype;
+            if (comp.invoiceMtype) legacyObj.invoice_mtype = comp.invoiceMtype;
+            if (comp.lines) legacyObj.lines = comp.lines;
+            legacyEl.value = JSON.stringify(legacyObj);
+          }
+        } catch(err) { console.warn('merge summaryDataInput -> summaryJsonInput failed', err); }
+
         updateSummaryFromDom();
         // Ensure repeat_enabled is posted if repeat is on
         const repeatSwitch = document.getElementById('repeatEntrySwitch');
@@ -5475,6 +5532,23 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
   }));
 
   try {
+    // Merge live component state (`summaryDataInput`) so MTYPE selections from
+    // the modal/component are not lost when we POST JSON directly.
+    try {
+      const compEl = document.getElementById('summaryDataInput');
+      if (compEl && compEl.value && String(compEl.value).trim() !== '') {
+        const comp = JSON.parse(compEl.value || '{}') || {};
+        if (comp && typeof comp === 'object') {
+          if (comp.mtype) summary.mtype = comp.mtype;
+          if (comp.receipt_mtype) summary.receipt_mtype = comp.receipt_mtype;
+          if (comp.invoice_mtype) summary.invoice_mtype = comp.invoice_mtype;
+          if (comp.receiptMtype) summary.receipt_mtype = comp.receiptMtype;
+          if (comp.invoiceMtype) summary.invoice_mtype = comp.invoiceMtype;
+          // prefer component lines if present
+          if (comp.lines) summary.lines = comp.lines;
+        }
+      }
+    } catch (e) { console.warn('merge summaryDataInput -> summary failed', e); }
     const res = await fetchWithOverlay('/save_summary', {
       method: 'POST',
       credentials: 'same-origin',
@@ -6229,6 +6303,11 @@ function readMappingFromUI(){
           console.warn('[RC-DEBUG] failed parsing summaryJsonInput JSON', err, v);
           return;
         }
+        // Mirror legacy hidden input into component hidden input so both remain in sync
+        try {
+          const comp = document.getElementById('summaryDataInput');
+          if (comp) comp.value = JSON.stringify(obj || {});
+        } catch(_) {}
         console.log('[RC-DEBUG] populate modal from summary JSON', obj);
 
         safeText(markEl, obj.mark || obj.MARK || (obj.raw && obj.raw.MARK) || '');
@@ -6252,6 +6331,53 @@ function readMappingFromUI(){
           } catch(e){}
         }
         renderLines(lines);
+
+        // Defensive: ensure receipt-level MTYPE dropdown is populated and shown when summary indicates a receipt
+        try {
+          const parsed = obj || {};
+          const looksLikeReceipt = parsed && (parsed.is_receipt === true || /αποδει/i.test(String(parsed.type_name || parsed.type || parsed.category || '')));
+          const movementTypes = (window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options)) ? window.G_CATEGORY_DATA.mtype_options : [];
+
+          if (looksLikeReceipt && movementTypes.length) {
+            // 1) call existing setupReceiptMtype (if present)
+            if (typeof setupReceiptMtype === 'function') {
+              try { setupReceiptMtype(parsed); } catch(err){ console.warn('setupReceiptMtype (defensive) failed', err); }
+            }
+
+            // 2) force-populate ALL matching selects (covers duplicate modals / component vs template)
+            try {
+              const selects = Array.from(document.querySelectorAll('#receiptMtypeSelectSummary'));
+              const savedVal = parsed.receipt_mtype || parsed.mtype || (function(){ try { return localStorage.getItem('saved_receipt_mtype') || ''; } catch(e){ return ''; } })() || '';
+
+              selects.forEach(sel => {
+                try {
+                  // populate only if empty or contains only placeholder
+                  if (!sel || (sel.options && sel.options.length > 1)) return;
+                  sel.innerHTML = '<option value="">-- επίλεξε είδος κίνησης --</option>';
+                  movementTypes.forEach(mt => {
+                    const o = document.createElement('option');
+                    o.value = mt.value || mt.key || '';
+                    o.textContent = (mt.label || mt.value || String(o.value)) + ' (' + (mt.value || mt.key || '') + ')';
+                    sel.appendChild(o);
+                  });
+                  if (savedVal) sel.value = savedVal;
+
+                  // ensure its container is visible
+                  const container = sel.closest && sel.closest('#receiptMtypeContainerSummary') || document.getElementById('receiptMtypeContainerSummary');
+                  if (container) container.style.display = 'block';
+                  // Defensive: ensure changes on this select always update the hidden inputs
+                  try {
+                    if (!sel.__rc_mtype_bound) {
+                      sel.addEventListener('change', function(){ try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_){} }, true);
+                      sel.addEventListener('input', function(){ try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_){} }, true);
+                      sel.__rc_mtype_bound = true;
+                    }
+                  } catch(_) {}
+                } catch(e) { console.warn('force-populate receipt select failed', e); }
+              });
+            } catch(e) { /* silent */ }
+          }
+        } catch(e) { /* silent */ }
 
         try {
           const waitApi = window.WaitOverlay;
@@ -8247,3 +8373,114 @@ document.addEventListener('click', function(e){
 
 <!-- === Fast Flow (seamless AJAX mode - auto-enabled with repeat mode) === -->
 <script src="{{ url_for('static', filename='receipts_fast_flow.js') }}"></script>
+
+<script>
+// Final safety merge: ensure component `summaryDataInput` MTYPEs are copied
+// into legacy `summaryJsonInput` (or create `summary_json` hidden input).
+;(function(){
+  try {
+    const form = document.getElementById('saveSummaryForm');
+    if (!form) return;
+    form.addEventListener('submit', function(evt){
+      try {
+        // parse existing legacy JSON (if any)
+        const legacy = document.getElementById('summaryJsonInput');
+        let parsed = {};
+        if (legacy) {
+          try { parsed = JSON.parse(legacy.value || '{}') || {}; } catch(_) { parsed = {}; }
+        }
+
+        // 1) Merge from component hidden input if present
+        try {
+          const compEl = document.getElementById('summaryDataInput');
+          if (compEl && compEl.value && String(compEl.value).trim() !== '') {
+            const comp = JSON.parse(compEl.value || '{}') || {};
+            if (comp && typeof comp === 'object') {
+              if (comp.mtype) parsed.mtype = comp.mtype;
+              if (comp.receipt_mtype) parsed.receipt_mtype = comp.receipt_mtype;
+              if (comp.invoice_mtype) parsed.invoice_mtype = comp.invoice_mtype;
+              if (comp.receiptMtype) parsed.receipt_mtype = comp.receiptMtype;
+              if (comp.invoiceMtype) parsed.invoice_mtype = comp.invoiceMtype;
+              if (comp.lines && (!Array.isArray(parsed.lines) || parsed.lines.length === 0)) parsed.lines = comp.lines;
+            }
+          }
+        } catch (_) { /* ignore component-parse errors */ }
+
+        // 2) REDUNDANCY — always read visible MTYPE selects directly from DOM
+        try {
+          const invoiceSel = document.getElementById('invoiceMtypeSelect');
+          const receiptSel = document.getElementById('receiptMtypeSelectSummary');
+          if (invoiceSel && invoiceSel.value) {
+            parsed.mtype = invoiceSel.value;
+            parsed.invoice_mtype = invoiceSel.value;
+          }
+          if (receiptSel && receiptSel.value) {
+            parsed.mtype = receiptSel.value;
+            parsed.receipt_mtype = receiptSel.value;
+          }
+
+          // also merge per-line MTYPEs if present (select.line-mtype[data-line-id])
+          const lineMtypes = Array.from(document.querySelectorAll('select.line-mtype[data-line-id]'));
+          if (lineMtypes.length) {
+            parsed.lines = parsed.lines || [];
+            lineMtypes.forEach(sel => {
+              const lid = sel.dataset.lineId || sel.getAttribute('data-line-id') || '';
+              if (!lid) return;
+              const existing = (parsed.lines || []).find(l => String(l.id) === String(lid));
+              if (existing) existing.mtype = sel.value || existing.mtype || '';
+              else parsed.lines.push({ id: lid, mtype: sel.value || '' });
+            });
+          }
+        } catch (e) { console.warn('final summary select-merge failed', e); }
+
+        // 3) write back to legacy input (or create it)
+        if (legacy) {
+          legacy.value = JSON.stringify(parsed);
+        } else {
+          const inp = document.createElement('input');
+          inp.type = 'hidden'; inp.name = 'summary_json'; inp.id = 'summaryJsonInput';
+          inp.value = JSON.stringify(parsed);
+          form.appendChild(inp);
+        }
+      } catch (e) {
+        console.warn('final summary merge failed', e);
+      }
+    }, true); // capture-phase
+  } catch (e) {
+    console.warn('install_final_summary_merge failed', e);
+  }
+})();
+</script>
+
+<script>
+// TEMP DEBUG: log MTYPE values when user changes selects or submits the form
+;(function(){
+  try {
+    const logState = (ctx) => {
+      try {
+        const legacy = (function(){ try { return JSON.parse(document.getElementById('summaryJsonInput')?.value || '{}'); } catch(_) { return document.getElementById('summaryJsonInput')?.value || null; } })();
+        const comp = (function(){ try { return JSON.parse(document.getElementById('summaryDataInput')?.value || '{}'); } catch(_) { return document.getElementById('summaryDataInput')?.value || null; } })();
+        console.info('[RC-DEBUG]', ctx, 'legacy.mtype=', legacy && (legacy.mtype||legacy.receipt_mtype||legacy.invoice_mtype), 'comp.mtype=', comp && (comp.mtype||comp.receipt_mtype||comp.invoice_mtype));
+      } catch(e){ console.warn('[RC-DEBUG] logState error', e); }
+    };
+
+    document.addEventListener('change', function(e){
+      const sel = e.target;
+      if (!sel) return;
+      if (sel.id === 'receiptMtypeSelectSummary' || sel.id === 'invoiceMtypeSelect' || sel.name === 'receipt_mtype' || sel.name === 'invoice_mtype' || (sel.tagName === 'SELECT' && sel.classList && sel.classList.contains('line-mtype'))) {
+        // Ensure visible MTYPE selects immediately update both hidden inputs
+        try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_) {}
+        setTimeout(()=> logState('select-change:'+ (sel.id||sel.name)), 0);
+      }
+    }, true);
+
+    const form = document.getElementById('saveSummaryForm');
+    if (form) {
+      form.addEventListener('submit', function(e){
+        logState('form-submit-before');
+        setTimeout(()=> logState('form-submit-after-async'), 200);
+      }, true);
+    }
+  } catch(e) { console.warn('RC-DEBUG init failed', e); }
+})();
+</script>

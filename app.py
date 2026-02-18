@@ -8036,6 +8036,7 @@ def search():
                                         "totalValue": fmt(total_value),
                                         "type": "Απόδειξη",
                                         "type_name": "Απόδειξη",
+                                        "docType": "receipt",
                                         "lines": invoice_lines,
                                         "is_receipt": True,
                                         "χαρακτηρισμός": "αποδειξακια"
@@ -8167,6 +8168,7 @@ def search():
                                         "type": type_mapped,
                                         "type_code": inv_type,
                                         "type_name": type_mapped,
+                                        "docType": "invoice",
                                         "lines": invoice_lines,
                                         "is_receipt": False
                                     }
@@ -9186,9 +9188,26 @@ def save_summary():
     # ---------------- parse payload ----------------
     try:
         log.info("save_summary: start request from %s", request.remote_addr)
+        try:
+            # Debug: log incoming form keys and a snippet of raw body to diagnose missing mtype
+            form_keys = list(request.form.keys()) if request.form else []
+            log.debug("save_summary: request.form keys=%s, content-type=%s", form_keys, request.headers.get('Content-Type'))
+            try:
+                raw_snip = request.get_data(as_text=True) or ''
+                if raw_snip:
+                    log.debug("save_summary: raw request data (snippet, 2000 chars): %s", raw_snip[:2000])
+            except Exception:
+                log.debug("save_summary: could not read raw request data")
+        except Exception:
+            log.exception("save_summary: debug logging failed")
         raw = None
+        # Prefer legacy form field `summary_json`, but also accept component `summary_data`
         if request.form and request.form.get("summary_json"):
             raw = request.form.get("summary_json")
+            summary = None
+        elif request.form and request.form.get("summary_data"):
+            # component sometimes posts into `summary_data` (SummaryModal hidden input)
+            raw = request.form.get("summary_data")
             summary = None
         else:
             if request.is_json:
@@ -9213,12 +9232,33 @@ def save_summary():
                 summary["AFM"]  = request.form.get("vat") or request.form.get("AFM") or ""
             if request.form.get("issueDate"):
                 summary["issueDate"] = request.form.get("issueDate")
+            # server-side fallback: if form included individual mtype fields, copy them
+            try:
+                # possible form keys: mtype, receipt_mtype, invoice_mtype or camelCase variants
+                form_m = request.form.get('mtype') or request.form.get('receipt_mtype') or request.form.get('invoice_mtype')
+                form_m = form_m or request.form.get('receiptMtype') or request.form.get('invoiceMtype') or request.form.get('mType')
+                if form_m:
+                    summary['mtype'] = form_m
+            except Exception:
+                pass
     except Exception:
         log.exception("save_summary: cannot parse payload")
         flash("Μη έγκυρα δεδομένα περίληψης", "error")
         return redirect(url_for("search"))
 
-    log.info("save_summary: received summary with keys: %s, mtype: %s", list(summary.keys()), summary.get("mtype", "NO MTYPE"))
+    # Normalize possible camelCase keys produced by the component UI so the
+    # server consistently finds `receipt_mtype` / `invoice_mtype` / `mtype`.
+    try:
+        if summary.get('receiptMtype') and not summary.get('receipt_mtype'):
+            summary['receipt_mtype'] = summary.get('receiptMtype')
+        if summary.get('invoiceMtype') and not summary.get('invoice_mtype'):
+            summary['invoice_mtype'] = summary.get('invoiceMtype')
+        if summary.get('mType') and not summary.get('mtype'):
+            summary['mtype'] = summary.get('mType')
+    except Exception:
+        pass
+
+    log.info("save_summary: received summary with keys: %s, mtype: %s, receipt_mtype: %s, invoice_mtype: %s", list(summary.keys()), summary.get("mtype", "NO MTYPE"), summary.get('receipt_mtype',''), summary.get('invoice_mtype',''))
 
     # ---------------- active VAT ----------------
     active = get_active_credential_from_session()
@@ -9280,6 +9320,16 @@ def save_summary():
     # ---------------- HYDRATE & repeat-entry ----------------
     summary = _hydrate_summary_for_excel(summary, vat=str(vat or ""))
     is_receipt = _is_receipt(summary)
+
+    # If the client sent `receipt_mtype` or `invoice_mtype` explicitly, prefer that
+    # over applying repeat-entry fallbacks later. This guards against clients
+    # (fast-flow, components) that may populate the legacy hidden input instead
+    # of the generic `mtype` field.
+    if not summary.get('mtype'):
+        if summary.get('receipt_mtype'):
+            summary['mtype'] = summary.get('receipt_mtype')
+        elif summary.get('invoice_mtype'):
+            summary['mtype'] = summary.get('invoice_mtype')
 
     series_cred = _resolve_series_credential(summary, vat=vat)
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)

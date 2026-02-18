@@ -245,8 +245,34 @@ export function readCategoriesFromUI(container) {
  */
 export function persistSummaryToInput(inputId, summary) {
   const input = document.getElementById(inputId);
+  const obj = summary || {};
   if (input) {
-    input.value = JSON.stringify(summary || {});
+    input.value = JSON.stringify(obj);
+  }
+
+  // Mirror important mtype fields into the legacy `summaryJsonInput` so any
+  // server-side flow that reads only the legacy hidden input still receives
+  // the user's selection (defensive, idempotent merge).
+  try {
+    const legacy = document.getElementById('summaryJsonInput');
+    if (legacy) {
+      let legacyObj = {};
+      try { legacyObj = JSON.parse(legacy.value || '{}') || {}; } catch(_) { legacyObj = {}; }
+      // copy mtype variants from component object
+      if (obj.mtype) legacyObj.mtype = obj.mtype;
+      if (obj.receipt_mtype) legacyObj.receipt_mtype = obj.receipt_mtype;
+      if (obj.invoice_mtype) legacyObj.invoice_mtype = obj.invoice_mtype;
+      if (obj.receiptMtype) legacyObj.receipt_mtype = obj.receiptMtype;
+      if (obj.invoiceMtype) legacyObj.invoice_mtype = obj.invoiceMtype;
+      // copy lines if component has them and legacy doesn't
+      if (Array.isArray(obj.lines) && (!Array.isArray(legacyObj.lines) || legacyObj.lines.length === 0)) {
+        legacyObj.lines = obj.lines;
+      }
+      legacy.value = JSON.stringify(legacyObj);
+    }
+  } catch (err) {
+    // best-effort only
+    try { console.warn('persistSummaryToInput: mirror to legacy failed', err); } catch(_) {}
   }
 }
 

@@ -87,7 +87,39 @@
     ssSet(k,'1');
     trying=true;
 
-    s=normalizeReceipt(s);
+    s = normalizeReceipt(s);
+
+    // Merge live component state (`summaryDataInput`) so MTYPE set in the component is not lost
+    try {
+      var compEl = document.getElementById('summaryDataInput');
+      if (compEl && compEl.value && compEl.value !== '{}' ) {
+        try {
+          var comp = JSON.parse(compEl.value || '{}') || {};
+          if (comp && typeof comp === 'object') {
+            if (comp.mtype) s.mtype = comp.mtype;
+            if (comp.receipt_mtype) s.receipt_mtype = comp.receipt_mtype;
+            if (comp.invoice_mtype) s.invoice_mtype = comp.invoice_mtype;
+            if (comp.receiptMtype) s.receipt_mtype = comp.receiptMtype;
+            if (comp.invoiceMtype) s.invoice_mtype = comp.invoiceMtype;
+            if (comp.lines) s.lines = comp.lines;
+          }
+        } catch(e){ /* ignore parse errors */ }
+      }
+
+      // If still missing, try localStorage / cached repeat_entry as a fallback —
+      // this covers the UX where the user saved the "Κωδικός Κίνησης Αποδείξεων"
+      // but the modal/component state wasn't mirrored into #summaryDataInput yet.
+      if ((!s.mtype || s.mtype === '') && (!s.receipt_mtype || s.receipt_mtype === '')) {
+        try {
+          var saved = (window.__cachedReceiptMtype || null) || (localStorage && localStorage.getItem && localStorage.getItem('receipt_mtype')) || null;
+          if (saved) {
+            s.mtype = s.mtype || saved;
+            s.receipt_mtype = s.receipt_mtype || saved;
+          }
+        } catch(_) { /* ignore localStorage */ }
+      }
+    } catch(e) { /* ignore */ }
+
     if(submitViaForm(s)){
       setTimeout(function(){ afterSubmit(mark); }, 50);
     }else{

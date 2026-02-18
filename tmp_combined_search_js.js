@@ -3819,6 +3819,24 @@ function prefillSummaryModal(){
   // helper: ασφαλής update του hidden json από το DOM
   function updateSummaryFromDom(){
     try {
+      // Ensure any component-local summary state is merged into the legacy hidden input
+      try {
+        const compEl = document.getElementById('summaryDataInput');
+        const legacyEl = document.getElementById('summaryJsonInput');
+        if (compEl && compEl.value && legacyEl) {
+          let comp = {};
+          let leg = {};
+          try { comp = JSON.parse(compEl.value || '{}'); } catch(_) { comp = {}; }
+          try { leg = JSON.parse(legacyEl.value || '{}'); } catch(_) { leg = {}; }
+          // copy canonical MTYPE fields if present
+          ['mtype','receipt_mtype','invoice_mtype','receiptMtype','invoiceMtype'].forEach(k => {
+            if (comp[k] && !leg[k]) leg[k] = comp[k];
+          });
+          // prefer component lines if legacy empty
+          if (comp.lines && (!Array.isArray(leg.lines) || !leg.lines.length)) leg.lines = comp.lines;
+          try { legacyEl.value = JSON.stringify(leg); } catch(_){}
+        }
+      } catch(e){ console.warn('merge component->legacy failed', e); }
       const input = document.getElementById('summaryJsonInput');
       if(!input) return;
       let data = {};
@@ -3860,7 +3878,9 @@ function prefillSummaryModal(){
       }
 
       // Συλλογή receipt-level MTYPE (για Αποδείξεις)
-      const isReceiptsMode = isReceiptsOn();
+      // consider receipt mode when either the receipts toggle is ON or the parsed summary itself is a receipt
+      const inputVal = (function(){ try { return JSON.parse(document.getElementById('summaryJsonInput')?.value || '{}'); } catch(e){ return {}; } })();
+      const isReceiptsMode = isReceiptsOn() || Boolean(inputVal && inputVal.is_receipt);
       const receiptMtypeSelect = document.getElementById('receiptMtypeSelectSummary');
       if (isReceiptsMode && receiptMtypeSelect && receiptMtypeSelect.value) {
         // Include MTYPE for receipts mode
@@ -4850,6 +4870,22 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
   }));
 
   try {
+    // Merge live component state (`summaryDataInput`) so MTYPE selections from
+    // the modal/component are not lost when we POST JSON directly.
+    try {
+      const compEl = document.getElementById('summaryDataInput');
+      if (compEl && compEl.value && String(compEl.value).trim() !== '') {
+        const comp = JSON.parse(compEl.value || '{}') || {};
+        if (comp && typeof comp === 'object') {
+          if (comp.mtype) summary.mtype = comp.mtype;
+          if (comp.receipt_mtype) summary.receipt_mtype = comp.receipt_mtype;
+          if (comp.invoice_mtype) summary.invoice_mtype = comp.invoice_mtype;
+          if (comp.receiptMtype) summary.receipt_mtype = comp.receiptMtype;
+          if (comp.invoiceMtype) summary.invoice_mtype = comp.invoiceMtype;
+          if (comp.lines) summary.lines = comp.lines;
+        }
+      }
+    } catch (e) { console.warn('merge summaryDataInput -> summary failed', e); }
     const res = await fetchWithOverlay('/save_summary', {
       method: 'POST',
       credentials: 'same-origin',
