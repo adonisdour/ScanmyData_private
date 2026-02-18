@@ -2920,9 +2920,11 @@ def set_active_fiscal_year(year):
         return False
 
 
-def get_last_fetch_date(credential_name: str) -> Optional[str]:
+def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Optional[str]:
     """
     Get the last fetch date for a credential (stored in fiscal_meta.json).
+    If `only_meta` is True, only consults `fiscal_meta.json` and DOES NOT
+    fall back to scanning `activity.log`.
     Returns ISO 8601 date string or None if not found.
     """
     # First try: fiscal_meta.json (existing behavior)
@@ -2937,6 +2939,9 @@ def get_last_fetch_date(credential_name: str) -> Optional[str]:
             fetches = data.get("last_fetches", {}) if isinstance(data, dict) else {}
             if isinstance(fetches, dict) and credential_name in fetches:
                 return fetches.get(credential_name)
+            # If caller requested only_meta, do not fallback to activity.log
+            if only_meta:
+                return None
     except Exception:
         pass
 
@@ -6756,10 +6761,10 @@ def api_last_fetch_date():
             return jsonify({"last_fetch_date": None}), 400
 
         fetch_key = _get_fetch_tracking_key(credential_name, credential_vat)
-        last_date = get_last_fetch_date(fetch_key) if fetch_key else None
+        last_date = get_last_fetch_date(fetch_key, only_meta=True) if fetch_key else None
         if not last_date and credential_name and fetch_key != credential_name:
             # Backward compatibility: older installs may have written by credential name.
-            last_date = get_last_fetch_date(credential_name)
+            last_date = get_last_fetch_date(credential_name, only_meta=True)
         
         # Format for display if available
         if last_date:
