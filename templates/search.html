@@ -817,12 +817,30 @@ function katToPercent(k){
     });
 
     if (selected && !allowedCats.includes(selected)) {
-      const extra = document.createElement('option');
-      extra.value = selected;
-      extra.textContent = `${labelForCategory(selected)} (μη διαθέσιμο για ${vatKey})`;
-      extra.dataset.unavailable = '1';
-      sel.appendChild(extra);
-      sel.value = selected;
+      // Prevent the special-purpose category `αποδειξακια` from ever appearing
+      // in the repeat-mapping dropdown (whether available or as an "unavailable"
+      // extra option). If mapping contains it, silently drop it here.
+      try {
+        if (String(selected).trim().toLowerCase() === 'αποδειξακια') {
+          // do not append — leave select empty instead
+          sel.value = '';
+        } else {
+          const extra = document.createElement('option');
+          extra.value = selected;
+          extra.textContent = `${labelForCategory(selected)} (μη διαθέσιμο για ${vatKey})`;
+          extra.dataset.unavailable = '1';
+          sel.appendChild(extra);
+          sel.value = selected;
+        }
+      } catch (e) {
+        // fallback: append as before if something unexpected happens
+        const extra = document.createElement('option');
+        extra.value = selected;
+        extra.textContent = `${labelForCategory(selected)} (μη διαθέσιμο για ${vatKey})`;
+        extra.dataset.unavailable = '1';
+        sel.appendChild(extra);
+        sel.value = selected;
+      }
     }
 
     wrap.appendChild(label);
@@ -5630,12 +5648,7 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
           if (validationData.warning) {
             if (validationData.special_case) {
               // Ειδική περίπτωση: paymentMethodType 3 με MTYPE 15
-              const userChoice = confirm(
-                validationData.warning + '\n\n' +
-                'Επιλέξτε:\n' +
-                '- OK: Αλλαγή σε MTYPE 3.4.2 (δαπάνη με μετρητά)\n' +
-                '- Ακύρωση: Συνέχεια με MTYPE 15'
-              );
+              const userChoice = await showModalConfirm('Προειδοποίηση', validationData.warning + '\n\n' + 'Επιλέξτε:\n' + '- OK: Αλλαγή σε MTYPE 3.4.2 (δαπάνη με μετρητά)\n' + '- Ακύρωση: Συνέχεια με MTYPE 15', 'Αλλαγή MTYPE', 'Συνέχεια');
               if (userChoice) {
                 // Αλλαγή σε 3.4.2
                 const mtypeSelect = document.getElementById('invoiceMtypeSelect');
@@ -5660,7 +5673,7 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
               // Συνέχεια με την αποθήκευση
             } else {
               // Κανονικό warning
-              const userConfirmed = confirm(validationData.warning);
+              const userConfirmed = await showModalConfirm('Προειδοποίηση', validationData.warning, 'Συνέχεια', 'Άκυρο');
               if (!userConfirmed) {
                 return; // Ματαίωση αποθήκευσης
               }

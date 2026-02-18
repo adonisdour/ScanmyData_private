@@ -10699,6 +10699,56 @@ def api_support_ticket_history(ticket_id: int):
     return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-200:]})
 
 
+@app.post("/api/support/ticket/delete/<int:ticket_id>")
+@login_required
+def api_support_delete_ticket(ticket_id: int):
+    """Permanently delete an archived (closed) ticket and its messages/attachments.
+    Only the ticket owner may delete their closed tickets.
+    """
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    data = _support_load()
+
+    # find ticket
+    ticket = None
+    for t in (data.get("tickets") or []):
+        if int(t.get("id") or 0) == int(ticket_id) and str(t.get("user_id") or "") == user_id:
+            ticket = t
+            break
+
+    if not ticket:
+        return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    if str(ticket.get("status") or "").lower() != "closed":
+        return jsonify({"ok": False, "error": "only closed tickets can be deleted"}), 400
+
+    # remove associated messages and attachments
+    msgs = data.get("messages") or []
+    remaining_msgs = []
+    for m in msgs:
+        if int(m.get("ticket_id") or 0) == int(ticket_id):
+            # attempt to remove attachments from disk
+            for a in (m.get("attachments") or []):
+                rel = str(a.get("path") or "").strip()
+                if rel:
+                    try:
+                        abs_path = os.path.join(_support_upload_dir(), rel)
+                        if os.path.exists(abs_path):
+                            os.remove(abs_path)
+                    except Exception:
+                        current_app.logger.debug("Failed to remove support attachment %s", rel, exc_info=True)
+            continue
+        remaining_msgs.append(m)
+
+    data["messages"] = remaining_msgs
+
+    # remove the ticket record
+    data["tickets"] = [t for t in (data.get("tickets") or []) if int(t.get("id") or 0) != int(ticket_id)]
+
+    _support_save(data)
+    _support_discord_log_event(f"🗑️ Ticket #{ticket_id} διαγράφηκε από χρήστη")
+    return jsonify({"ok": True, "deleted": True})
+
+
 def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tickets = data.get("tickets") or []
     candidates = []

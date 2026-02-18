@@ -512,13 +512,23 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==================== USERS TAB ====================
+
+// runtime cache + interval handle for live updates of session / total time
+let adminUserRecords = [];
+let usersTimesInterval = null;
+
 async function loadUsers() {
   try {
     const response = await fetch('/admin/api/users');
     const data = await response.json();
     const tbody = document.getElementById('users-tbody');
-    
-    if (!data.users || data.users.length === 0) {
+
+    adminUserRecords = Array.isArray(data.users) ? data.users : [];
+
+    // clear previous updater if any
+    try { if (usersTimesInterval) { clearInterval(usersTimesInterval); usersTimesInterval = null; } } catch(_) {}
+
+    if (!adminUserRecords || adminUserRecords.length === 0) {
       tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-3 text-center text-gray-500">Δεν υπάρχουν χρήστες</td></tr>';
       return;
     }
@@ -530,22 +540,34 @@ async function loadUsers() {
       return h > 0 ? `${h}ω ${r}λ` : `${r}λ`;
     };
 
-    tbody.innerHTML = data.users.map(user => {
+    const formatDateTime = (iso) => {
+      try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso || '').split('T')[0] || '';
+        const date = d.toLocaleDateString('el-GR');
+        const time = d.toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
+        return `${date} ${time}`;
+      } catch (e) { return String(iso || '').split('T')[0] || ''; }
+    };
+
+    tbody.innerHTML = adminUserRecords.map(user => {
       const online = !!user.active;
       const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;${online ? 'background:#22c55e' : 'background:#ef4444'}"></span>`;
-      const since = user.session_started_at ? `<span class="text-xs text-gray-500 ml-2">από ${user.session_started_at.split('T')[0]}</span>` : '';
-      const total = toHhMm(user.total_active_minutes);
+
+      const sinceHtml = user.session_started_at ? ` <span id="user-session-${user.id}" class="text-xs text-gray-500 ml-2">από ${formatDateTime(user.session_started_at)}</span>` : '';
+      const totalHtml = `<span id="user-total-${user.id}">${toHhMm(user.total_active_minutes)}</span>`;
       const groupsCount = (user.groups ? user.groups.length : 0);
+
       return `
-      <tr class="border-b border-gray-200 hover:bg-gray-50">
+      <tr data-user-id="${user.id}" class="border-b border-gray-200 hover:bg-gray-50">
         <td class="px-4 py-3">${user.email || '-'}</td>
         <td class="px-4 py-3">${user.username || user.display_name || '-'}</td>
-        <td class="px-2 py-3">${dot}${since}</td>
+        <td class="px-2 py-3">${dot}${sinceHtml}</td>
         <td class="px-4 py-3">
           <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">${groupsCount} ομάδες</span>
         </td>
-        <td class="px-4 py-3 text-xs text-gray-500">${user.created_at ? user.created_at.split('T')[0] : '-'}</td>
-        <td class="px-4 py-3 text-xs">${total}</td>
+        <td class="px-4 py-3 text-xs text-gray-500">${user.created_at ? String(user.created_at).split('T')[0] : '-'}</td>
+        <td class="px-4 py-3 text-xs">${totalHtml}</td>
         <td class="px-4 py-3 text-center space-x-1">
           <button onclick="viewUserDetails(${user.id})" class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">👁️</button>
           <button onclick="forceLogoutUser(${user.id}, '${user.username}')" class="px-2 py-1 bg-amber-100 text-amber-800 rounded text-xs hover:bg-amber-200">⏻</button>
@@ -553,6 +575,56 @@ async function loadUsers() {
         </td>
       </tr>`;
     }).join('');
+
+    // live updater: refresh total time for online users and refresh displayed session start time
+    const updateUserTimes = () => {
+      const now = Date.now();
+      adminUserRecords.forEach(u => {
+        const totalEl = document.getElementById(`user-total-${u.id}`);
+        const sessionEl = document.getElementById(`user-session-${u.id}`);
+        if (!totalEl) return;
+
+        const baseMinutes = parseInt(u.total_active_minutes || 0, 10) || 0;
+
+        // If the backend provided a session_started_at we always compute and add
+        // the elapsed time on top of the stored total — this covers users who
+        // are currently in-session even if `active` was false due to timing.
+        if (u.session_started_at) {
+          const startTs = new Date(u.session_started_at).getTime();
+          if (!isNaN(startTs) && startTs <= now) {
+            const extra = Math.floor((now - startTs) / 60000);
+            totalEl.textContent = toHhMm(baseMinutes + extra);
+            if (sessionEl) sessionEl.textContent = 'από ' + formatDateTime(u.session_started_at);
+            return;
+          }
+        }
+
+        // no live session -> display recorded total
+        totalEl.textContent = toHhMm(baseMinutes);
+        if (sessionEl && u.session_started_at) sessionEl.textContent = 'από ' + formatDateTime(u.session_started_at);
+      });
+    };
+
+    // run once + schedule periodic updates
+    try { updateUserTimes(); } catch(_) {}
+    usersTimesInterval = setInterval(() => {
+      try { updateUserTimes(); } catch(_) {}
+    }, 15000);
+
+    // ensure the users list is refreshed periodically so session starts/stops
+    // are reflected for all users (only while the Users tab is visible)
+    try {
+      if (window.__usersReloadTimer) { clearInterval(window.__usersReloadTimer); window.__usersReloadTimer = null; }
+      window.__usersReloadTimer = setInterval(() => {
+        try {
+          const usersTab = document.getElementById('users');
+          if (!usersTab || usersTab.classList.contains('hidden')) return;
+          loadUsers();
+        } catch (_) { /* ignore */ }
+      }, 30000);
+    } catch(_) {}
+
+
   } catch (error) {
     console.error('Error loading users:', error);
     document.getElementById('users-tbody').innerHTML = '<tr><td colspan="7" class="px-4 py-3 text-center text-red-500">Σφάλμα φόρτωσης</td></tr>';
@@ -598,7 +670,7 @@ async function viewUserDetails(userId) {
     document.getElementById('userDetailContent').innerHTML = content;
     document.getElementById('userDetailModal').classList.remove('hidden');
   } catch (err) {
-    alert('Σφάλμα φόρτωσης λεπτομερειών χρήστη');
+    try{ await showModalAlert('Σφάλμα', 'Σφάλμα φόρτωσης λεπτομερειών χρήστη'); }catch(_){ console.error(err); }
   }
 }
 
@@ -741,7 +813,7 @@ async function viewGroupDetails(groupId) {
     document.getElementById('groupDetailContent').innerHTML = content;
     document.getElementById('groupDetailModal').classList.remove('hidden');
   } catch (err) {
-    alert('Σφάλμα φόρτωσης λεπτομερειών ομάδας');
+    try{ await showModalAlert('Σφάλμα', 'Σφάλμα φόρτωσης λεπτομερειών ομάδας'); }catch(_){ console.error(err); }
   }
 }
 

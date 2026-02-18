@@ -179,10 +179,7 @@
           if(!marks || !marks.length){
             // keep behavior consistent with other UI: show a quick alert
             try{ if(typeof showModalAlert === 'function') { showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.'); return; } }catch(_){ }
-            alert('Επίλεξε πρώτα γραμμές για διαγραφή.');
-            return;
-          }
-
+            uiAlert('Επίλεξε πρώτα γραμμές για διαγραφή.');
           const modal = document.getElementById('deleteModal');
           const modalMsg = document.getElementById('deleteModalMessage');
           if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;

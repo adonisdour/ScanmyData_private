@@ -494,7 +494,7 @@
 
     if(hasInvalid){
       e.preventDefault();
-      alert(`Παρακαλώ διόρθωσε τους μη έγκυρους κωδικούς λογαριασμών.\n\nΑναμενόμενη μορφή για ${BOOK_CATEGORY} κατηγορία: ${BOOK_CATEGORY === 'Γ' ? 'xx-xx-xx-xxxx (10 ψηφία)' : 'xx-xxxx (6 ψηφία)'}`);
+      uiAlert(`Παρακαλώ διόρθωσε τους μη έγκυρους κωδικούς λογαριασμών.\n\nΑναμενόμενη μορφή για ${BOOK_CATEGORY} κατηγορία: ${BOOK_CATEGORY === 'Γ' ? 'xx-xx-xx-xxxx (10 ψηφία)' : 'xx-xxxx (6 ψηφία)'}`);
     }
   });
 

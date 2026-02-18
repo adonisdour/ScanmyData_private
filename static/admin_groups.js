@@ -1,25 +1,20 @@
 // Admin Groups Tab - AJAX delete, group details modal
 
-function deleteGroupAjax(groupId, groupName) {
-    if (!confirm(`Delete group "${groupName}" (will backup first if data exists)?`)) {
-        return;
-    }
-    fetch(`/admin/groups/${groupId}/delete`, {
-        method: 'POST',
-        headers: { 'Accept': 'application/json' }
-    })
-    .then(resp => resp.json())
-    .then(data => {
+async function deleteGroupAjax(groupId, groupName) {
+    const ok = await uiConfirm(`Delete group "${groupName}" (will backup first if data exists)?`);
+    if (!ok) return;
+    try {
+        const resp = await fetch(`/admin/groups/${groupId}/delete`, { method: 'POST', headers: { 'Accept': 'application/json' } });
+        const data = await resp.json().catch(()=>({}));
         if (data.ok || data.success) {
-            alert('Group deleted (backup: ' + (data.backup_path || 'none') + ')');
+            await uiAlert('Group deleted (backup: ' + (data.backup_path || 'none') + ')');
             location.reload();
         } else {
-            alert('Delete failed: ' + (data.error || data.message || 'Unknown error'));
+            await uiAlert('Delete failed: ' + (data.error || data.message || 'Unknown error'));
         }
-    })
-    .catch(err => {
-        alert('Error: ' + err);
-    });
+    } catch(err) {
+        await uiAlert('Error: ' + err);
+    }
 }
 
 function showGroupDetailsModal(groupId, groupName) {
@@ -68,6 +63,6 @@ function showGroupDetailsModal(groupId, groupName) {
             bootstrapModal.show();
         })
         .catch(err => {
-            alert('Error loading group details: ' + err);
+            uiAlert('Error loading group details: ' + err);
         });
 }
