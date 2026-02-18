@@ -2083,12 +2083,12 @@
     <div class="max-w-6xl mx-auto">
       <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div class="flex-1">
-          <h3 class="text-lg font-semibold mb-2">🍪 Cookies & Προστασία Δεδομένων</h3>
-          <p class="text-sm text-gray-300 mb-2">
+          <h3 class="text-lg font-semibold mb-2 text-gray-900 dark:text-white">🍪 Cookies & Προστασία Δεδομένων</h3>
+          <p class="text-sm text-gray-700 dark:text-gray-300 mb-2">
             Χρησιμοποιούμε απαραίτητα cookies για τη λειτουργία της υπηρεσίας και την ασφάλεια του λογαριασμού σας. 
             Επίσης συλλέγουμε δεδομένα χρήσης (IP addresses, logs) σύμφωνα με τον GDPR.
           </p>
-          <p class="text-xs text-gray-400">
+          <p class="text-xs text-gray-600 dark:text-gray-400">
             Με τη χρήση της πλατφόρμας αποδέχεστε τους 
             <a href="/terms" class="text-sky-400 hover:text-sky-300 underline">Όρους Χρήσης</a> και την 
             <a href="/privacy" class="text-sky-400 hover:text-sky-300 underline">Πολιτική Απορρήτου</a>.
@@ -2915,6 +2915,10 @@
 #helpBotFab.has-unread{animation:helpBotPulse 1.3s ease-in-out infinite;}
 #helpBotBadge{position:absolute;right:-2px;top:-2px;min-width:20px;height:20px;border-radius:9999px;background:#ef4444;color:#fff;font-size:11px;display:none;align-items:center;justify-content:center;padding:0 5px;border:2px solid #fff;}
 #helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,380px);height:min(75vh,560px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
+#helpBotPanel.minimized { height:56px; max-height:56px; overflow:visible; }
+#helpBotPanel.minimized #helpBotMessages, #helpBotPanel.minimized #helpBotForm, #helpBotPanel.minimized #helpBotPresence, #helpBotPanel.minimized #helpBotFileState, #helpBotPanel.minimized #helpBotName { display:none !important; }
+#helpBotPanel.minimized #helpBotHead { border-radius:14px; }
+
 #helpBotHead{padding:10px 12px;background:#0f172a;color:#fff;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
 #helpBotMessages{flex:1;overflow:auto;padding:10px;background:#f8fafc;}
 .help-msg{margin-bottom:8px;padding:8px 10px;border-radius:10px;max-width:92%;white-space:pre-wrap;word-break:break-word;font-size:13px;}
@@ -2931,11 +2935,59 @@
 #helpBotFileBtn{border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;border-radius:8px;padding:7px 9px;cursor:pointer;font-size:12px;}
 #helpBotFileState{padding:0 10px 8px 10px;font-size:11px;color:#64748b;min-height:17px;}
 #helpBotSend{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;}
+
+/* archived-ticket action buttons: softer in light mode, vivid in dark mode */
+.archived-btn-report{
+  background-color: #fef3c7; /* very light yellow */
+  color: #92400e;
+  border-color: #fde68a;
+}
+.archived-btn-delete{
+  background-color: #fee2e2; /* very light red */
+  color: #9b1c1c;
+  border-color: #fecaca;
+}
+html[data-theme="dark"] .archived-btn-report{
+  /* keep the pale yellow in dark mode as well */
+  background-color: #fef3c7 !important; /* pale yellow */
+  color: #92400e !important;
+  border-color: #fde68a !important;
+}
+html[data-theme="dark"] .archived-btn-delete{
+  background-color: #dc2626 !important; /* red-600 */
+  color: #fff1f2 !important;
+  border-color: #dc2626 !important;
+}
 html[data-theme="dark"] #helpBotPanel{background:#111827;border-color:#334155;box-shadow:0 20px 45px rgba(0,0,0,.55);}
 html[data-theme="dark"] #helpBotHead{background:#020617;color:#e2e8f0;border-bottom:1px solid #334155;}
 html[data-theme="dark"] #helpBotMessages{background:#0b1220;color:#e2e8f0;}
 html[data-theme="dark"] .help-msg.user{background:#1d4ed8;color:#dbeafe;}
 html[data-theme="dark"] .help-msg.support{background:#1f2937;color:#e5e7eb;}
+
+/* Archived tickets — match chat colors (light + dark) */
+.archived-ticket{transition:background-color .12s ease,color .12s ease;border-radius:8px}
+.archived-ticket--user{background:#dbeafe;color:#1e3a8a;border-color:#bfdbfe}
+.archived-ticket--support{background:#e2e8f0;color:#0f172a;border-color:#e5e7eb}
+html[data-theme="dark"] .archived-ticket--user{background:rgba(37,99,235,0.10);color:#cfe8ff;border-color:rgba(255,255,255,0.03)}
+html[data-theme="dark"] .archived-ticket--support{background:#111827;color:#e5e7eb;border-color:rgba(255,255,255,0.04)}
+
+/* Archive modal report button: keep pale yellow in both light and dark themes */
+#archiveModal .archived-btn-report,
+#archivedTicketModal .archived-btn-report,
+#archiveModal [data-report-ticket],
+#archivedTicketModal [data-report-ticket] {
+  background-color: #FEF3C7; /* pale yellow */
+  color: #92400e;
+  border-color: #FDE68A;
+}
+/* Do not override delete button colors here; use .btn-danger so it matches other pages */
+#archiveModal [data-delete-ticket],
+#archivedTicketModal [data-delete-ticket] { background: transparent; border-color: transparent; }
+/* light-mode gentle colors (non-!important so theme classes still win) */
+/* subtle hover */
+#archiveModal .archived-btn-report:hover, #archivedTicketModal .archived-btn-report:hover,
+#archiveModal .archived-btn-delete:hover, #archivedTicketModal .archived-btn-delete:hover { filter: brightness(0.95); }
+
 html[data-theme="dark"] #helpBotForm{border-top-color:#334155;background:#0f172a;}
 html[data-theme="dark"] #helpBotInput,html[data-theme="dark"] #helpBotName{background:#1e293b;color:#e2e8f0;border-color:#475569;}
 html[data-theme="dark"] #helpBotInput::placeholder,html[data-theme="dark"] #helpBotName::placeholder{color:#94a3b8;}
@@ -2956,7 +3008,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     </div>
     <div style="display:flex;align-items:center;gap:8px;">
       <button id="helpBotArchive" type="button" style="background:#334155;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Αρχείο</button>
-      <button id="helpBotEnd" type="button" style="background:#ef4444;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Λήξη</button>
+      <button id="helpBotEnd" type="button" style="display:none;background:#ef4444;border:none;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;">Λήξη</button>
       <button id="helpBotClose" type="button" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;">×</button>
     </div>
   </div>
@@ -2989,13 +3041,19 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   const fileInput=document.getElementById('helpBotFile');
   const box=document.getElementById('helpBotMessages');
   let open=false;
-  let poller=null;
+  let poller=null; // will be set to a timer that adapts depending on `open`
   let lastPresence={support_typing:false};
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
   const CLOSED_NOTICE_KEY='support_closed_notice_seen';
   let lastTicket=null;
   let archivedTickets=[];
+
+  // Adjust polling interval depending on whether the panel is open (faster when open)
+  function _setPollIntervalForOpenState(){
+    try{ if(poller) clearInterval(poller); }catch(_e){}
+    poller = setInterval(refresh, open ? 2000 : 8000);
+  }
 
   function updateNameFieldState(ticket){
     if(!nameInput) return;
@@ -3053,6 +3111,23 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     return Number.isFinite(v) ? v : 0;
   }
 
+  // Format ISO timestamp into compact Greek date/time (dd/mm/YYYY HH:MM), using Europe/Athens timezone
+  function formatGreekCompact(iso){
+    if(!iso) return '';
+    try{
+      const dt = new Date(iso);
+      if (isNaN(dt)) return iso;
+      // use Intl to render in Europe/Athens consistently
+      try{
+        const fmt = new Intl.DateTimeFormat('el-GR', { timeZone: 'Europe/Athens', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+        return fmt.format(dt).replace(',', '');
+      }catch(e){
+        const pad = n => String(n).padStart(2,'0');
+        return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+      }
+    }catch(e){ return iso; }
+  }
+
   function updatePresence(){
     if(!presenceEl) return;
     if(lastPresence && lastPresence.support_typing){
@@ -3088,6 +3163,14 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
 
   function updateTitle(ticket){
     if(!titleEl) return;
+    // hide 'Λήξη' when there is no active/open ticket
+    try{
+      if(endBtn){
+        if(!ticket || String(ticket.status||'').toLowerCase() !== 'open') endBtn.style.display = 'none';
+        else endBtn.style.display = '';
+      }
+    }catch(_e){}
+
     if(!ticket){
       titleEl.textContent = 'Νέα συνομιλία';
       if(threadLabel) threadLabel.textContent = archivedTickets.length ? `Αρχειοθετημένα tickets: ${archivedTickets.length}` : 'Συμπλήρωσε όνομα και ξεκίνα συνομιλία';
@@ -3113,6 +3196,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       const r=await fetch(`/api/support/ticket/me?mark_read=${open?'1':'0'}`,{credentials:'same-origin'});
       if(!r.ok) return;
       const j=await r.json();
+      const prevTicket = lastTicket;                  // preserve previous state
       lastTicket = j.ticket || null;
       archivedTickets = Array.isArray(j.archived_tickets) ? j.archived_tickets : [];
       lastPresence = j.presence || {support_typing:false};
@@ -3121,9 +3205,12 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       const messages = lastTicket ? (j.messages||[]) : [];
       render(messages);
       updateBadge(messages);
-      if (!lastTicket && input) {
+
+      // Only clear the input if we *had* an open ticket and it was just closed.
+      if (!lastTicket && prevTicket && input) {
         input.value = '';
       }
+
       if (j.closed_notice && open) {
         const refTicket = j.latest_closed_ticket || {};
         const noticeKey = `${CLOSED_NOTICE_KEY}:${refTicket.id || '0'}:${refTicket.closed_at || ''}`;
@@ -3131,7 +3218,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
         if(!already){
           const byRaw = String(refTicket.closed_by || 'support');
           const by = (byRaw === 'admin' || byRaw === 'admin/support') ? 'admin/support' : byRaw;
-          alert(`Το ticket έκλεισε από ${by}. Η συνομιλία αρχειοθετήθηκε και μπορείς να τη δεις από το Αρχείο.`);
+          try { await showModalAlert('Ενημέρωση', `Το ticket έκλεισε από ${by}. Η συνομιλία αρχειοθετήθηκε και μπορείς να τη δεις από το Αρχείο.`); } catch(_) {}
           localStorage.setItem(noticeKey, '1');
         }
       }
@@ -3169,58 +3256,149 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
     const j = await r.json().catch(()=>({}));
     if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αδυναμία φόρτωσης αρχείου ticket');
 
+    // minimize the live conversation while viewing archived ticket
+    try{ panel && panel.classList.add('minimized'); }catch(_e){}
     const modal = document.createElement('div');
+    modal.id = 'archivedTicketModal';
     modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
     const msgs = Array.isArray(j.messages) ? j.messages : [];
     const msgHtml = msgs.map(m => `<div class="help-msg ${m.sender==='support'?'support':'user'}">${esc(m.content||'')}</div>`).join('') || '<div class="text-sm text-gray-500">Δεν υπάρχουν μηνύματα.</div>';
     modal.innerHTML = `
-      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-2xl max-h-[80vh] overflow-auto">
+      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-2xl max-h-[80vh] overflow-auto shadow-lg">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold">Αρχειοθετημένο Ticket #${esc(j.ticket?.id || ticketId)}</h3>
-          <button class="px-2 py-1 border rounded" id="closeArchivedTicketModal">Κλείσιμο</button>
+          <h3 class="font-semibold">Αρχειοθετημένο Ticket #${esc(j.ticket?.id || ticketId)}${j.ticket && j.ticket.closed_at ? ` · ${esc(formatGreekCompact(j.ticket.closed_at))}` : ''}</h3>
+          <div class="flex gap-2">
+            <button class="px-2 py-1 border rounded bg-yellow-50 text-yellow-800 border-yellow-100 dark:bg-yellow-600 dark:text-yellow-50 dark:border-yellow-600 archived-btn-report" id="reportArchivedTicket">Αναφορά</button>
+            <button class="btn btn-sm btn-danger" id="deleteArchivedTicket">Διαγραφή</button>
+            <button class="px-2 py-1 border rounded bg-gray-50 border-gray-100 dark:bg-gray-800/20 dark:text-gray-200 dark:border-gray-700" id="closeArchivedTicketModal">Κλείσιμο</button>
+          </div>
         </div>
         <div>${msgHtml}</div>
       </div>
     `;
     document.body.appendChild(modal);
-    modal.querySelector('#closeArchivedTicketModal')?.addEventListener('click', ()=>modal.remove());
-    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.remove(); });
+
+    modal.querySelector('#closeArchivedTicketModal')?.addEventListener('click', ()=>{ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); });
+    modal.addEventListener('click', (e)=>{ if(e.target===modal){ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); } });
+
+    // Report: prefill new message in the live support panel with archived conversation
+    modal.querySelector('#reportArchivedTicket')?.addEventListener('click', async ()=>{
+      try{
+        const excerpt = msgs.map(m => `${m.sender==='support' ? 'Support' : 'User'}: ${m.content || ''}`).join('\n').slice(0,1200);
+        try{ if(nameInput && (j.ticket && j.ticket.display_name)) nameInput.value = j.ticket.display_name; }catch(_e){}
+        if(input) input.value = `Αναφορά βασισμένη στο αρχειοθετημένο ticket #${ticketId}:\n\n${excerpt}`;
+        try{ setOpen(true); panel && panel.classList.remove('minimized'); }catch(_e){}
+        input && input.focus();
+        modal.remove();
+      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
+    });
+
+    // Delete: call server API to permanently delete archived ticket
+    modal.querySelector('#deleteArchivedTicket')?.addEventListener('click', async ()=>{
+      try{
+        if(!await showModalConfirm('Διαγραφή Ticket', `Θες σίγουρα να διαγράψεις το αρχειοθετημένο ticket #${ticketId}; Η ενέργεια δεν μπορεί να αναιρεθεί.`,'Διαγραφή','Άκυρο')) return;
+        const r = await fetch(`/api/support/ticket/delete/${encodeURIComponent(ticketId)}`, { method: 'POST', credentials: 'same-origin' });
+        const j2 = await r.json().catch(()=>({}));
+        if(!r.ok || !j2.ok) throw new Error((j2&&j2.error) || 'Αποτυχία διαγραφής');
+        archivedTickets = (archivedTickets||[]).filter(t => String(t.id) !== String(ticketId));
+        try{ await showModalAlert('Επιτυχία', 'Το ticket διαγράφηκε.'); }catch(_){}
+        try{ panel && panel.classList.remove('minimized'); }catch(_e){}
+        modal.remove();
+      }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
+    });
   }
 
-  function openArchiveList(){
+  async function openArchiveList(){
     if(!archivedTickets.length){
-      alert('Δεν υπάρχουν αρχειοθετημένα tickets.');
+      try{ await showModalAlert('Ενημέρωση', 'Δεν υπάρχουν αρχειοθετημένα tickets.'); }catch(_){}
       return;
     }
+    // minimize the open conversation while the archive modal is visible
+    try{ panel && panel.classList.add('minimized'); }catch(_e){}
     const modal = document.createElement('div');
+    modal.id = 'archiveModal';
     modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[100000]';
+    const isDarkTheme = (document.documentElement && document.documentElement.getAttribute('data-theme') === 'dark');
     const listHtml = archivedTickets.map(t => {
-      const when = t.closed_at ? ` · ${esc(t.closed_at)}` : '';
-      return `<button data-ticket-id="${esc(t.id)}" class="w-full text-left px-3 py-2 border rounded hover:bg-gray-50">Ticket #${esc(t.id)}${when}</button>`;
+      const when = t.closed_at ? ` · ${esc(formatGreekCompact(t.closed_at))}` : '';
+      const by = String(t.closed_by || '').toLowerCase();
+      const cls = (by === 'admin' || by === 'support' || by === 'admin/support') ? 'archived-ticket archived-ticket--support' : 'archived-ticket archived-ticket--user';
+      const reportStyle = isDarkTheme ? 'background:#D97706;color:#FFF7ED;border-color:#D97706' : '';
+      const deleteStyle = isDarkTheme ? 'background:#DC2626;color:#FFF1F2;border-color:#DC2626' : '';
+      return `
+        <div class="flex items-center justify-between px-3 py-2 border rounded ${cls} hover:bg-gray-50 dark:hover:bg-gray-900/40">
+          <button data-ticket-id="${esc(t.id)}" class="text-left flex-1 text-sm" style="background:transparent;color:inherit;border:0;padding:0">Ticket #${esc(t.id)}${when}</button>
+          <div class="ml-3 flex gap-2">
+            <button data-report-ticket="${esc(t.id)}" class="px-2 py-1 text-xs border rounded archived-btn-report">Αναφορά</button>
+            <button data-delete-ticket="${esc(t.id)}" class="btn btn-sm btn-danger">Διαγραφή</button>
+          </div>
+        </div>`;
     }).join('');
+
+    const listContainerClass = (archivedTickets.length > 20) ? 'space-y-2 max-h-[60vh] overflow-auto' : 'space-y-2';
+
     modal.innerHTML = `
-      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-lg">
+      <div class="bg-white rounded-lg p-4 w-[92vw] max-w-lg shadow-lg">
         <div class="flex items-center justify-between mb-3">
           <h3 class="font-semibold">Αρχειοθετημένα Tickets</h3>
           <button class="px-2 py-1 border rounded" id="closeArchiveListModal">Κλείσιμο</button>
         </div>
-        <div class="space-y-2 max-h-[60vh] overflow-auto">${listHtml}</div>
+        <div class="${listContainerClass}">${listHtml}</div>
       </div>
     `;
     document.body.appendChild(modal);
-    modal.querySelector('#closeArchiveListModal')?.addEventListener('click', ()=>modal.remove());
-    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.remove(); });
+    modal.querySelector('#closeArchiveListModal')?.addEventListener('click', ()=>{ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); });
+    modal.addEventListener('click', (e)=>{ if(e.target===modal){ try{ panel && panel.classList.remove('minimized'); }catch(_e){}; modal.remove(); } });
     modal.querySelectorAll('[data-ticket-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tid = btn.getAttribute('data-ticket-id');
-        try { await openArchivedTicket(tid); } catch(err){ alert(err.message||err); }
+        try { await openArchivedTicket(tid); } catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
+      });
+    });
+
+    modal.querySelectorAll('[data-report-ticket]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.getAttribute('data-report-ticket');
+        try{
+          const r = await fetch(`/api/support/ticket/history/${encodeURIComponent(tid)}`, { credentials:'same-origin' });
+          const j = await r.json().catch(()=>({}));
+          if(!r.ok || !j.ok) { throw new Error((j&&j.error) || 'Αδύναμη φόρτωση ticket'); }
+          const msgs = Array.isArray(j.messages) ? j.messages : [];
+          const excerpt = msgs.map(m => `${m.sender==='support' ? 'Support' : 'User'}: ${m.content || ''}`).join('\n').slice(0, 1200);
+          try{ if(nameInput && (j.ticket && j.ticket.display_name)) nameInput.value = j.ticket.display_name; }catch(_e){}
+          if(input) input.value = `Αναφορά βασισμένη στο αρχειοθετημένο ticket #${tid}:\n\n${excerpt}`;
+          try{ setOpen(true); panel && panel.classList.remove('minimized'); }catch(_e){}
+          input && input.focus();
+          modal.remove();
+        }catch(err){ try{ await showModalAlert('Σφάλμα', err.message || String(err)); }catch(_){} }
+      });
+    });
+
+    modal.querySelectorAll('[data-delete-ticket]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.getAttribute('data-delete-ticket');
+        try{
+          const ok = await showModalConfirm('Διαγραφή Ticket', `Θες σίγουρα να διαγράψεις το αρχειοθετημένο ticket #${tid}; Η ενέργεια δεν μπορεί να αναιρεθεί.`,'Διαγραφή','Άκυρο');
+          if(!ok) return;
+          const r = await fetch(`/api/support/ticket/delete/${encodeURIComponent(tid)}`, { method:'POST', credentials:'same-origin' });
+          const j = await r.json().catch(()=>({}));
+          if(!r.ok || !j.ok) throw new Error((j&&j.error) || 'Αποτυχία διαγραφής');
+          // remove from local array + DOM
+          archivedTickets = (archivedTickets||[]).filter(t => String(t.id) !== String(tid));
+          btn.closest('div')?.remove();
+          try{ await showModalAlert('Επιτυχία', 'Το ticket διαγράφηκε.'); }catch(_){}
+        }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
       });
     });
   }
 
   function setOpen(v){
-    open=!!v;
-    if(panel) panel.style.display=open?'flex':'none';
+    open = !!v;
+    if(panel) panel.style.display = open ? 'flex' : 'none';
+    // adapt poller interval for responsiveness when the panel is open
+    try{ _setPollIntervalForOpenState(); }catch(_e){}
     if(open){
       refresh();
       setTimeout(()=>markSeen([]), 50);
@@ -3238,15 +3416,16 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   archiveBtn&&archiveBtn.addEventListener('click', ()=>openArchiveList());
 
   refresh();
-  if(!poller) poller=setInterval(refresh, 5000);
+  // start poller (slower when panel closed, faster while open)
+  _setPollIntervalForOpenState();
   endBtn&&endBtn.addEventListener('click', async ()=>{
-    if(!confirm('Να λήξει η συνομιλία;')) return;
+    if(!await showModalConfirm('Επιβεβαίωση', 'Να λήξει η συνομιλία;')) return;
     try{
       const r = await fetch('/api/support/ticket/close', { method:'POST', credentials:'same-origin' });
       const j = await r.json().catch(()=>({}));
       if(!r.ok || !j.ok) throw new Error((j&&j.error)||'Αποτυχία λήξης ticket');
       await refresh();
-    }catch(err){ alert(err.message||err); }
+    }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
   });
   form&&form.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -3256,7 +3435,7 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       if(input) input.value='';
       await refresh();
       markSeen([]);
-    }catch(err){ alert(err.message||err); }
+    }catch(err){ try{ await showModalAlert('Σφάλμα', err.message||String(err)); }catch(_){} }
   });
 })();
 </script>

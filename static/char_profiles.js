@@ -79,7 +79,7 @@
 
   function save(){
     const name = $('#profName').value.trim();
-    if (!name){ alert('Δώσε όνομα προφίλ'); return; }
+    if (!name){ uiAlert('Δώσε όνομα προφίλ'); return; }
     const map = collectMap();
     fetch('/api/profiles/save', {
       method:'POST', credentials:'same-origin',

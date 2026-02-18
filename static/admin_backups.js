@@ -4,36 +4,30 @@
 // LOCAL BACKUPS
 // ============================================================================
 
-function restoreLocalBackupAjax(backupName) {
+async function restoreLocalBackupAjax(backupName) {
     const groupId = document.getElementById(`groupSelect_${backupName}`).value;
     if (!groupId) {
-        alert('Please select a group');
+        try{ await showModalAlert('Ενημέρωση', 'Please select a group'); }catch(_){ }
         return;
     }
     
-    if (!confirm(`Restore local backup to selected group? This will overwrite existing data.`)) {
-        return;
-    }
-    
-    const formData = new FormData();
-    formData.append('group_id', groupId);
-    
-    fetch(`/admin/backups/restore/${encodeURIComponent(backupName)}`, {
-        method: 'POST',
-        body: formData
-    })
-    .then(resp => resp.json())
-    .then(data => {
-        if (data.ok || data.success) {
-            alert('Restore successful');
-            location.reload();
-        } else {
-            alert('Restore failed: ' + (data.error || data.message));
-        }
-    })
-    .catch(err => {
-        alert('Error: ' + err);
-    });
+    try{
+      const ok = await showModalConfirm('Επιβεβαίωση', `Restore local backup to selected group? This will overwrite existing data.`,'Restore','Άκυρο');
+      if(!ok) return;
+    }catch(_){ return; }
+
+    try{
+      const formData = new FormData();
+      formData.append('group_id', groupId);
+      const resp = await fetch(`/admin/backups/restore/${encodeURIComponent(backupName)}`, { method: 'POST', body: formData });
+      const data = await resp.json().catch(()=>({}));
+      if (data.ok || data.success) {
+          try{ await showModalAlert('Επιτυχία', 'Restore successful'); }catch(_){ }
+          location.reload();
+      } else {
+          try{ await showModalAlert('Σφάλμα', 'Restore failed: ' + (data.error || data.message)); }catch(_){ }
+      }
+    }catch(err){ try{ await showModalAlert('Σφάλμα', 'Error: ' + String(err)); }catch(_){ } }
 }
 
 // Keep old name for backward compatibility
@@ -114,9 +108,9 @@ function toggleAllGroups() {
     checkboxes.forEach(cb => cb.checked = checked);
 }
 
-function doRemoteRestore() {
+async function doRemoteRestore() {
     if (!selectedBackupPath) {
-        alert('No backup selected');
+        try{ await showModalAlert('Ενημέρωση', 'No backup selected'); }catch(_){ }
         return;
     }
     
@@ -129,57 +123,49 @@ function doRemoteRestore() {
     }
     
     if (!targetGroupId && (!groups || groups.length === 0)) {
-        alert('Please select either a target group or specific groups to restore');
+        try{ await showModalAlert('Ενημέρωση', 'Please select either a target group or specific groups to restore'); }catch(_){ }
         return;
     }
     
-    if (!confirm('Restore from remote backup? This will overwrite existing data.')) {
-        return;
-    }
-    
+    try{
+      const ok = await showModalConfirm('Επιβεβαίωση', 'Restore from remote backup? This will overwrite existing data.','Restore','Άκυρο');
+      if(!ok) return;
+    }catch(_){ return; }
+
     const payload = {
         backup_path: selectedBackupPath,
         target_group_id: targetGroupId ? parseInt(targetGroupId) : null,
         groups: groups
     };
-    
-    fetch('/admin/api/backup/restore', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    })
-    .then(resp => resp.json())
-    .then(data => {
-        if (data.success) {
-            alert(`Restore successful. Restored groups: ${(data.restored || []).join(', ')}`);
-            // Hide modal
-            bootstrap.Modal.getInstance(document.getElementById('remoteRestoreModal')).hide();
-            location.reload();
-        } else {
-            alert(`Restore failed: ${data.error || 'Unknown error'}`);
-        }
-    })
-    .catch(err => alert(`Error: ${err}`));
+
+    try{
+      const resp = await fetch('/admin/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await resp.json().catch(()=>({}));
+      if (data.success) {
+          try{ await showModalAlert('Επιτυχία', `Restore successful. Restored groups: ${(data.restored || []).join(', ')}`); }catch(_){ }
+          // Hide modal
+          bootstrap.Modal.getInstance(document.getElementById('remoteRestoreModal')).hide();
+          location.reload();
+      } else {
+          try{ await showModalAlert('Σφάλμα', `Restore failed: ${data.error || 'Unknown error'}`); }catch(_){ }
+      }
+    }catch(err){ try{ await showModalAlert('Σφάλμα', `Error: ${String(err)}`); }catch(_){ } }
 }
 
-function deleteRemoteBackup(backupPath) {
-    if (!confirm(`Delete remote backup: ${backupPath}? This cannot be undone.`)) {
-        return;
-    }
-    
-    fetch('/admin/api/backup', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backup_path: backupPath })
-    })
-    .then(resp => resp.json())
-    .then(data => {
-        if (data.success) {
-            alert('Backup deleted');
-            loadRemoteBackups();
-        } else {
-            alert(`Delete failed: ${data.error || 'Unknown error'}`);
-        }
-    })
-    .catch(err => alert(`Error: ${err}`));
+async function deleteRemoteBackup(backupPath) {
+    try{
+      const ok = await showModalConfirm('Διαγραφή backup', `Delete remote backup: ${backupPath}? This cannot be undone.`,'Διαγραφή','Άκυρο');
+      if(!ok) return;
+    }catch(_){ return; }
+
+    try{
+      const resp = await fetch('/admin/api/backup', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ backup_path: backupPath }) });
+      const data = await resp.json().catch(()=>({}));
+      if (data.success) {
+          try{ await showModalAlert('Επιτυχία', 'Backup deleted'); }catch(_){ }
+          loadRemoteBackups();
+      } else {
+          try{ await showModalAlert('Σφάλμα', `Delete failed: ${data.error || 'Unknown error'}`); }catch(_){ }
+      }
+    }catch(err){ try{ await showModalAlert('Σφάλμα', `Error: ${String(err)}`); }catch(_){ } }
 }

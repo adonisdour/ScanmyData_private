@@ -1,26 +1,21 @@
 // Admin Users Tab - AJAX delete, activity modal, storage display
 
-function deleteUserAjax(userId, username) {
-    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) {
-        return;
-    }
-    
-    fetch(`/admin/users/${userId}/delete`, {
-        method: 'POST',
-        headers: { 'Accept': 'application/json' }
-    })
-    .then(resp => resp.json())
-    .then(data => {
+async function deleteUserAjax(userId, username) {
+    try{
+        const ok = await showModalConfirm('Διαγραφή χρήστη', `Delete user "${username}"? This cannot be undone.`,'Διαγραφή','Άκυρο');
+        if(!ok) return;
+    }catch(_){ return; }
+
+    try{
+        const resp = await fetch(`/admin/users/${userId}/delete`, { method: 'POST', headers: { 'Accept': 'application/json' } });
+        const data = await resp.json().catch(()=>({}));
         if (data.ok || data.success) {
-            alert('User deleted');
+            try{ await showModalAlert('Επιτυχία', 'User deleted'); }catch(_){ }
             location.reload();
         } else {
-            alert('Delete failed: ' + (data.error || data.message || 'Unknown error'));
+            try{ await showModalAlert('Σφάλμα', 'Delete failed: ' + (data.error || data.message || 'Unknown error')); }catch(_){ }
         }
-    })
-    .catch(err => {
-        alert('Error: ' + err);
-    });
+    }catch(err){ try{ await showModalAlert('Σφάλμα', 'Error: ' + String(err)); }catch(_){ } }
 }
 
 function showUserActivityModal(userId, username) {
@@ -69,7 +64,7 @@ function showUserActivityModal(userId, username) {
             const bootstrapModal = new bootstrap.Modal(modal);
             bootstrapModal.show();
         })
-        .catch(err => {
-            alert('Error loading user details: ' + err);
+        .catch(async err => {
+            try{ await showModalAlert('Σφάλμα', 'Error loading user details: ' + String(err)); }catch(_){ console.error(err); }
         });
 }

@@ -191,7 +191,7 @@ function createUserAjax() {
     const isAdmin = document.getElementById('newIsAdmin').checked;
 
     if (!username || !email || !password) {
-        alert('All fields required');
+        uiAlert('All fields required');
         return;
     }
 
@@ -208,11 +208,11 @@ function createUserAjax() {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            alert('User created successfully');
+            uiAlert('User created successfully');
             $('#createUserModal').modal('hide');
             location.reload();
         } else {
-            alert('Error: ' + data.error);
+            uiAlert('Error: ' + data.error);
         }
     });
 }
@@ -236,11 +236,11 @@ function updateUserAjax() {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            alert('User updated successfully');
+            uiAlert('User updated successfully');
             $('#editUserModal').modal('hide');
             location.reload();
         } else {
-            alert('Error: ' + data.error);
+            uiAlert('Error: ' + data.error);
         }
     });
 }

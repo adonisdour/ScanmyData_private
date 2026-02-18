@@ -13,7 +13,7 @@
 async function showModalAlert(title, message, buttonText = 'OK') {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
-    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[100]';
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
     modal.id = 'modalAlert_' + Date.now();
     
     modal.innerHTML = `
@@ -63,7 +63,7 @@ async function showModalAlert(title, message, buttonText = 'OK') {
 async function showModalConfirm(title, message, confirmText = 'Επιβεβαίωση', cancelText = 'Άκυρο') {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
-    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[100]';
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
     modal.id = 'modalConfirm_' + Date.now();
     
     modal.innerHTML = `
@@ -134,7 +134,7 @@ function escapeHtml(text) {
 async function showModalChoice(title, message, options) {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
-    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[100]';
+    modal.className = 'fixed inset-0 flex items-center justify-center bg-black/40 z-[110000]';
     modal.id = 'modalChoice_' + Date.now();
 
     const buttonsHtml = (options || []).map(opt => `

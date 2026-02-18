@@ -2920,9 +2920,11 @@ def set_active_fiscal_year(year):
         return False
 
 
-def get_last_fetch_date(credential_name: str) -> Optional[str]:
+def get_last_fetch_date(credential_name: str, only_meta: bool = False) -> Optional[str]:
     """
     Get the last fetch date for a credential (stored in fiscal_meta.json).
+    If `only_meta` is True, only consults `fiscal_meta.json` and DOES NOT
+    fall back to scanning `activity.log`.
     Returns ISO 8601 date string or None if not found.
     """
     # First try: fiscal_meta.json (existing behavior)
@@ -2937,6 +2939,9 @@ def get_last_fetch_date(credential_name: str) -> Optional[str]:
             fetches = data.get("last_fetches", {}) if isinstance(data, dict) else {}
             if isinstance(fetches, dict) and credential_name in fetches:
                 return fetches.get(credential_name)
+            # If caller requested only_meta, do not fallback to activity.log
+            if only_meta:
+                return None
     except Exception:
         pass
 
@@ -6756,10 +6761,10 @@ def api_last_fetch_date():
             return jsonify({"last_fetch_date": None}), 400
 
         fetch_key = _get_fetch_tracking_key(credential_name, credential_vat)
-        last_date = get_last_fetch_date(fetch_key) if fetch_key else None
+        last_date = get_last_fetch_date(fetch_key, only_meta=True) if fetch_key else None
         if not last_date and credential_name and fetch_key != credential_name:
             # Backward compatibility: older installs may have written by credential name.
-            last_date = get_last_fetch_date(credential_name)
+            last_date = get_last_fetch_date(credential_name, only_meta=True)
         
         # Format for display if available
         if last_date:
@@ -8036,6 +8041,7 @@ def search():
                                         "totalValue": fmt(total_value),
                                         "type": "Απόδειξη",
                                         "type_name": "Απόδειξη",
+                                        "docType": "receipt",
                                         "lines": invoice_lines,
                                         "is_receipt": True,
                                         "χαρακτηρισμός": "αποδειξακια"
@@ -8167,6 +8173,7 @@ def search():
                                         "type": type_mapped,
                                         "type_code": inv_type,
                                         "type_name": type_mapped,
+                                        "docType": "invoice",
                                         "lines": invoice_lines,
                                         "is_receipt": False
                                     }
@@ -9186,9 +9193,26 @@ def save_summary():
     # ---------------- parse payload ----------------
     try:
         log.info("save_summary: start request from %s", request.remote_addr)
+        try:
+            # Debug: log incoming form keys and a snippet of raw body to diagnose missing mtype
+            form_keys = list(request.form.keys()) if request.form else []
+            log.debug("save_summary: request.form keys=%s, content-type=%s", form_keys, request.headers.get('Content-Type'))
+            try:
+                raw_snip = request.get_data(as_text=True) or ''
+                if raw_snip:
+                    log.debug("save_summary: raw request data (snippet, 2000 chars): %s", raw_snip[:2000])
+            except Exception:
+                log.debug("save_summary: could not read raw request data")
+        except Exception:
+            log.exception("save_summary: debug logging failed")
         raw = None
+        # Prefer legacy form field `summary_json`, but also accept component `summary_data`
         if request.form and request.form.get("summary_json"):
             raw = request.form.get("summary_json")
+            summary = None
+        elif request.form and request.form.get("summary_data"):
+            # component sometimes posts into `summary_data` (SummaryModal hidden input)
+            raw = request.form.get("summary_data")
             summary = None
         else:
             if request.is_json:
@@ -9213,12 +9237,33 @@ def save_summary():
                 summary["AFM"]  = request.form.get("vat") or request.form.get("AFM") or ""
             if request.form.get("issueDate"):
                 summary["issueDate"] = request.form.get("issueDate")
+            # server-side fallback: if form included individual mtype fields, copy them
+            try:
+                # possible form keys: mtype, receipt_mtype, invoice_mtype or camelCase variants
+                form_m = request.form.get('mtype') or request.form.get('receipt_mtype') or request.form.get('invoice_mtype')
+                form_m = form_m or request.form.get('receiptMtype') or request.form.get('invoiceMtype') or request.form.get('mType')
+                if form_m:
+                    summary['mtype'] = form_m
+            except Exception:
+                pass
     except Exception:
         log.exception("save_summary: cannot parse payload")
         flash("Μη έγκυρα δεδομένα περίληψης", "error")
         return redirect(url_for("search"))
 
-    log.info("save_summary: received summary with keys: %s, mtype: %s", list(summary.keys()), summary.get("mtype", "NO MTYPE"))
+    # Normalize possible camelCase keys produced by the component UI so the
+    # server consistently finds `receipt_mtype` / `invoice_mtype` / `mtype`.
+    try:
+        if summary.get('receiptMtype') and not summary.get('receipt_mtype'):
+            summary['receipt_mtype'] = summary.get('receiptMtype')
+        if summary.get('invoiceMtype') and not summary.get('invoice_mtype'):
+            summary['invoice_mtype'] = summary.get('invoiceMtype')
+        if summary.get('mType') and not summary.get('mtype'):
+            summary['mtype'] = summary.get('mType')
+    except Exception:
+        pass
+
+    log.info("save_summary: received summary with keys: %s, mtype: %s, receipt_mtype: %s, invoice_mtype: %s", list(summary.keys()), summary.get("mtype", "NO MTYPE"), summary.get('receipt_mtype',''), summary.get('invoice_mtype',''))
 
     # ---------------- active VAT ----------------
     active = get_active_credential_from_session()
@@ -9280,6 +9325,16 @@ def save_summary():
     # ---------------- HYDRATE & repeat-entry ----------------
     summary = _hydrate_summary_for_excel(summary, vat=str(vat or ""))
     is_receipt = _is_receipt(summary)
+
+    # If the client sent `receipt_mtype` or `invoice_mtype` explicitly, prefer that
+    # over applying repeat-entry fallbacks later. This guards against clients
+    # (fast-flow, components) that may populate the legacy hidden input instead
+    # of the generic `mtype` field.
+    if not summary.get('mtype'):
+        if summary.get('receipt_mtype'):
+            summary['mtype'] = summary.get('receipt_mtype')
+        elif summary.get('invoice_mtype'):
+            summary['mtype'] = summary.get('invoice_mtype')
 
     series_cred = _resolve_series_credential(summary, vat=vat)
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
@@ -10301,12 +10356,18 @@ def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attac
 
 
 def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str, Any], force: bool = False) -> bool:
-    """Pull latest human replies from Discord thread into local ticket storage."""
+    """Pull latest human replies from Discord thread into local ticket storage.
+
+    Additionally, query thread metadata and if the Discord thread is archived/locked
+    propagate that state locally (mark ticket closed) so the UI reflects closures
+    performed on the Discord side even when no new reply is posted.
+    """
     thread_id = str(ticket.get("discord_thread_id") or "").strip()
     headers = _support_discord_headers()
     if not thread_id or not headers:
         return False
 
+    # lightweight rate-limiting for syncs
     if not force:
         last_sync = str(ticket.get("last_discord_sync_at") or "")
         if last_sync:
@@ -10316,6 +10377,25 @@ def _support_discord_sync_thread_messages(data: Dict[str, Any], ticket: Dict[str
                     return False
             except Exception:
                 pass
+
+    # First: check thread metadata to detect archived/locked state (mirror Discord-side close)
+    try:
+        meta_r = requests.get(f"https://discord.com/api/v10/channels/{thread_id}", headers=headers, timeout=8)
+        if meta_r.ok:
+            meta = meta_r.json() or {}
+            # thread objects include an "archived" flag for threads
+            if bool(meta.get("archived") or meta.get("locked")):
+                if str(ticket.get("status") or "").lower() != "closed":
+                    _support_close_ticket_record(ticket, closed_by="admin")
+                    ticket["updated_at"] = _support_now_iso()
+                    _support_save(data)
+                    _support_discord_log_event(f"🔴 Ticket #{ticket.get('id')} έκλεισε (detected archived thread)")
+                    # mark last sync so UI will pick this up immediately
+                    ticket["last_discord_sync_at"] = _support_now_iso()
+                    return True
+    except Exception:
+        # metadata check is best-effort; continue to attempt message sync
+        current_app.logger.debug("Discord thread meta check failed", exc_info=True)
 
     existing = {
         str(m.get("discord_message_id") or "")
@@ -10606,7 +10686,37 @@ def api_support_my_ticket():
     if changed:
         _support_save(data)
 
-    return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-100:], "presence": {"support_typing": support_typing}})
+    # Also include archived tickets metadata so the client can show the archive
+    archived_tickets = []
+    try:
+        user_tickets = [t for t in (data.get("tickets") or []) if str(t.get("user_id") or "") == user_id]
+        user_tickets.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
+        for t in user_tickets:
+            if str(t.get("status") or "").lower() != "closed":
+                continue
+            archived_tickets.append({
+                "id": t.get("id"),
+                "display_name": t.get("display_name") or t.get("username") or "Χρήστης",
+                "closed_at": t.get("closed_at"),
+                "closed_by": t.get("closed_by"),
+            })
+            if len(archived_tickets) >= 20:
+                break
+    except Exception:
+        archived_tickets = []
+
+    latest_closed = archived_tickets[0] if archived_tickets else None
+    closed_notice = bool(latest_closed and str(latest_closed.get("closed_by") or "") in ("admin", "support", "admin/support"))
+
+    return jsonify({
+        "ok": True,
+        "ticket": ticket,
+        "messages": msgs[-100:],
+        "presence": {"support_typing": support_typing},
+        "archived_tickets": archived_tickets,
+        "closed_notice": closed_notice,
+        "latest_closed_ticket": latest_closed,
+    })
 
 
 @app.post("/api/support/ticket/close")
@@ -10647,6 +10757,56 @@ def api_support_ticket_history(ticket_id: int):
     msgs = [m for m in (data.get("messages") or []) if int(m.get("ticket_id") or 0) == int(ticket_id)]
     msgs.sort(key=lambda x: str(x.get("timestamp") or ""))
     return jsonify({"ok": True, "ticket": ticket, "messages": msgs[-200:]})
+
+
+@app.post("/api/support/ticket/delete/<int:ticket_id>")
+@login_required
+def api_support_delete_ticket(ticket_id: int):
+    """Permanently delete an archived (closed) ticket and its messages/attachments.
+    Only the ticket owner may delete their closed tickets.
+    """
+    user_id = str(getattr(current_user, "id", "") or getattr(current_user, "pw_hash", ""))
+    data = _support_load()
+
+    # find ticket
+    ticket = None
+    for t in (data.get("tickets") or []):
+        if int(t.get("id") or 0) == int(ticket_id) and str(t.get("user_id") or "") == user_id:
+            ticket = t
+            break
+
+    if not ticket:
+        return jsonify({"ok": False, "error": "ticket not found"}), 404
+
+    if str(ticket.get("status") or "").lower() != "closed":
+        return jsonify({"ok": False, "error": "only closed tickets can be deleted"}), 400
+
+    # remove associated messages and attachments
+    msgs = data.get("messages") or []
+    remaining_msgs = []
+    for m in msgs:
+        if int(m.get("ticket_id") or 0) == int(ticket_id):
+            # attempt to remove attachments from disk
+            for a in (m.get("attachments") or []):
+                rel = str(a.get("path") or "").strip()
+                if rel:
+                    try:
+                        abs_path = os.path.join(_support_upload_dir(), rel)
+                        if os.path.exists(abs_path):
+                            os.remove(abs_path)
+                    except Exception:
+                        current_app.logger.debug("Failed to remove support attachment %s", rel, exc_info=True)
+            continue
+        remaining_msgs.append(m)
+
+    data["messages"] = remaining_msgs
+
+    # remove the ticket record
+    data["tickets"] = [t for t in (data.get("tickets") or []) if int(t.get("id") or 0) != int(ticket_id)]
+
+    _support_save(data)
+    _support_discord_log_event(f"🗑️ Ticket #{ticket_id} διαγράφηκε από χρήστη")
+    return jsonify({"ok": True, "deleted": True})
 
 
 def _support_find_ticket_for_payload(data: Dict[str, Any], payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

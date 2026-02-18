@@ -183,6 +183,19 @@ export class SummaryModal extends ModalManager {
     if (options.onSave) this.onSave = options.onSave;
     if (options.onClose) this.onClose = options.onClose;
 
+    // Persist component state immediately to the hidden inputs to avoid
+    // races where other page handlers read `#summaryJsonInput` before the
+    // modal has written its internal state (observed in certain fast UX
+    // sequences). This is defensive and idempotent.
+    try {
+      persistSummaryToInput('summaryDataInput', this.currentSummary);
+      const legacy = document.getElementById('summaryJsonInput');
+      if (legacy) {
+        const merged = Object.assign({}, JSON.parse(legacy.value || '{}') || {}, this.currentSummary || {});
+        legacy.value = JSON.stringify(merged);
+      }
+    } catch (err) { /* best-effort only */ }
+
     // Open modal and focus
     this.open();
     setTimeout(() => {
@@ -280,22 +293,42 @@ export class SummaryModal extends ModalManager {
     const invoiceSelect = this.element.querySelector('#invoiceMtypeSelect');
     const receiptSelect = this.element.querySelector('#receiptMtypeSelectSummary');
 
-    // Check if MTYPE is available for this category
-    const docType = summary.docType || summary.type || '';
-    const hasInvoiceMtype = this.options.mtypeOptions?.invoice?.length > 0;
-    const hasReceiptMtype = this.options.mtypeOptions?.receipt?.length > 0;
+    // Normalize mtype options (support both legacy array-of-{value,label} and
+    // the newer object shape { invoice: [...], receipt: [...] })
+    const rawMtypes = this.options.mtypeOptions || window.G_CATEGORY_DATA?.mtype_options || {};
+    let invoiceOptions = [];
+    let receiptOptions = [];
 
-    // Show/hide containers
+    if (Array.isArray(rawMtypes)) {
+      // legacy: array of {value,label} (or strings) -> use for both invoice & receipt
+      invoiceOptions = receiptOptions = rawMtypes;
+    } else if (rawMtypes && typeof rawMtypes === 'object') {
+      invoiceOptions = rawMtypes.invoice || rawMtypes.invoices || rawMtypes;
+      receiptOptions = rawMtypes.receipt || rawMtypes.receipts || rawMtypes;
+    }
+
+    const docType = summary.docType || summary.type || '';
+    const hasInvoiceMtype = Array.isArray(invoiceOptions) && invoiceOptions.length > 0;
+    const hasReceiptMtype = Array.isArray(receiptOptions) && receiptOptions.length > 0;
+
+    // Consider receipts mode from multiple signals: explicit summary flag, type_name hint or global UI toggle
+    const receiptsModeActive = Boolean(
+      summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || summary.type || '')))
+      || (typeof window.isReceiptsOn === 'function' && window.isReceiptsOn())
+    );
+
+    // Show/hide containers and populate selects with a tolerant parser
     if (invoiceContainer && hasInvoiceMtype && docType === 'invoice') {
       invoiceContainer.style.display = 'block';
-      this._populateMtypeSelect(invoiceSelect, this.options.mtypeOptions.invoice, summary.invoiceMtype || '');
+      this._populateMtypeSelect(invoiceSelect, invoiceOptions, summary.invoiceMtype || summary.mtype || '');
     } else if (invoiceContainer) {
       invoiceContainer.style.display = 'none';
     }
 
-    if (receiptContainer && hasReceiptMtype && docType === 'receipt') {
+    // show receipt selector when summary indicates a receipt OR the receipts UI toggle is active
+    if (receiptContainer && hasReceiptMtype && (docType === 'receipt' || receiptsModeActive)) {
       receiptContainer.style.display = 'block';
-      this._populateMtypeSelect(receiptSelect, this.options.mtypeOptions.receipt, summary.receiptMtype || '');
+      this._populateMtypeSelect(receiptSelect, receiptOptions, summary.receiptMtype || summary.mtype || '');
     } else if (receiptContainer) {
       receiptContainer.style.display = 'none';
     }
@@ -305,49 +338,91 @@ export class SummaryModal extends ModalManager {
     if (!select || !options) return;
 
     select.innerHTML = '<option value="">-- επίλεξε --</option>';
-    (Array.isArray(options) ? options : Object.keys(options)).forEach(opt => {
+
+    // options may be:
+    // - an array of strings: ['11','12']
+    // - an array of objects: [{value:'11', label:'Ταμειακή'}]
+    // - an object keyed by value -> label
+    const list = Array.isArray(options)
+      ? options
+      : (typeof options === 'object' ? Object.keys(options).map(k => ({ value: k, label: options[k] })) : []);
+
+    list.forEach(item => {
+      const val = (typeof item === 'string') ? item : (item.value || item.key || '');
+      const label = (typeof item === 'string') ? item : (item.label || item.value || String(val));
       const o = document.createElement('option');
-      o.value = opt;
-      o.textContent = opt;
-      if (opt === currentValue) o.selected = true;
+      o.value = val;
+      o.textContent = label;
+      if (String(val) === String(currentValue)) o.selected = true;
       select.appendChild(o);
     });
-  }
 
-  _handleSave() {
-    if (!this.submitGuard.canSubmit()) return;
+    // Keep legacy hidden input and page-level state in sync when user changes selects
+    const syncToLegacy = () => {
+      try {
+        const selVal = select.value || '';
 
-    this.submitGuard.lock();
+        // Directly merge the selected value into the legacy hidden input so
+        // server-side flows that read `#summaryJsonInput` always get the latest MTYPE.
+        const legacyInput = document.getElementById('summaryJsonInput');
+        if (legacyInput) {
+          let parsed = {};
+          try { parsed = JSON.parse(legacyInput.value || '{}') || {}; } catch(_) { parsed = {}; }
+          parsed.mtype = selVal || parsed.mtype || '';
+          if (/receipt/i.test(select.id || '')) parsed.receipt_mtype = selVal || parsed.receipt_mtype || '';
+          else parsed.invoice_mtype = selVal || parsed.invoice_mtype || '';
+          legacyInput.value = JSON.stringify(parsed);
+        }
 
-    try {
-      // Read categories from UI
-      const linesContainer = this.element.querySelector('#summaryLinesContainer');
-      const categoriesFromUI = readCategoriesFromUI(linesContainer);
+        // Also update the component's in-memory summary and component-hidden input
+        if (this.currentSummary) {
+          if (/receipt/i.test(select.id || '')) this.currentSummary.receiptMtype = selVal || '';
+          else this.currentSummary.invoiceMtype = selVal || '';
+          persistSummaryToInput('summaryDataInput', this.currentSummary);
+        }
 
-      // Update summary with selected categories
-      if (this.currentSummary.lines) {
-        this.currentSummary.lines.forEach(line => {
-          const lineId = line.id || line.line_id || '';
-          if (lineId in categoriesFromUI) {
-            line.category = categoriesFromUI[lineId];
-          }
-        });
+        // Finally, call the global helper to keep any other legacy UI in sync.
+        if (typeof window.updateSummaryFromDom === 'function') {
+          try { window.updateSummaryFromDom(); } catch(e) { /* ignore */ }
+        }
+      } catch (err) {
+        console.warn('syncToLegacy failed', err);
       }
+    };
 
+    // Attach change handler (avoid duplicate attachments)
+    if (!select._rc_mtype_synced) {
+      select.addEventListener('change', syncToLegacy);
+      select._rc_mtype_synced = true;
+    }
       // Read MTYPE selections
       const invoiceSelect = this.element.querySelector('#invoiceMtypeSelect');
       const receiptSelect = this.element.querySelector('#receiptMtypeSelectSummary');
 
       if (invoiceSelect && invoiceSelect.style.display !== 'none') {
         this.currentSummary.invoiceMtype = invoiceSelect.value || '';
+        // also expose snake_case for legacy consumers
+        this.currentSummary.invoice_mtype = this.currentSummary.invoiceMtype || '';
       }
 
       if (receiptSelect && receiptSelect.style.display !== 'none') {
         this.currentSummary.receiptMtype = receiptSelect.value || '';
+        // also expose snake_case for legacy consumers
+        this.currentSummary.receipt_mtype = this.currentSummary.receiptMtype || '';
       }
 
-      // Persist to hidden input
+      // Persist to hidden input (include both camelCase and snake_case keys)
       persistSummaryToInput('summaryDataInput', this.currentSummary);
+
+      // Also keep legacy hidden `summaryJsonInput` in sync so server-side /save_summary
+      // receives the MTYPE when the classic form is submitted.
+      try {
+        const legacy = document.getElementById('summaryJsonInput');
+        if (legacy) {
+          const merged = Object.assign({}, JSON.parse(legacy.value || '{}') || {}, this.currentSummary || {});
+          legacy.value = JSON.stringify(merged);
+        }
+      } catch (err) { /* ignore */ }
 
       // Call custom handler if provided
       if (this.onSave && typeof this.onSave === 'function') {

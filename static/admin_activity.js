@@ -24,10 +24,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data && Array.isArray(data)) {
                     renderLogs(data);
                 } else {
-                    alert('Failed to fetch logs');
+                    uiAlert('Failed to fetch logs');
                 }
             })
-            .catch(err => alert('Error: ' + err));
+            .catch(err => uiAlert('Error: ' + err));
     }
     
     if (filterForm) {

@@ -168,7 +168,52 @@
     try {
       // Use /save_summary like the normal form does (preserves all server validation)
       const formData = new FormData();
-      formData.append('summary_json', JSON.stringify(receipt));
+
+      // Prefer the live value from the legacy hidden input if present — user may have
+      // changed MTYPE inside the modal after the initial scrape payload was set.
+      let payload = receipt;
+      try {
+        const legacy = document.getElementById('summaryJsonInput');
+        if (legacy && legacy.value && String(legacy.value).trim() !== '') {
+          const parsed = JSON.parse(legacy.value);
+          if (parsed && typeof parsed === 'object') payload = parsed;
+        }
+      } catch (err) {
+        /* ignore and fallback to original scraped receipt */
+      }
+
+      // Merge any live component state (`summaryDataInput`) — copy invoice/receipt mtype and lines
+      try {
+        const compEl = document.getElementById('summaryDataInput');
+        if (compEl && compEl.value && String(compEl.value).trim() !== '') {
+          const comp = JSON.parse(compEl.value || '{}') || {};
+          if (comp && typeof comp === 'object') {
+            // prefer explicit fields from component
+            if (comp.mtype) payload.mtype = comp.mtype;
+            if (comp.receipt_mtype) payload.receipt_mtype = comp.receipt_mtype;
+            if (comp.invoice_mtype) payload.invoice_mtype = comp.invoice_mtype;
+            if (comp.receiptMtype) payload.receipt_mtype = comp.receiptMtype;
+            if (comp.invoiceMtype) payload.invoice_mtype = comp.invoiceMtype;
+            if (comp.lines) payload.lines = comp.lines;
+          }
+        }
+
+        // fallback: use locally-saved receipt MTYPE (or cached backend value)
+        if ((!payload.mtype || payload.mtype === '') && (!payload.receipt_mtype || payload.receipt_mtype === '')) {
+          try {
+            const saved = (window.__cachedReceiptMtype || null) || (localStorage && localStorage.getItem && localStorage.getItem('receipt_mtype')) || null;
+            if (saved) {
+              payload.mtype = payload.mtype || saved;
+              payload.receipt_mtype = payload.receipt_mtype || saved;
+            }
+          } catch(_) { /* ignore */ }
+        }
+      } catch (err) { /* defensive - do not block save */ }
+
+      // debug: ensure payload.mtype present when user selected one
+      try { console.debug('[fast-flow] submitting summary.mtype=', payload.mtype || payload.receipt_mtype || payload.invoice_mtype || ''); } catch(_){}
+
+      formData.append('summary_json', JSON.stringify(payload));
 
       const res = await fetch('/save_summary', {
         method: 'POST',
