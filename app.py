@@ -9005,6 +9005,7 @@ def save_accounts():
     """
     Αναμένει POST με πεδία:
       - account_<vat>__<expense_tag> = account_code
+      - account_g_cash = cash_account_code  (Γ-category specific)
     Παράδειγμα πεδίου: account_24__γενικες_δαπανες = "70.02"
     Επιπλέον μπορεί να στέλνεται JSON payload.
     """
@@ -9014,15 +9015,28 @@ def save_accounts():
             payload = request.get_json()
             accounts = payload.get("accounts", {})
             save_global_accounts_to_credentials(accounts)
+            
+            # Handle account_g_cash from JSON
+            cash_acct = payload.get("account_g_cash", "").strip()
+            if cash_acct:
+                settings = load_settings() or {}
+                settings["account_g_cash"] = cash_acct
+                save_settings(settings)
+            
             flash("Οι γενικοί λογαριασμοί αποθηκεύτηκαν", "success")
             return redirect(url_for("credentials"))
+        
         # αλλιώς form fields
         form = request.form
+        
         # Δομή: accounts[vat][expense_tag] = code
         accounts = {}
         # αναζητούμε πεδία που ξεκινούν με "account_"
         for key in form:
             if not key.startswith("account_"):
+                continue
+            # Skip account_g_cash (handle separately)
+            if key == "account_g_cash":
                 continue
             # key format: account_{vat}__{expense_tag}
             rest = key[len("account_"):]
@@ -9034,8 +9048,18 @@ def save_accounts():
             if vat_key not in accounts:
                 accounts[vat_key] = {}
             accounts[vat_key][expense_tag] = code
-        # αποθηκεύουμε
+        
+        # αποθηκεύουμε global accounts
         save_global_accounts_to_credentials(accounts)
+        
+        # Handle account_g_cash separately (Γ-category specific)
+        cash_acct = form.get("account_g_cash", "").strip()
+        if cash_acct:
+            settings = load_settings() or {}
+            settings["account_g_cash"] = cash_acct
+            save_settings(settings)
+            log.info("save_accounts: saved account_g_cash=%s", cash_acct)
+        
         flash("Οι γενικοί λογαριασμοί αποθηκεύτηκαν", "success")
     except Exception as e:
         log.exception("save_accounts failed")
@@ -9190,6 +9214,138 @@ def save_summary():
             pass
         return {"enabled": False, "mapping": {}, "invoice_mtype": "", "receipt_mtype": ""}
 
+    def _normalize_book_category(value) -> str:
+        s = str(value or "").strip().upper()
+        if s in ("Γ", "G"):
+            return "G"
+        if s in ("Β", "B"):
+            return "B"
+        return s
+
+    def _resolve_mtype_fields(s: dict):
+        s = s or {}
+        settings = load_settings() or {}
+        code_to_label = {
+            str(settings.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip(): "Αγορών - Εξόδων Ταμειακή",
+            str(settings.get("article_movement_type_tameiaki", "") or "").strip(): "Ταμειακή",
+            str(settings.get("article_movement_type_agoron_exodon", "") or "").strip(): "Αγορών - Εξόδων",
+            str(settings.get("article_movement_type_symsifistiki", "") or "").strip(): "Συμψηφιστική",
+            str(settings.get("article_movement_type_agoron_exodon_opseos", "") or "").strip(): "Αγορών - Εξόδων Όψεως",
+        }
+        code_to_label = {k: v for k, v in code_to_label.items() if k}
+
+        mtype_code = _first(
+            s.get("mtype"),
+            s.get("invoice_mtype"),
+            s.get("receipt_mtype"),
+            s.get("mType"),
+            s.get("invoiceMtype"),
+            s.get("receiptMtype"),
+        )
+
+        if not mtype_code:
+            raw_label = str(s.get("mtype_label") or s.get("movement_type_label") or "").strip().lower()
+            if raw_label:
+                for code_key, label_val in code_to_label.items():
+                    if raw_label == str(label_val).strip().lower():
+                        mtype_code = code_key
+                        break
+
+        mtype_code = str(mtype_code or "").strip()
+        mtype_label = code_to_label.get(mtype_code, "")
+        if not mtype_label:
+            mtype_label = str(s.get("mtype_label") or "").strip()
+
+        return mtype_code, mtype_label
+
+    def _should_create_cash_mirror(base_entry: dict) -> bool:
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+            bcat = _normalize_book_category(base_entry.get("book_category"))
+            if bcat != "G":
+                return False
+
+            settings = load_settings() or {}
+            trigger_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip()
+            entry_code = str(base_entry.get("mtype") or "").strip()
+            mtype_label_lower = str(base_entry.get("mtype_label") or "").lower()
+            return bool((trigger_code and entry_code == trigger_code) or ("αγορών" in mtype_label_lower and "ταμει" in mtype_label_lower))
+        except Exception:
+            return False
+
+    def _remove_cash_mirror_for_mark(epsilon_cache: list, mark: str) -> bool:
+        try:
+            removed = False
+            target = str(mark or "").strip()
+            for idx in range(len(epsilon_cache) - 1, -1, -1):
+                row = epsilon_cache[idx]
+                if str(row.get("mark") or "").strip() == target and bool(row.get("_auto_cash_payment")):
+                    epsilon_cache.pop(idx)
+                    removed = True
+            if removed:
+                log.info("save_summary: removed stale mirror cash-payment entries for MARK=%s", mark)
+            return removed
+        except Exception:
+            log.exception("save_summary: failed removing stale mirror entries for MARK=%s", mark)
+            return False
+
+    def _maybe_append_cash_mirror(epsilon_cache: list, base_entry: dict, mark: str):
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+
+            if not _should_create_cash_mirror(base_entry):
+                return False
+
+            settings = load_settings() or {}
+
+            tameiaki_mtype = str(settings.get("article_movement_type_tameiaki", "14") or "").strip()
+            cash_account = str(settings.get("account_g_cash", "") or "").strip()
+            supplier_account = str(settings.get("account_g_supplier_wholesale", "") or "").strip()
+            if not (tameiaki_mtype and cash_account and supplier_account):
+                return False
+
+            # Avoid duplicate mirror entry for same MARK
+            for item in (epsilon_cache or []):
+                if str(item.get("mark") or "").strip() == str(mark or "").strip() and bool(item.get("_auto_cash_payment")):
+                    return False
+
+            from copy import deepcopy
+            mirror_entry = deepcopy(base_entry)
+            mirror_entry["mtype"] = tameiaki_mtype
+            mirror_entry["mtype_label"] = "Ταμειακή"
+            mirror_entry["_auto_cash_payment"] = True
+            mirror_entry["book_category"] = "G"
+            mirror_entry["is_receipt"] = bool(base_entry.get("is_receipt"))
+
+            amt_str = str(base_entry.get("totalValue") or "0")
+            mirror_entry["lines"] = [
+                {
+                    "id": "mirror_debit",
+                    "description": "Χρέωση - Προμηθευτής χονδρικής (auto)",
+                    "amount": amt_str,
+                    "vat": "0",
+                    "category": "προμηθευτής_χονδρικής",
+                    "vat_category": ""
+                },
+                {
+                    "id": "mirror_credit",
+                    "description": "Πίστωση - Ταμείο (auto)",
+                    "amount": amt_str,
+                    "vat": "0",
+                    "category": "ταμείο",
+                    "vat_category": ""
+                }
+            ]
+
+            epsilon_cache.append(mirror_entry)
+            log.info("save_summary: created mirror cash-payment entry MARK=%s with mtype=%s", mark, tameiaki_mtype)
+            return True
+        except Exception:
+            log.exception("save_summary: mirror entry creation failed (non-blocking)")
+            return False
+
     # ---------------- parse payload ----------------
     try:
         log.info("save_summary: start request from %s", request.remote_addr)
@@ -9272,6 +9428,10 @@ def save_summary():
         log.error("save_summary: missing vat - active=%s summary_afm=%s", bool(active), summary.get("AFM"))
         flash("Δεν έχει επιλεγεί ενεργός πελάτης (ΑΦΜ)", "error")
         return redirect(url_for("search"))
+    
+    # If active credential is not set (or missing book_category), try to load from vat
+    if not active or not active.get("book_category"):
+        active = get_cred_by_vat(vat) or {}
 
     # ---------------- ensure lines / normalize ----------------
     def float_from_comma(value):
@@ -9336,6 +9496,15 @@ def save_summary():
         elif summary.get('invoice_mtype'):
             summary['mtype'] = summary.get('invoice_mtype')
 
+    try:
+        resolved_mtype_code, resolved_mtype_label = _resolve_mtype_fields(summary)
+        if resolved_mtype_code:
+            summary["mtype"] = resolved_mtype_code
+        if resolved_mtype_label and not summary.get("mtype_label"):
+            summary["mtype_label"] = resolved_mtype_label
+    except Exception:
+        log.exception("save_summary: mtype resolve failed")
+
     series_cred = _resolve_series_credential(summary, vat=vat)
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
 
@@ -9382,6 +9551,24 @@ def save_summary():
             # Fallback σε invoice_mtype αν δεν υπάρχει receipt_mtype (για backward compatibility)
             summary["mtype"] = conf["invoice_mtype"]
             log.info("save_summary (receipt): Applied invoice_mtype='%s' from repeat_entry (fallback)", conf["invoice_mtype"])
+
+    # Safety fallback: για Γ-category τιμολόγια, μην αφήνεις ποτέ κενό invoice mtype
+    try:
+        if (not is_receipt) and _normalize_book_category(active.get("book_category")) == "G" and not str(summary.get("mtype") or "").strip():
+            settings_for_fallback = load_settings() or {}
+            summary["mtype"] = str(settings_for_fallback.get("article_movement_type_agoron_exodon") or "12").strip()
+            log.info("save_summary: Applied fallback invoice mtype='%s' for Γ-category invoice", summary.get("mtype"))
+    except Exception:
+        log.exception("save_summary: failed applying fallback invoice mtype")
+
+    # Re-resolve mtype code/label after repeat-entry and fallbacks
+    try:
+        resolved_mtype_code, resolved_mtype_label = _resolve_mtype_fields(summary)
+        summary["mtype"] = str(resolved_mtype_code or "").strip()
+        if resolved_mtype_label:
+            summary["mtype_label"] = resolved_mtype_label
+    except Exception:
+        log.exception("save_summary: mtype re-resolve failed after repeat-entry")
 
     # --- GUARD: μπλοκάρουμε άδεια/άκυρα summaries ---
     try:
@@ -9487,12 +9674,33 @@ def save_summary():
                     }); updated = True
 
             # Ενημέρωση MTYPE στο top-level του παραστατικού (αν υπάρχει στο summary)
-            new_mtype = summary.get("mtype","") or ""
+            new_mtype, new_mtype_label = _resolve_mtype_fields(summary)
             if new_mtype and str(existing.get("mtype","")) != new_mtype:
                 existing["mtype"] = new_mtype
                 updated = True
+            if new_mtype_label and str(existing.get("mtype_label", "")) != new_mtype_label:
+                existing["mtype_label"] = new_mtype_label
+                updated = True
+
+            new_book_category = "G" if _normalize_book_category(active.get("book_category")) == "G" else ""
+            if new_book_category and str(existing.get("book_category", "")) != new_book_category:
+                existing["book_category"] = new_book_category
+                updated = True
+            if bool(existing.get("is_receipt")) != bool(is_receipt):
+                existing["is_receipt"] = bool(is_receipt)
+                updated = True
+
+            should_have_mirror = _should_create_cash_mirror(existing)
+            mirror_created = False
+            mirror_removed = False
+            if should_have_mirror:
+                mirror_created = _maybe_append_cash_mirror(epsilon_cache, existing, mark)
+            else:
+                mirror_removed = _remove_cash_mirror_for_mark(epsilon_cache, mark)
+                if mirror_removed:
+                    updated = True
             
-            if updated:
+            if updated or mirror_created or mirror_removed:
                 try:
                     if _dt and _tz: 
                         existing["_updated_at"] = _dt.now(_tz.utc).isoformat()
@@ -9535,7 +9743,12 @@ def save_summary():
                 except Exception:
                     log.exception("save_summary: ensure/create excel failed")
 
-                flash("Ενημερώθηκε ο χαρακτηρισμός στο cache (epsilon).", "success")
+                if mirror_created:
+                    flash("Ενημερώθηκε το epsilon και δημιουργήθηκε ταμειακή εγγραφή.", "success")
+                elif mirror_removed:
+                    flash("Ενημερώθηκε το epsilon και αφαιρέθηκε παλιά ταμειακή εγγραφή.", "success")
+                else:
+                    flash("Ενημερώθηκε ο χαρακτηρισμός στο cache (epsilon).", "success")
                 return redirect(url_for("search"))
             else:
                 flash("Δεν υπήρξε αλλαγή στις κατηγορίες.", "info")
@@ -9633,6 +9846,9 @@ def save_summary():
 
     # ---------------- Build epsilon entry & append ----------------
     try:
+        # Resolve mtype code/label robustly from summary payload
+        mtype_code, mtype_label = _resolve_mtype_fields(summary)
+        
         epsilon_entry = {
             "mark": mark,
             "issueDate": summary.get("issueDate",""),
@@ -9648,7 +9864,10 @@ def save_summary():
             "category": ("αποδειξακια" if is_receipt else (summary.get("category") or "")),
             "χαρακτηρισμός": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
             "characteristic": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
-            "mtype": summary.get("mtype","") or "",  # Είδος Κίνησης για Γ Category (invoice-level)
+            "mtype": mtype_code,  # Είδος Κίνησης code για Γ Category (invoice-level)
+            "mtype_label": mtype_label,  # Είδος Κίνησης label (για mirror detection)
+            "book_category": "G" if _normalize_book_category(active.get("book_category")) == "G" else "",  # Γ-category flag
+            "is_receipt": is_receipt,  # Flag: True για αποδείξεις, False για τιμολόγια
             "AFM_issuer": summary.get("AFM_issuer","") or summary.get("AFM",""),
             "Name_issuer": summary.get("Name_issuer") or summary.get("Name",""),
             "AFM": summary.get("AFM","") or vat,
@@ -9676,6 +9895,8 @@ def save_summary():
 
         try:
             epsilon_cache.append(epsilon_entry)
+            _maybe_append_cash_mirror(epsilon_cache, epsilon_entry, mark)
+            
             _safe_save_epsilon_cache(vat, epsilon_cache)
             flash("Η περίληψη αποθηκεύτηκε και προστέθηκε νέα εγγραφή epsilon.", "success")
             try:
