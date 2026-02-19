@@ -637,6 +637,11 @@ window.openModal = function(id){
   }
 };
 
+// Fallback: ensure categoryAllowedForVat is always available for renderers.
+if (typeof window !== 'undefined' && typeof window.categoryAllowedForVat !== 'function') {
+  window.categoryAllowedForVat = function(){ return true; };
+}
+
 // Δέχεται είτε ποσοστά είτε kat_fpa_* και επιστρέφει ΠΑΝΤΑ ποσοστά σύμφωνα με: Α→0, Β→6, Γ→13, Δ→17, Ε→24
 // ΚΑΝΟΝΑΣ: Α→0%, Β→6%, Γ→13%, Δ→17%, Ε→24%
 function normalizeMapping(m){
@@ -736,12 +741,26 @@ function katToPercent(k){
   function categoryAllowedForVat(cat, vatKey){
     if(!cat) return false;
     const key = String(cat).trim();
+    let normVat = (vatKey || '').toString().toLowerCase().trim().replace(',', '.');
+    if (/\b24\b|24%|24\.0/.test(normVat)) normVat = '24%';
+    else if (/\b17\b|17%|17\.0/.test(normVat)) normVat = '17%';
+    else if (/\b13\b|13%|13\.0/.test(normVat)) normVat = '13%';
+    else if (/\b6\b|6%|6\.0/.test(normVat)) normVat = '6%';
+    else if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|exempt|no\s*vat/.test(normVat)) normVat = '0%';
+    const vatNormKey = normVat || (vatKey || '');
     // Εγγυοδοσία: μόνο στο 0% στο repeat mapping modal.
-    if(key === 'εγγυοδοσια' && vatKey !== '0%') return false;
+    if(key === 'εγγυοδοσια' && vatNormKey !== '0%') return false;
     const allowed = CATEGORY_VAT_CONSTRAINTS[key];
-    if(!allowed || !allowed.length) return false;
-    return allowed.includes(vatKey);
+    if(!allowed || !allowed.length) return true;
+    return allowed.includes(vatNormKey);
   }
+
+  try {
+    if (typeof window !== 'undefined') {
+      window.categoryAllowedForVat = categoryAllowedForVat;
+      window.CATEGORY_VAT_CONSTRAINTS = CATEGORY_VAT_CONSTRAINTS;
+    }
+  } catch(_) {}
 
   
   async function fetchDefaultMapping() {
@@ -1847,6 +1866,8 @@ if (typeof window !== 'undefined') {
   window.CUSTOMER_CATEGORIES = window.CUSTOMER_CATEGORIES || CUSTOMER_CATEGORIES.slice();
   // Expose G_CATEGORY_DATA for MTYPE support
   window.G_CATEGORY_DATA = {{ g_category_data | tojson | safe if g_category_data else 'null' }};
+  // Keep a copy of the server-provided summary to rehydrate missing lines if needed.
+  window.__RC_SERVER_MODAL_SUMMARY = {{ modal_summary | tojson | safe if modal_summary else 'null' }};
 }
 
 // Helper: show transient flash (client-side)
@@ -1860,7 +1881,18 @@ if (typeof window !== 'undefined') {
   if(!container || !summaryInput) return;
 
   container.innerHTML = '';
-  const lines = Array.isArray(obj.lines) ? obj.lines : [];
+  let lines = [];
+  if (Array.isArray(obj.lines)) lines = obj.lines;
+  else if (obj.lines && typeof obj.lines === 'object') {
+    try { lines = Object.values(obj.lines).filter(Boolean); } catch(_) { lines = []; }
+  }
+  if ((!lines || !lines.length) && obj.raw && Array.isArray(obj.raw.lines)) {
+    lines = obj.raw.lines;
+  }
+
+  if (!receiptsMode && (!lines || lines.length === 0)) {
+    return;
+  }
 
   try {
     const markCandidates = [obj && (obj.mark || obj.MARK || obj.Mark), obj && obj.number];
@@ -1917,7 +1949,14 @@ if (typeof window !== 'undefined') {
   // ensure each line has id and normalized keys
   function normalizeSummary(summary){
     if(!summary) summary = {};
-    const lines = Array.isArray(summary.lines) ? summary.lines.slice() : [];
+    let lines = [];
+    if (Array.isArray(summary.lines)) lines = summary.lines.slice();
+    else if (summary.lines && typeof summary.lines === 'object') {
+      try { lines = Object.values(summary.lines).filter(Boolean); } catch(_) { lines = []; }
+    }
+    if ((!lines || !lines.length) && summary.raw && Array.isArray(summary.raw.lines)) {
+      lines = summary.raw.lines.slice();
+    }
     const norm = lines.map((l, idx) => {
       const id = (l && (l.id || l.line_id)) ? String(l.id || l.line_id) : ('l' + idx);
       return {
@@ -2111,6 +2150,53 @@ if (typeof window !== 'undefined') {
     return window.CUSTOMER_CATEGORIES || [];
   }
 
+  function normalizeCategoryListSafe(list){
+    const out = [];
+    (list || []).forEach(item => {
+      if(!item) return;
+      const key = String(item).trim();
+      if(!key || key.toLowerCase() === 'αποδειξακια') return;
+      if(!out.includes(key)) out.push(key);
+    });
+    return out;
+  }
+
+  function ensureSummaryCategories(){
+    const existing = getCategories();
+    if (Array.isArray(existing) && existing.length) {
+      window.__SUMMARY_CATEGORIES_FETCHED = true;
+      return Promise.resolve(existing);
+    }
+    if (window.__SUMMARY_CATEGORIES_PROMISE) return window.__SUMMARY_CATEGORIES_PROMISE;
+    const vat = window._repeatModalVAT || "{{ vat or '' }}";
+    window.__SUMMARY_CATEGORIES_PROMISE = fetch('/api/char_profiles' + (vat ? ('?vat=' + encodeURIComponent(vat)) : ''), {
+      credentials: 'same-origin'
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        const tags = (j && Array.isArray(j.expense_tags)) ? j.expense_tags : [];
+        if (tags.length) {
+          CUSTOMER_CATEGORIES = normalizeCategoryListSafe(tags);
+          window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
+        }
+        if (j && j.category_labels) {
+          window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
+          Object.assign(window.CATEGORY_LABELS, j.category_labels);
+        }
+        window.__SUMMARY_CATEGORIES_FETCHED = true;
+        return getCategories();
+      })
+      .catch(() => {
+        window.__SUMMARY_CATEGORIES_FETCHED = true;
+        return getCategories();
+      })
+      .finally(() => {
+        window.__SUMMARY_CATEGORIES_PROMISE = null;
+      });
+    return window.__SUMMARY_CATEGORIES_PROMISE;
+  }
+  window.ensureSummaryCategories = ensureSummaryCategories;
+
   // Setup invoice-level MTYPE dropdown for Γ Category
   function setupInvoiceMtype(summary) {
     const mtypeContainer = document.getElementById('invoiceMtypeContainer');
@@ -2248,6 +2334,17 @@ if (typeof window !== 'undefined') {
     // clear container
     container.innerHTML = '';
 
+    if ((!categories || !categories.length) && !window.__SUMMARY_CATEGORIES_FETCHED) {
+      const loading = document.createElement('div');
+      loading.className = 'mt-2 text-sm text-gray-600';
+      loading.innerText = 'Φόρτωση κατηγοριών...';
+      container.appendChild(loading);
+      ensureSummaryCategories().then(() => {
+        renderSummaryLines();
+      });
+      return;
+    }
+
     // Title (optional)
     // const info = document.createElement('div'); info.className='mb-2 text-sm text-gray-700'; container.appendChild(info);
 
@@ -2371,6 +2468,15 @@ if (typeof window !== 'undefined') {
     const now = summaryInput ? summaryInput.value : '';
     if(now !== lastSummaryValue){
       lastSummaryValue = now;
+      // Avoid re-rendering while user edits categories in the open modal.
+      try {
+        const modalEl = document.getElementById('summaryModal');
+        const visible = modalEl && window.getComputedStyle(modalEl).display !== 'none';
+        const lastEdit = window.__RC_LAST_SUMMARY_EDIT || 0;
+        if (visible && lastEdit && (Date.now() - lastEdit) < 800) {
+          return;
+        }
+      } catch(_) {}
       // re-render so UI matches new data
       renderSummaryLines();
     }
@@ -4310,6 +4416,7 @@ function hideSummaryModal(){
   const modal = document.getElementById('summaryModal');
   if(!modal) return;
   modal.style.display = 'none';
+  try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
   try {
     const api = window.WaitOverlay;
     if(api && typeof api.suspend === 'function'){
@@ -4319,6 +4426,23 @@ function hideSummaryModal(){
   } catch(_){}
 }
 window.hideSummaryModal = hideSummaryModal;
+
+function clearSummaryModalUI(){
+  try {
+    const ids = [
+      'summaryModalMark','summary_AA','summary_AFM','summary_Name',
+      'summary_issueDate','summary_type_name','summary_paymentMethodLabel',
+      'summary_totalNetValue','summary_totalVatAmount','summary_totalValue'
+    ];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '';
+    });
+    const container = document.getElementById('summaryLinesContainer');
+    if (container) container.innerHTML = '';
+  } catch(_) {}
+}
+window.clearSummaryModalUI = clearSummaryModalUI;
 
 document.addEventListener('DOMContentLoaded', function(){
   // ---------- DOM references ----------
@@ -4458,7 +4582,14 @@ function prefillSummaryModal(){
       if(!input) return;
       let data = {};
       try { data = JSON.parse(input.value || '{}'); } catch(e){ data = {}; }
-      data.lines = Array.isArray(data.lines) ? data.lines.slice() : [];
+      if (Array.isArray(data.lines)) data.lines = data.lines.slice();
+      else if (data.lines && typeof data.lines === 'object') {
+        try { data.lines = Object.values(data.lines).filter(Boolean); } catch(_) { data.lines = []; }
+      } else if (data.raw && Array.isArray(data.raw.lines)) {
+        data.lines = data.raw.lines.slice();
+      } else {
+        data.lines = [];
+      }
 
       // For every element that has data-line-id inside the modal container, read category and mtype
       const container = document.getElementById('summaryLinesContainer') || document;
@@ -4513,6 +4644,7 @@ function prefillSummaryModal(){
       }
 
       input.value = JSON.stringify(data);
+      window.__RC_LAST_SUMMARY_EDIT = Date.now();
       // Mirror legacy -> component input so both hidden inputs stay in sync. This
       // prevents cases where the template-based handlers update only the legacy
       // `summaryJsonInput` while `summaryDataInput` remains empty (causing
@@ -4864,23 +4996,13 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
           if(mapping && Object.keys(mapping).length && !(useReceiptsSwitch && useReceiptsSwitch.checked)) editRepeatBtn.classList.remove('hidden');
           repeatSwitch.addEventListener('change', async function(){
             const now = this.checked;
-            // if enabling and no mapping -> open modal to create mapping
             if(now){
-              if(!mapping || Object.keys(mapping).length === 0){
-                // open modal letting user create mapping (but only if receipts not selected)
-                if(useReceiptsSwitch && useReceiptsSwitch.checked){
-                  // do not open — receipts use only αποδειξακια
-                  editRepeatBtn.classList.add('hidden');
-                } else {
-                  openRepeatModalWithMapping({});
-                }
+              if(useReceiptsSwitch && useReceiptsSwitch.checked){
+                // receipts + repeat -> do not open mapping modal
+                editRepeatBtn.classList.add('hidden');
               } else {
-                if(useReceiptsSwitch && useReceiptsSwitch.checked){
-                  // receipts + repeat -> hide edit button
-                  editRepeatBtn.classList.add('hidden');
-                } else {
-                  editRepeatBtn.classList.remove('hidden');
-                }
+                editRepeatBtn.classList.remove('hidden');
+                openRepeatModalWithMapping(mapping || {});
               }
             } else {
               editRepeatBtn.classList.add('hidden');
@@ -5062,6 +5184,10 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         summaryInputEl.value = {{ modal_summary | tojson | safe }};
       }
       const obj = JSON.parse(document.getElementById('summaryJsonInput').value || '{}');
+      if (!obj || !Array.isArray(obj.lines) || obj.lines.length === 0) {
+        try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
+        return;
+      }
       renderSummaryLinesFromObject(obj);
     } catch(e) { console.warn('renderSummaryLinesFromObject error', e); }
 
@@ -5667,6 +5793,11 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
   if(!scrapeUrl) {
     // Invoice flow - προσθήκη payment validation (για repeat και non-repeat)
     e.preventDefault();
+
+    if (window.__SUMMARY_SAVE_IN_PROGRESS) return;
+    window.__SUMMARY_SAVE_IN_PROGRESS = true;
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     
     let summary = {};
     try {
@@ -5809,8 +5940,22 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       if (!saveRes.ok) {
         const t = await saveRes.text().catch(()=>'');
         await showModalAlert('Σφάλμα', 'Αποτυχία αποθήκευσης (HTTP ' + saveRes.status + '): ' + t);
+        window.__SUMMARY_SAVE_IN_PROGRESS = false;
+        if (submitBtn) submitBtn.disabled = false;
         return;
       }
+
+      try { hideSummaryModal(); } catch(_) {}
+      try {
+        const summaryInput = document.getElementById('summaryJsonInput');
+        if (summaryInput) summaryInput.value = '';
+        const summaryDataInput = document.getElementById('summaryDataInput');
+        if (summaryDataInput) summaryDataInput.value = '';
+        const linesContainer = document.getElementById('summaryLinesContainer');
+        if (linesContainer) linesContainer.innerHTML = '';
+        window.__RC_SUPPRESS_SUMMARY_MODAL = true;
+        setTimeout(() => { window.__RC_SUPPRESS_SUMMARY_MODAL = false; }, 1200);
+      } catch(_) {}
       
       // Successful save - partial reload
       const reloaded = await partiallyReloadInvoiceTable();
@@ -5819,10 +5964,14 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       } else {
         window.location = window.location.pathname;
       }
+      window.__SUMMARY_SAVE_IN_PROGRESS = false;
+      if (submitBtn) submitBtn.disabled = false;
     } catch (err) {
       hideLoadingOverlay();
       console.error('AJAX save error:', err);
       await showModalAlert('Σφάλμα', 'Σφάλμα αποθήκευσης: ' + (err.message || err));
+      window.__SUMMARY_SAVE_IN_PROGRESS = false;
+      if (submitBtn) submitBtn.disabled = false;
     }
     return;
   }
@@ -5924,8 +6073,23 @@ document.addEventListener("DOMContentLoaded", function(){
     let obj = {};
     try { obj = JSON.parse(summaryEl.value || '{}'); } catch(e){ obj = {}; }
 
+    try {
+      if ((!Array.isArray(obj.lines) || obj.lines.length === 0) && window.__RC_SERVER_MODAL_SUMMARY && Array.isArray(window.__RC_SERVER_MODAL_SUMMARY.lines) && window.__RC_SERVER_MODAL_SUMMARY.lines.length) {
+        obj.lines = window.__RC_SERVER_MODAL_SUMMARY.lines;
+        summaryEl.value = JSON.stringify(obj);
+      }
+    } catch(_) {}
+
     function isMeaningful(o){
       if (!o || typeof o !== 'object') return false;
+
+      function isReceipt(obj){
+        try {
+          const t = (obj.type_name || obj.type || '').toString().toLowerCase();
+          const c = (obj.category || obj.characteristic || obj['χαρακτηρισμός'] || '').toString().toLowerCase();
+          return !!(obj.is_receipt || t.includes('απόδει') || t.includes('receipt') || t.includes('λιαν') || c === 'αποδειξακια');
+        } catch(_) { return false; }
+      }
 
       // quick acceptors: important single fields
       const important = ['mark','MARK','AFM_issuer','AFM','totalValue','totalNetValue','total_amount','issueDate','issue_date','progressive_aa','AA'];
@@ -5942,6 +6106,9 @@ document.addEventListener("DOMContentLoaded", function(){
                (ln.id && String(ln.id).trim() !== '') ) return true;
         }
       }
+
+      // Receipts can be header-only; invoices require lines.
+      if (isReceipt(o)) return true;
 
       // fallback: if object has more than one non-empty key -> accept
       const nonEmptyKeys = Object.keys(o).filter(k => {
@@ -6114,6 +6281,39 @@ function readMappingFromUI(){
   }, 2000);
 
   safeLog('RC-DEBUG injected');
+})();
+
+(function rcDebugSummaryWrites(){
+  try {
+    if (window.__RC_DEBUG_SUMMARY_PATCHED) return;
+    window.__RC_DEBUG_SUMMARY_PATCHED = true;
+    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (!desc || typeof desc.set !== 'function' || typeof desc.get !== 'function') return;
+
+    Object.defineProperty(HTMLInputElement.prototype, 'value', {
+      configurable: true,
+      enumerable: true,
+      get: function(){
+        return desc.get.call(this);
+      },
+      set: function(v){
+        try {
+          if (this && this.id === 'summaryJsonInput' && window.__RC_DEBUG_SUMMARY) {
+            const prev = desc.get.call(this);
+            const next = String(v || '');
+            if (prev !== next) {
+              const preview = next.length > 300 ? next.slice(0, 300) + '...' : next;
+              console.log('[RC-DEBUG] summaryJsonInput.value set', { prev_len: prev.length, next_len: next.length, preview });
+              try { console.log('[RC-DEBUG] summary setter stack', new Error().stack); } catch(_) {}
+            }
+          }
+        } catch(_) {}
+        return desc.set.call(this, v);
+      }
+    });
+  } catch(e) {
+    try { console.warn('rcDebugSummaryWrites failed', e); } catch(_) {}
+  }
 })();
 (function(){
   function getSummaryData(){
@@ -6343,6 +6543,7 @@ function readMappingFromUI(){
     const nameEl = document.getElementById('summary_Name');
     const issueEl = document.getElementById('summary_issueDate');
     const typeEl = document.getElementById('summary_type_name');
+    const paymentEl = document.getElementById('summary_paymentMethodLabel');
     const netEl = document.getElementById('summary_totalNetValue');
     const vatEl = document.getElementById('summary_totalVatAmount');
     const totEl = document.getElementById('summary_totalValue');
@@ -6358,9 +6559,89 @@ function readMappingFromUI(){
     }
 
     let lastVal = '';
+    let lastRenderedSig = '';
     function safeText(node, v){
       if(!node) return;
       node.textContent = (v === null || v === undefined) ? '' : String(v);
+    }
+
+    function isMeaningfulSummary(obj){
+      if (!obj || typeof obj !== 'object') return false;
+      const keys = ['mark','MARK','AFM_issuer','AFM','totalValue','totalNetValue','total_amount','issueDate','issue_date','progressive_aa','AA'];
+      for (const k of keys) {
+        if (obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') return true;
+      }
+      if (obj.raw && typeof obj.raw === 'object') {
+        for (const k of ['MARK','issuer_vat','total_amount','issue_date','progressive_aa']) {
+          if (obj.raw[k] !== undefined && obj.raw[k] !== null && String(obj.raw[k]).trim() !== '') return true;
+        }
+      }
+      if (Array.isArray(obj.lines) && obj.lines.length) {
+        for (const ln of obj.lines) {
+          if (!ln) continue;
+          if ((ln.description && String(ln.description).trim() !== '') ||
+              (ln.amount && String(ln.amount).trim() !== '') ||
+              (ln.id && String(ln.id).trim() !== '')) return true;
+        }
+      }
+      // Receipts can be header-only; invoices should have lines.
+      if (isReceiptSummary(obj)) return true;
+      const nonEmpty = Object.keys(obj).filter(k => {
+        try { return obj[k] !== null && obj[k] !== undefined && String(obj[k]).trim() !== ''; } catch(e){ return false; }
+      });
+      return nonEmpty.length > 1;
+    }
+
+    function isReceiptSummary(obj) {
+      try {
+        const t = (obj.type_name || obj.type || '').toString().toLowerCase();
+        const c = (obj.category || obj.characteristic || obj['χαρακτηρισμός'] || '').toString().toLowerCase();
+        return !!(obj.is_receipt || t.includes('απόδει') || t.includes('receipt') || t.includes('λιαν') || c === 'αποδειξακια');
+      } catch(_) { return false; }
+    }
+
+    function ensureSummaryLines(obj) {
+      try {
+        if (!obj || typeof obj !== 'object') return obj;
+        let hasLines = Array.isArray(obj.lines) && obj.lines.length;
+        if (!hasLines && obj.raw && Array.isArray(obj.raw.lines) && obj.raw.lines.length) {
+          obj.lines = obj.raw.lines;
+          hasLines = true;
+        }
+        if (hasLines) return obj;
+        const server = window.__RC_SERVER_MODAL_SUMMARY;
+        if (server && Array.isArray(server.lines) && server.lines.length) {
+          obj.lines = server.lines;
+          if (summaryInput) summaryInput.value = JSON.stringify(obj);
+        }
+      } catch(_) {}
+      return obj;
+    }
+
+    function summarySignature(obj){
+      if (!obj || typeof obj !== 'object') return '';
+      const base = {
+        mark: obj.mark || obj.MARK || (obj.raw && obj.raw.MARK) || '',
+        aa: obj.AA || obj.aa || obj.progressive_aa || (obj.raw && obj.raw.progressive_aa) || '',
+        afm: obj.AFM_issuer || obj.AFM || obj.issuer_vat || (obj.raw && obj.raw.issuer_vat) || '',
+        issueDate: obj.issueDate || obj.issue_date || (obj.raw && obj.raw.issue_date) || '',
+        type: obj.type_name || obj.type || (obj.raw && obj.raw.doc_type) || '',
+        net: obj.totalNetValue || obj.total_amount || obj.totalValue || (obj.raw && obj.raw.total_amount) || '',
+        vat: obj.totalVatAmount || (obj.raw && obj.raw.totalVatAmount) || '',
+        total: obj.totalValue || obj.total_amount || (obj.raw && obj.raw.total_amount) || ''
+      };
+      let lines = [];
+      if (Array.isArray(obj.lines)) lines = obj.lines;
+      else if (obj.raw && Array.isArray(obj.raw.lines)) lines = obj.raw.lines;
+      const lineSig = (lines || []).map(l => {
+        if (!l) return '';
+        const id = l.id || l.line_id || '';
+        const amt = l.amount || l.lineTotal || l.total || '';
+        const vat = l.vat || l.vatRate || '';
+        const vcat = l.vatCategory || l.vat_category || '';
+        return [id, amt, vat, vcat].join('|');
+      }).join('||');
+      return JSON.stringify(base) + '::' + lineSig;
     }
 
     function renderLines(lines){
@@ -6374,6 +6655,12 @@ function readMappingFromUI(){
 
       // Χρησιμοποιούμε τα ίδια functions που χρησιμοποιεί το server-rendered modal
       const categories = window.CUSTOMER_CATEGORIES || [];
+      if ((!categories || !categories.length) && typeof window.ensureSummaryCategories === 'function' && !window.__SUMMARY_CATEGORIES_FETCHED) {
+        window.ensureSummaryCategories().then(() => {
+          renderLines(lines);
+        });
+        return;
+      }
       
       // Πρώτα check για 1 γραμμή - εμφάνισε tabs με κουμπιά
       if (lines.length === 1 && typeof window.buildSingleLineHTML === 'function') {
@@ -6410,6 +6697,18 @@ function readMappingFromUI(){
 
     function populateOnce(){
       try {
+        if (window.__RC_SUPPRESS_SUMMARY_MODAL) {
+          try { if (modal) modal.style.display = 'none'; } catch(_) {}
+          try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
+          return;
+        }
+        try {
+          const lastEdit = window.__RC_LAST_SUMMARY_EDIT || 0;
+          const visible = modal && window.getComputedStyle(modal).display !== 'none';
+          if (visible && lastEdit && (Date.now() - lastEdit) < 800) {
+            return;
+          }
+        } catch(_) {}
         const v = (summaryInput.value || '').trim();
         if (!v) {
           // nothing to show
@@ -6421,6 +6720,29 @@ function readMappingFromUI(){
         try { obj = JSON.parse(v); } catch(err){
           console.warn('[RC-DEBUG] failed parsing summaryJsonInput JSON', err, v);
           return;
+        }
+        obj = ensureSummaryLines(obj);
+
+        if (!isReceiptSummary(obj)) {
+          const hasLines = Array.isArray(obj.lines) && obj.lines.length;
+          if (!hasLines) {
+            try { if (modal) modal.style.display = 'none'; } catch(_) {}
+            try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
+            return;
+          }
+        }
+        try {
+          const visible = modal && window.getComputedStyle(modal).display !== 'none';
+          const sig = summarySignature(obj);
+          if (visible && sig && sig === lastRenderedSig) {
+            return;
+          }
+        } catch(_) {}
+        if (!isMeaningfulSummary(obj)) {
+          try { if (modal) modal.style.display = 'none'; } catch(_) {}
+          try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
+          return;
+          try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
         }
         // Mirror legacy hidden input into component hidden input so both remain in sync
         try {
@@ -6435,6 +6757,27 @@ function readMappingFromUI(){
         safeText(nameEl, obj.Name || obj.Name_issuer || obj.issuer_name || (obj.raw && obj.raw.issuer_name) || '');
         safeText(issueEl, obj.issueDate || obj.issue_date || (obj.raw && obj.raw.issue_date) || '');
         safeText(typeEl, obj.type_name || obj.type || (obj.raw && obj.raw.doc_type) || '');
+        if (paymentEl) {
+          const label = obj.paymentMethodLabel || '';
+          const code = String(obj.paymentMethodType || '').trim();
+          if (label) {
+            safeText(paymentEl, label);
+          } else if (code) {
+            const localLabels = {
+              '1': 'Επαγγελματικός Λογαριασμός Πληρωμών Ημεδαπής',
+              '2': 'Επαγγελματικός Λογαριασμός Πληρωμών Αλλοδαπής',
+              '3': 'Μετρητά',
+              '4': 'Επιταγή',
+              '5': 'Επί Πιστώσει',
+              '6': 'Web Banking',
+              '7': 'POS / e-POS',
+              '8': 'Άμεσες Πληρωμές IRIS'
+            };
+            safeText(paymentEl, localLabels[code] || code || '');
+          } else {
+            safeText(paymentEl, '');
+          }
+        }
         safeText(netEl, obj.totalNetValue || obj.total_amount || obj.totalValue || (obj.raw && obj.raw.total_amount) || '');
         safeText(vatEl, obj.totalVatAmount || (obj.raw && obj.raw.totalVatAmount) || '');
         safeText(totEl, obj.totalValue || obj.total_amount || (obj.raw && obj.raw.total_amount) || '');
@@ -6450,6 +6793,7 @@ function readMappingFromUI(){
           } catch(e){}
         }
         renderLines(lines);
+        try { lastRenderedSig = summarySignature(obj); } catch(_) {}
 
         // Defensive: ensure receipt-level MTYPE dropdown is populated and shown when summary indicates a receipt
         try {
@@ -6554,6 +6898,33 @@ function readMappingFromUI(){
       try { return JSON.parse(el.value || '{}') || {}; } catch(e){ dbg('parseSummary JSON error', e); return {}; }
     }
 
+    function isReceiptSummary(obj) {
+      try {
+        const t = (obj.type_name || obj.type || '').toString().toLowerCase();
+        const c = (obj.category || obj.characteristic || obj['χαρακτηρισμός'] || '').toString().toLowerCase();
+        return !!(obj.is_receipt || t.includes('απόδει') || t.includes('receipt') || t.includes('λιαν') || c === 'αποδειξακια');
+      } catch(_) { return false; }
+    }
+
+    function ensureSummaryLines(obj) {
+      try {
+        if (!obj || typeof obj !== 'object') return obj;
+        let hasLines = Array.isArray(obj.lines) && obj.lines.length;
+        if (!hasLines && obj.raw && Array.isArray(obj.raw.lines) && obj.raw.lines.length) {
+          obj.lines = obj.raw.lines;
+          hasLines = true;
+        }
+        if (hasLines) return obj;
+        const server = window.__RC_SERVER_MODAL_SUMMARY;
+        if (server && Array.isArray(server.lines) && server.lines.length) {
+          obj.lines = server.lines;
+          const el = document.getElementById('summaryJsonInput');
+          if (el) el.value = JSON.stringify(obj);
+        }
+      } catch(_) {}
+      return obj;
+    }
+
     function hasMeaningfulSummary(obj) {
       if (!obj || typeof obj !== 'object') return false;
       // important single fields that guarantee modal should open
@@ -6576,6 +6947,8 @@ function readMappingFromUI(){
               (ln.id && String(ln.id).trim() !== '')) return true;
         }
       }
+      // If this is a receipt, allow header-only summaries; invoices need lines.
+      if (isReceiptSummary(obj)) return true;
       // fallback: object with >1 non-empty keys
       const nonEmpty = Object.keys(obj).filter(k=>{
         try { return obj[k] !== null && obj[k] !== undefined && String(obj[k]).trim() !== ''; } catch(e){ return false; }
@@ -6608,7 +6981,12 @@ function readMappingFromUI(){
 
       // If summary becomes meaningful, show it ONLY if NOT in yellow box scenario
       const checkAndMaybeShow = () => {
-        const obj = parseSummary();
+        if (window.__RC_SUPPRESS_SUMMARY_MODAL) {
+          dbg('modal suppressed -> keep hidden');
+          hideSummaryModal();
+          return;
+        }
+        const obj = ensureSummaryLines(parseSummary());
         
         // If yellow box is showing (already-characterized invoice), keep modal hidden
         if (isYellowBoxScenario()) {

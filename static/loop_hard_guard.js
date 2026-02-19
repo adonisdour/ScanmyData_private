@@ -14,7 +14,14 @@
       const mark = String(obj.mark || obj.MARK || '').trim();
       if (!is15(mark)) return false;
 
-      const lines = Array.isArray(obj.lines) ? obj.lines : [];
+      let lines = [];
+      if (Array.isArray(obj.lines)) lines = obj.lines;
+      else if (obj.lines && typeof obj.lines === 'object') {
+        try { lines = Object.values(obj.lines).filter(Boolean); } catch(_) { lines = []; }
+      }
+      if ((!lines || !lines.length) && obj.raw && Array.isArray(obj.raw.lines)) {
+        lines = obj.raw.lines;
+      }
       if (lines.length === 0) return false;
 
       // At least one line with some info

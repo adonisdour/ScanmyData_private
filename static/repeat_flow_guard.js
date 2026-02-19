@@ -32,7 +32,14 @@
       const totalValue = String(obj.totalValue || obj.total_amount || '').trim();
       if (totalValue) return true;
 
-      const lines = Array.isArray(obj.lines) ? obj.lines : [];
+      let lines = [];
+      if (Array.isArray(obj.lines)) lines = obj.lines;
+      else if (obj.lines && typeof obj.lines === 'object') {
+        try { lines = Object.values(obj.lines).filter(Boolean); } catch(_) { lines = []; }
+      }
+      if ((!lines || !lines.length) && obj.raw && Array.isArray(obj.raw.lines)) {
+        lines = obj.raw.lines;
+      }
       if (lines.length === 0) return false;
       // at least one line with any info
       const hasInfo = lines.some(l => {
