@@ -334,10 +334,10 @@ function katToPercent(k){
   }
 
   function categoryAllowedForVat(cat, vatKey){
-    if(!cat) return true;
+    if(!cat) return false;
     const key = String(cat);
     const allowed = CATEGORY_VAT_CONSTRAINTS[key];
-    if(!allowed || !allowed.length) return true;
+    if(!allowed || !allowed.length) return false;
     return allowed.includes(vatKey);
   }
 
@@ -1482,6 +1482,7 @@ if (typeof window !== 'undefined') {
       const emptyOpt = document.createElement('option'); emptyOpt.value=''; emptyOpt.innerText='-- επίλεξε --';
       select.appendChild(emptyOpt);
       (categories || []).forEach(c => {
+        if (!categoryAllowedForVat(c, ln.vatCategory)) return;
         const o = document.createElement('option'); o.value = c; o.textContent = labelForCategory(c);
 
         if(c === ln.category) o.selected = true;
@@ -1519,6 +1520,7 @@ if (typeof window !== 'undefined') {
     btnwrap.id = 'renderedCategoryButtons';
     btnwrap.className = 'mt-2 flex flex-wrap gap-2';
     (categories || []).forEach(c => {
+      if (!categoryAllowedForVat(c, line.vatCategory)) return;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'category-btn px-3 py-2 border rounded hover:bg-sky-50';
@@ -1884,10 +1886,11 @@ if (typeof window !== 'undefined') {
       const opt0 = document.createElement('option'); opt0.value = ''; opt0.innerText = '-- επίλεξε --'; sel.appendChild(opt0);
       // ΝΕΟ
       (window.CUSTOMER_CATEGORIES || []).forEach(c => {
-      const o = document.createElement('option'); o.value = c;
-      o.textContent = (typeof labelForCategory === 'function' ? labelForCategory(c) : c);
-      if ((ln.category || '') === c) o.selected = true;
-      sel.appendChild(o);
+        if (!categoryAllowedForVat(c, vat_cat)) return;
+        const o = document.createElement('option'); o.value = c;
+        o.textContent = (typeof labelForCategory === 'function' ? labelForCategory(c) : c);
+        if ((ln.category || '') === c) o.selected = true;
+        sel.appendChild(o);
       });
 
       sel.addEventListener('change', function(){
@@ -1941,6 +1944,7 @@ if (typeof window !== 'undefined') {
   btnRow.className = 'mt-2 flex flex-wrap gap-2';
 
   (window.CUSTOMER_CATEGORIES || []).forEach(c => {
+    if (!categoryAllowedForVat(c, vat_cat)) return;
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'category-btn px-3 py-2 border rounded hover:bg-sky-50';

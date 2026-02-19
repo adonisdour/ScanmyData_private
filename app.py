@@ -1594,6 +1594,99 @@ def _category_vat_constraints(client: Optional[Dict[str, Any]]) -> Dict[str, Lis
     constraints: Dict[str, List[str]] = {}
     if not isinstance(client, dict):
         return constraints
+
+    # 1) Built-in expense tags: derive allowed VAT keys from global accounts and settings
+    try:
+        global_accounts = get_global_accounts_from_credentials() or {}
+    except Exception:
+        global_accounts = {}
+
+    try:
+        settings = load_settings() or {}
+    except Exception:
+        settings = {}
+
+    # build a rate -> { tag: code } map from settings keys
+    settings_accounts: Dict[str, Dict[str, str]] = {}
+    for key, val in (settings or {}).items():
+        if not key.startswith('account_'):
+            continue
+        k = key[len('account_'):]
+        if k.startswith('g_'):
+            k = k[2:]
+        m = re.match(r'(?P<tag>.+?)_fpa_kat_(?P<rate>\d+)%$', k)
+        if not m:
+            m2 = re.match(r'(?P<tag>.+?)_(?P<rate>\d+)%$', k)
+            if m2:
+                tag = m2.group('tag')
+                rate = m2.group('rate')
+            else:
+                continue
+        else:
+            tag = m.group('tag')
+            rate = m.group('rate')
+        code = (val or '').strip()
+        if not code:
+            continue
+        tag_norm = str(tag).strip()
+        if tag_norm.endswith('_με_ΦΠΑ'):
+            tag_base = tag_norm[:-len('_με_ΦΠΑ')]
+        else:
+            tag_base = tag_norm
+        settings_accounts.setdefault(rate, {})[tag_norm] = code
+        if tag_base != tag_norm:
+            settings_accounts.setdefault(rate, {})[tag_base] = code
+
+    # merge settings_accounts into global_accounts shape
+    try:
+        if isinstance(global_accounts, dict):
+            for rate, tagsmap in settings_accounts.items():
+                if not tagsmap:
+                    continue
+                if isinstance(global_accounts.get(rate), dict):
+                    global_accounts[rate].update(tagsmap)
+                else:
+                    if isinstance(global_accounts.get(f"{rate}%"), dict):
+                        global_accounts[f"{rate}%"].update(tagsmap)
+                    else:
+                        global_accounts.setdefault(str(rate), {}).update(tagsmap)
+    except Exception:
+        pass
+
+    expense_tags = None
+    try:
+        expense_tags = _list_invoice_categories(client)
+    except Exception:
+        expense_tags = client.get('expense_tags') or []
+
+    for tag in expense_tags or []:
+        if not tag:
+            continue
+        tag_str = str(tag).strip()
+        if not tag_str:
+            continue
+        allowed: List[str] = []
+        for rate in VAT_RATE_NUMERIC:
+            found_for_rate = False
+            for gk, vat_bucket in (global_accounts.items() if isinstance(global_accounts, dict) else []):
+                try:
+                    if not gk:
+                        continue
+                    key_norm = str(gk).strip()
+                    key_norm = key_norm[:-1] if key_norm.endswith('%') else key_norm
+                    if key_norm == str(rate):
+                        if isinstance(vat_bucket, dict) and vat_bucket.get(tag_str):
+                            allowed.append(f"{rate}%")
+                            found_for_rate = True
+                            break
+                except Exception:
+                    continue
+            if found_for_rate:
+                continue
+        if allowed:
+            constraints[tag_str] = allowed
+
+    # 2) Custom categories: per-category accounts stored on the client object
     for item in _ensure_custom_categories_list(client):
         slug = str(item.get("id") or item.get("slug") or "").strip()
         if not slug:

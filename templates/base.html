@@ -2911,7 +2911,7 @@
 
 {% if current_user.is_authenticated %}
 <style>
-#helpBotFab{position:fixed;right:20px;bottom:20px;z-index:100200;background:#2563eb;color:#fff;border:none;border-radius:9999px;width:56px;height:56px;box-shadow:0 8px 24px rgba(37,99,235,.35);cursor:pointer;font-size:22px;}
+#helpBotFab{position:fixed;right:20px;bottom:20px;z-index:100200;background:#2563eb;color:#fff;border:none;border-radius:9999px;width:56px;height:56px;box-shadow:0 8px 24px rgba(37,99,235,.35);cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;padding:0;}
 #helpBotFab.has-unread{animation:helpBotPulse 1.3s ease-in-out infinite;}
 #helpBotBadge{position:absolute;right:-2px;top:-2px;min-width:20px;height:20px;border-radius:9999px;background:#ef4444;color:#fff;font-size:11px;display:none;align-items:center;justify-content:center;padding:0 5px;border:2px solid #fff;}
 #helpBotPanel{position:fixed;right:20px;bottom:86px;z-index:100200;width:min(92vw,380px);height:min(75vh,560px);background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:none;flex-direction:column;box-shadow:0 20px 45px rgba(0,0,0,.2);overflow:hidden;}
@@ -2996,9 +2996,19 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
 @keyframes helpBotPulse{0%{transform:scale(1)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
 </style>
 <button id="helpBotFab" type="button" title="Help / Support">
-  💬
+  <svg id="helpBotIcon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <path d="M20 2H4a2 2 0 0 0-2 2v14l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM7 9h10v2H7V9zm6 4H7v-2h6v2zm4-6H7V5h10v2z" />
+  </svg>
   <span id="helpBotBadge">0</span>
 </button>
+
+<style>
+  /* Ensure inline SVG uses button color and fits with small inner margins */
+  #helpBotFab svg { width:30px; height:30px; display:block; fill:currentColor; }
+  #helpBotFab { padding:6px; }
+  /* Keep badge positioned relative to button */
+  #helpBotFab { position:fixed; }
+</style>
 <div id="helpBotPanel" role="dialog" aria-label="Help Support Chat">
   <div id="helpBotHead">
     <div>
