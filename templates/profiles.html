@@ -142,6 +142,12 @@
     } catch(e){ return {}; }
   })();
 
+  const SERVER_EXPENSE_TAGS = (function(){
+    try {
+      return {{ (expense_tags or []) | tojson | safe }} || [];
+    } catch(e){ return []; }
+  })();
+
   let VAT_CONSTRAINTS = (function(){
     try {
       return {{ (vat_constraints or {}) | tojson | safe }} || {};
@@ -182,6 +188,9 @@
     const key = String(value);
     if(Object.prototype.hasOwnProperty.call(CATEGORY_LABELS, key)){
       return CATEGORY_LABELS[key];
+    }
+    if (key.startsWith('custom_')) {
+      return key.replace(/^custom_/, '').replace(/_/g, ' ').toUpperCase();
     }
     return key;
   }
@@ -292,8 +301,11 @@
     try{
       const r = await fetch('/api/profiles', {credentials:'same-origin'});
       const j = await r.json();
-      return (j && j.profiles) ? j.profiles : [];
-    }catch(_){ return []; }
+      return {
+        profiles: (j && j.profiles) ? j.profiles : [],
+        options: (j && j.options) ? j.options : []
+      };
+    }catch(_){ return { profiles: [], options: [] }; }
   }
 
   function buildMappingFromForm(){
@@ -306,8 +318,31 @@
     };
   }
 
+  function categoriesFromProfiles(profiles){
+    const out = [];
+    (profiles || []).forEach(p => {
+      const m = (p && (p.map || p.mapping)) || {};
+      ['kat_fpa_a','kat_fpa_b','kat_fpa_g','kat_fpa_d','kat_fpa_e'].forEach(k => {
+        const val = String(m[k] || '').trim();
+        if(val && !out.includes(val)) out.push(val);
+      });
+    });
+    return out;
+  }
+
+  function mergeTagSources(){
+    const merged = [];
+    for (let i = 0; i < arguments.length; i += 1) {
+      normalizeTags(arguments[i] || []).forEach(tag => {
+        if (!merged.includes(tag)) merged.push(tag);
+      });
+    }
+    return merged;
+  }
+
   async function loadData(){
-    const [j, profs] = await Promise.all([ fetchCharProfiles(), fetchCanonicalProfiles() ]);
+    const [j, canonical] = await Promise.all([ fetchCharProfiles(), fetchCanonicalProfiles() ]);
+    const profs = canonical && Array.isArray(canonical.profiles) ? canonical.profiles : [];
 
     if(j && j.vat_constraints){
       VAT_CONSTRAINTS = j.vat_constraints || {};
@@ -327,7 +362,12 @@
       const previous = sel.value;
       sel.innerHTML = '';
       sel.appendChild(new Option('-επιλέξτε-',''));
-      const tags = normalizeTags((j && (j.options || j.expense_tags)) || []);
+      const tags = mergeTagSources(
+        j && (j.expense_tags || j.options),
+        canonical && canonical.options,
+        SERVER_EXPENSE_TAGS,
+        categoriesFromProfiles(profs)
+      );
       const vatKey = VAT_KEY_BY_SFX[sfx] || '';
       const allowed = categoriesForVat(vatKey, tags);
       allowed.forEach(t=> sel.appendChild(opt(t)));

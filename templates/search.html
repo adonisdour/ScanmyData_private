@@ -157,6 +157,7 @@
             <div><strong>Επωνυμία</strong><div id="summary_Name"></div></div>
             <div><strong>Ημερομηνία</strong><div id="summary_issueDate"></div></div>
             <div><strong>Τύπος Παραστατικού</strong><div id="summary_type_name"></div></div>
+          <div><strong>Τρόπος Πληρωμής</strong><div id="summary_paymentMethodLabel"></div></div>
             <div><strong>Καθαρή Αξία</strong><div id="summary_totalNetValue"></div></div>
             <div><strong>ΦΠΑ</strong><div id="summary_totalVatAmount"></div></div>
             <div><strong>Σύνολο</strong><div id="summary_totalValue"></div></div>
@@ -774,7 +775,7 @@ function katToPercent(k){
       }
       // κανονικοποίηση mapping κάθε προφίλ σε ποσοστά
       const profiles = Array.isArray(j.profiles) ? j.profiles.map(p => ({
-        ...p, mapping: normalizeMapping(p.mapping || {})
+        ...p, mapping: normalizeMapping(p.mapping || p.map || {})
       })) : [];
       return profiles;
     } catch (_e) { return []; }
@@ -808,36 +809,31 @@ function katToPercent(k){
 
     const o0 = document.createElement('option'); o0.value = ''; o0.textContent = '— επίλεξε —'; sel.appendChild(o0);
     const vatKey = pct;
-    const allowedCats = CUSTOMER_CATEGORIES.filter(cat => categoryAllowedForVat(cat, vatKey));
-    allowedCats.forEach(t => {
+    const categoriesForVat = CUSTOMER_CATEGORIES.slice();
+    categoriesForVat.forEach(t => {
       const o = document.createElement('option'); o.value = t; o.textContent = labelForCategory(t);
 
       if (t === selected) o.selected = true;
       sel.appendChild(o);
     });
 
-    if (selected && !allowedCats.includes(selected)) {
-      // Prevent the special-purpose category `αποδειξακια` from ever appearing
-      // in the repeat-mapping dropdown (whether available or as an "unavailable"
-      // extra option). If mapping contains it, silently drop it here.
+    if (selected && !categoriesForVat.includes(selected)) {
       try {
         if (String(selected).trim().toLowerCase() === 'αποδειξακια') {
-          // do not append — leave select empty instead
           sel.value = '';
         } else {
           const extra = document.createElement('option');
           extra.value = selected;
-          extra.textContent = `${labelForCategory(selected)} (μη διαθέσιμο για ${vatKey})`;
-          extra.dataset.unavailable = '1';
+          extra.textContent = labelForCategory(selected);
+          extra.dataset.legacy = '1';
           sel.appendChild(extra);
           sel.value = selected;
         }
       } catch (e) {
-        // fallback: append as before if something unexpected happens
         const extra = document.createElement('option');
         extra.value = selected;
-        extra.textContent = `${labelForCategory(selected)} (μη διαθέσιμο για ${vatKey})`;
-        extra.dataset.unavailable = '1';
+        extra.textContent = labelForCategory(selected);
+        extra.dataset.legacy = '1';
         sel.appendChild(extra);
         sel.value = selected;
       }
@@ -1019,8 +1015,25 @@ function katToPercent(k){
   const [profiles, defaultFromGet, state] = await Promise.all([
     (async () => {
       try {
-        const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT), {credentials:'same-origin'});
-        const j = await r.json();
+        let j = null;
+        try {
+          const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || ''), {credentials:'same-origin'});
+          j = await r.json();
+        } catch (_) {
+          j = null;
+        }
+
+        if (!j || !j.ok || (!Array.isArray(j.profiles) && !Array.isArray(j.expense_tags))) {
+          try {
+            const r2 = await fetch('/api/char_profiles', {credentials:'same-origin'});
+            j = await r2.json();
+          } catch (_) {
+            j = null;
+          }
+        }
+
+        if (!j || !j.ok) return [];
+
         if (j && j.category_labels) {
           Object.assign(CATEGORY_LABELS, j.category_labels);
           if (typeof window !== 'undefined') {
@@ -1037,7 +1050,42 @@ function katToPercent(k){
             window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
           }
         }
-        return (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+        if ((!Array.isArray(j.expense_tags) || !j.expense_tags.length) && VAT) {
+          try {
+            const rv2 = await fetch('/api/repeat_entry/get_v2?vat=' + encodeURIComponent(VAT), {credentials:'same-origin'});
+            const jv2 = await rv2.json();
+            if (jv2 && Array.isArray(jv2.expense_tags) && jv2.expense_tags.length) {
+              CUSTOMER_CATEGORIES = normalizeCategoryList(jv2.expense_tags);
+              if (typeof window !== 'undefined') {
+                window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
+              }
+            }
+            if (jv2 && jv2.category_labels) {
+              Object.assign(CATEGORY_LABELS, jv2.category_labels);
+              if (typeof window !== 'undefined') {
+                window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
+                Object.assign(window.CATEGORY_LABELS, jv2.category_labels);
+              }
+            }
+          } catch (_) {}
+        }
+        let profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+        if (!profilesOut.length) {
+          try {
+            const rp = await fetch('/api/profiles', {credentials:'same-origin'});
+            const jp = await rp.json();
+            if (jp && Array.isArray(jp.profiles) && jp.profiles.length) {
+              profilesOut = jp.profiles.map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+            }
+            if ((!Array.isArray(j.expense_tags) || !j.expense_tags.length) && jp && Array.isArray(jp.options) && jp.options.length) {
+              CUSTOMER_CATEGORIES = normalizeCategoryList(jp.options);
+              if (typeof window !== 'undefined') {
+                window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
+              }
+            }
+          } catch (_) {}
+        }
+        return profilesOut;
       } catch (_e) { return []; }
     })(),
     (async () => {
@@ -4301,6 +4349,7 @@ function prefillSummaryModal(){
       issuer_name: 'summary_Name',
       issueDate: 'summary_issueDate',
       type_name: 'summary_type_name',
+      paymentMethodLabel: 'summary_paymentMethodLabel',
       totalNetValue: 'summary_totalNetValue',
       totalVatAmount: 'summary_totalVatAmount',
       totalValue: 'summary_totalValue'
@@ -4310,6 +4359,24 @@ function prefillSummaryModal(){
       if(!el) return;
       el.innerText = (data[k] !== undefined && data[k] !== null) ? String(data[k]) : (data[k.toUpperCase()] || '');
     });
+
+    try {
+      const paymentEl = document.getElementById('summary_paymentMethodLabel');
+      if (paymentEl && !String(paymentEl.innerText || '').trim()) {
+        const code = String(data.paymentMethodType || '').trim();
+        const localLabels = {
+          '1': 'Επαγγελματικός Λογαριασμός Πληρωμών Ημεδαπής',
+          '2': 'Επαγγελματικός Λογαριασμός Πληρωμών Αλλοδαπής',
+          '3': 'Μετρητά',
+          '4': 'Επιταγή',
+          '5': 'Επί Πιστώσει',
+          '6': 'Web Banking',
+          '7': 'POS / e-POS',
+          '8': 'Άμεσες Πληρωμές IRIS'
+        };
+        paymentEl.innerText = localLabels[code] || code || '';
+      }
+    } catch(_) {}
 
     // Ensure container exists
     const container = document.getElementById('summaryLinesContainer') || document;
@@ -5627,8 +5694,44 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
         console.warn('Failed to re-parse summary after DOM update', err);
       }
     }
-    
-    const selectedMtype = summary.mtype || summary.invoice_mtype || '';
+
+    // Special business rule:
+    // Γ-category invoice + repeat enabled + payment method cash (3)
+    // + selected MTYPE != 3.4.2 -> blocking choice for this specific invoice only.
+    const paymentMethodType = String(summary.paymentMethodType || '').trim();
+    let selectedMtype = summary.mtype || summary.invoice_mtype || document.getElementById('invoiceMtypeSelect')?.value || localStorage.getItem('saved_invoice_mtype') || '';
+    const cashMtypeCode = '3.4.2';
+
+    if (isGCategory && !isReceipt && repeatEnabled && paymentMethodType === '3' && selectedMtype && selectedMtype !== cashMtypeCode) {
+      const useCashNow = await showModalConfirm(
+        'Προειδοποίηση Τρόπου Πληρωμής',
+        'Το παραστατικό έχει τρόπο πληρωμής Μετρητά, αλλά η επαναληπτική ρύθμιση MTYPE είναι διαφορετική από Αγορών - Εξόδων Ταμειακή.\n\nΕπίλεξε:\n- OK: Αλλαγή μόνο τώρα σε Αγορών - Εξόδων Ταμειακή (3.4.2)\n- Άκυρο: Συνέχεια με το αποθηκευμένο MTYPE',
+        'Αλλαγή μόνο τώρα',
+        'Συνέχεια με αποθηκευμένο'
+      );
+
+      if (useCashNow) {
+        selectedMtype = cashMtypeCode;
+        const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+        if (mtypeSelect) {
+          mtypeSelect.value = cashMtypeCode;
+        }
+        const summaryInput = document.getElementById('summaryJsonInput');
+        if (summaryInput) {
+          try {
+            const latest = JSON.parse(summaryInput.value || '{}');
+            latest.mtype = cashMtypeCode;
+            latest.invoice_mtype = cashMtypeCode;
+            summaryInput.value = JSON.stringify(latest);
+            summary = latest;
+          } catch (err) {
+            console.warn('Failed to apply one-off cash MTYPE override', err);
+          }
+        }
+      }
+    }
+
+    selectedMtype = summary.mtype || summary.invoice_mtype || selectedMtype;
     
     if (isGCategory && !isReceipt && selectedMtype && summary.mark && (summary.AFM_issuer || summary.AFM)) {
       try {

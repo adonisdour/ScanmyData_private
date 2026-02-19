@@ -3764,6 +3764,21 @@ def get_expected_mtype_for_payment(payment_method_type: str) -> dict:
         }
 
 
+def get_payment_method_label(payment_method_type: str) -> str:
+    pmt = str(payment_method_type or "").strip()
+    labels = {
+        "1": "Επαγγελματικός Λογαριασμός Πληρωμών Ημεδαπής",
+        "2": "Επαγγελματικός Λογαριασμός Πληρωμών Αλλοδαπής",
+        "3": "Μετρητά",
+        "4": "Επιταγή",
+        "5": "Επί Πιστώσει",
+        "6": "Web Banking",
+        "7": "POS / e-POS",
+        "8": "Άμεσες Πληρωμές IRIS",
+    }
+    return labels.get(pmt, "")
+
+
 def load_credentials():
     # use per-group credentials loader
     try:
@@ -7999,6 +8014,11 @@ def search():
                                     # Enrich issuer name if missing
                                     issuer_afm = pick(docs_for_mark[0], "AFM_issuer", "AFM", default=vat)
                                     issuer_name = pick(docs_for_mark[0], "Name_issuer", "Name", default="")
+                                    payment_method_type = ""
+                                    for _doc in docs_for_mark:
+                                        payment_method_type = str(pick(_doc, "paymentMethodType", default="") or "").strip()
+                                        if payment_method_type:
+                                            break
                                     
                                     # Try to enrich issuer name from client_db or VAT validator
                                     enriched_flag = False
@@ -8033,6 +8053,8 @@ def search():
                                         "AA": pick(docs_for_mark[0], "AA", "aa", default=""),
                                         "AFM": issuer_afm,
                                         "Name": issuer_name,
+                                        "paymentMethodType": payment_method_type,
+                                        "paymentMethodLabel": get_payment_method_label(payment_method_type),
                                         "series": pick(docs_for_mark[0], "series", "Series", default=""),
                                         "number": pick(docs_for_mark[0], "number", "aa", "AA", default=""),
                                         "issueDate": pick(docs_for_mark[0], "issueDate", "issue_date", default=""),
@@ -8135,6 +8157,11 @@ def search():
                                     # Enrich issuer name if missing (for invoices)
                                     issuer_afm = pick(first, "AFM_issuer", "AFM_issuer", default=vat)
                                     issuer_name = pick(first, "Name", "Name_issuer", default="")
+                                    payment_method_type = ""
+                                    for _doc in docs_for_mark:
+                                        payment_method_type = str(pick(_doc, "paymentMethodType", default="") or "").strip()
+                                        if payment_method_type:
+                                            break
                                     
                                     # Try to enrich issuer name from client_db or VAT validator
                                     enriched_flag = False
@@ -8164,6 +8191,8 @@ def search():
                                         "AA": pick(first, "AA", "aa", default=""),
                                         "AFM": issuer_afm,
                                         "Name": issuer_name,
+                                        "paymentMethodType": payment_method_type,
+                                        "paymentMethodLabel": get_payment_method_label(payment_method_type),
                                         "series": pick(first, "series", "Series", "serie", default=""),
                                         "number": pick(first, "number", "aa", "AA", default=""),
                                         "issueDate": pick(first, "issueDate", "issue_date", default=pick(first, "issueDate", "issue_date", "")),
@@ -8389,15 +8418,31 @@ def search():
 def profiles_page():
     vat = (request.args.get("vat") or "").strip()
     creds = _load_credentials()
-    categories = _get_expense_tags(creds, vat)
-    client = _find_client(creds, vat=vat) or {}
+    client = None
+    if vat:
+        client = _find_client(creds, vat=vat)
+    if not client:
+        try:
+            active = get_active_credential_from_session() or {}
+        except Exception:
+            active = {}
+        active_vat = str((active or {}).get("vat") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and isinstance(active, dict) and active:
+            client = active
+    client = client or {}
+    categories = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
+    profiles = client.get("char_profiles", [])
     # δίνουμε πάντα λίστα (όχι Undefined)
     return render_template(
         "profiles.html",
-        vat=vat,
+        vat=client.get("vat", "") or vat,
         customer_categories=categories,
+        expense_tags=categories,
+        profiles=profiles,
         category_labels=labels,
         vat_constraints=constraints,
     )
@@ -8604,7 +8649,7 @@ def api_char_profiles_get():
     """Επιστρέφει profiles + expense_tags για τον ενεργό πελάτη"""
     vat = request.args.get("vat","").strip()
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat) or None
+    client = _find_client(creds, vat=vat) if vat else None
     # Fallback: use session active credential if explicit lookup failed
     if not client:
         try:
@@ -8622,6 +8667,7 @@ def api_char_profiles_get():
         ok=True,
         profiles=profiles,
         expense_tags=expense_tags,
+        options=expense_tags,
         category_labels=labels,
         vat_constraints=constraints,
     )
@@ -8721,14 +8767,18 @@ def char_profiles_ui():
     """Σελίδα δημιουργίας/επεξεργασίας Προφίλ"""
     vat = request.args.get("vat","").strip()
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat) or {}
+    client = _find_client(creds, vat=vat) if vat else None
     if not client:
         try:
             active = get_active_credential_from_session() or {}
         except Exception:
             active = {}
-        if isinstance(active, dict) and active:
+        active_vat = str((active or {}).get("vat") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and isinstance(active, dict) and active:
             client = active
+    client = client or {}
     expense_tags = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
