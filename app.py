@@ -9415,11 +9415,25 @@ def save_summary():
         code_to_label = {
             str(settings.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip(): "Αγορών - Εξόδων Ταμειακή",
             str(settings.get("article_movement_type_tameiaki", "") or "").strip(): "Ταμειακή",
-            str(settings.get("article_movement_type_agoron_exodon", "") or "").strip(): "Αγορών - Εξόδων",
+            str(settings.get("article_movement_type_agoron_exodon", "") or "").strip(): "Αγορών - Εξόδων Επί Πιστώσει",
             str(settings.get("article_movement_type_symsifistiki", "") or "").strip(): "Συμψηφιστική",
             str(settings.get("article_movement_type_agoron_exodon_opseos", "") or "").strip(): "Αγορών - Εξόδων Όψεως",
         }
         code_to_label = {k: v for k, v in code_to_label.items() if k}
+
+        def _norm_label(txt: str) -> str:
+            raw = str(txt or "").strip().lower()
+            if not raw:
+                return ""
+            try:
+                import unicodedata
+                raw = unicodedata.normalize("NFD", raw)
+                raw = "".join(ch for ch in raw if unicodedata.category(ch) != "Mn")
+            except Exception:
+                pass
+            raw = raw.replace("—", " ").replace("–", " ").replace("-", " ").replace("_", " ")
+            raw = re.sub(r"\s+", " ", raw).strip()
+            return raw
 
         mtype_code = _first(
             s.get("mtype"),
@@ -9437,6 +9451,24 @@ def save_summary():
                     if raw_label == str(label_val).strip().lower():
                         mtype_code = code_key
                         break
+
+                if not mtype_code:
+                    raw_norm = _norm_label(raw_label)
+                    cash_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                    credit_code = str(settings.get("article_movement_type_agoron_exodon") or "").strip()
+                    opseos_code = str(settings.get("article_movement_type_agoron_exodon_opseos") or "").strip()
+                    syms_code = str(settings.get("article_movement_type_symsifistiki") or "").strip()
+
+                    if "αγορ" in raw_norm and "εξοδ" in raw_norm and "ταμει" in raw_norm and cash_code:
+                        mtype_code = cash_code
+                    elif "ταμει" in raw_norm and cash_code:
+                        mtype_code = cash_code
+                    elif "συμψηφ" in raw_norm and syms_code:
+                        mtype_code = syms_code
+                    elif "οψε" in raw_norm and opseos_code:
+                        mtype_code = opseos_code
+                    elif "αγορ" in raw_norm and "εξοδ" in raw_norm and credit_code:
+                        mtype_code = credit_code
 
         mtype_code = str(mtype_code or "").strip()
         mtype_label = code_to_label.get(mtype_code, "")
@@ -9696,6 +9728,42 @@ def save_summary():
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
 
     conf = _load_repeat_entry_for_vat(vat)
+    payment_method_type = str(
+        _first(
+            summary.get("paymentMethodType"),
+            summary.get("payment_method_type"),
+            summary.get("paymentMethod"),
+            summary.get("payment_method"),
+        )
+        or ""
+    ).strip()
+
+    try:
+        is_g_invoice = (not is_receipt) and (_normalize_book_category(active.get("book_category")) == "G")
+        if is_g_invoice and payment_method_type == "3":
+            settings_payment = load_settings() or {}
+            cash_mtype_code = str(
+                settings_payment.get("article_movement_type_agoron_exodon_tameiaki")
+                or settings_payment.get("article_movement_type_tameiaki")
+                or ""
+            ).strip()
+            selected_mtype = str(summary.get("mtype") or summary.get("invoice_mtype") or "").strip()
+            repeat_profile_mtype = str(conf.get("invoice_mtype") or "").strip() if conf.get("enabled") else ""
+            effective_mtype = selected_mtype or repeat_profile_mtype
+
+            if cash_mtype_code:
+                if effective_mtype and effective_mtype != cash_mtype_code:
+                    log.info(
+                        "save_summary: G-category cash payment mismatch (selected='%s', profile='%s', expected='%s') -> preserving user/profile selection",
+                        selected_mtype,
+                        repeat_profile_mtype,
+                        cash_mtype_code,
+                    )
+                # ΜΟΝΟ ενημερωτικό check: δεν κάνουμε forced override εδώ.
+                # Το UI warning αποφασίζει αν θα αλλάξει σε cash MTYPE ή θα συνεχίσει όπως επέλεξε ο χρήστης.
+    except Exception:
+        log.exception("save_summary: payment/mtype enforcement failed")
+
     # ΤΙΜΟΛΟΓΙΑ: mapping ανά VAT%
     if not is_receipt:
         if conf.get("enabled") and isinstance(conf.get("mapping"), dict) and summary.get("lines"):

@@ -99,7 +99,7 @@ def get_movement_types(settings: Dict[str, Any]) -> List[Dict[str, str]]:
     """
     # Labels για τα movement types
     MOVEMENT_TYPE_LABELS = {
-        "agoron_exodon": "Αγορών - Εξόδων",
+        "agoron_exodon": "Αγορών - Εξόδων Επί Πιστώσει",
         "tameiaki": "Ταμειακή",
         "symsifistiki": "Συμψηφιστική",
         "agoron_exodon_tameiaki": "Αγορών - Εξόδων Ταμειακή",
@@ -136,7 +136,7 @@ def get_mtype_label(mtype_code: str) -> str:
     # Συνήθεις τιμές
     labels = {
         "11": "Συμψηφιστική",
-        "12": "Αγορών - Εξόδων",
+        "12": "Αγορών - Εξόδων Επί Πιστώσει",
         "13": "Πωλήσεων",
         "14": "Ταμειακή",
         "15": "Αγορών - Εξόδων Όψεως",
