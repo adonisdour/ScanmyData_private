@@ -934,6 +934,13 @@ try:
     from flask_login import current_user
     @app.before_request
     def require_login_before_request():
+        # allow disabling login checks in tests (honour Flask-Login convention)
+        try:
+            if current_app.config.get('LOGIN_DISABLED'):
+                return None
+        except Exception:
+            pass
+
         # allow static, local auth and firebase auth endpoints
         endpoint = request.endpoint or ''
         if endpoint.startswith('auth.') or endpoint.startswith('static') or endpoint.startswith('firebase_auth.'):
@@ -5104,9 +5111,60 @@ def api_validate_payment_mtype():
             # Δεν υπάρχει paymentMethodType - δεν μπορούμε να ελέγξουμε
             return jsonify({"ok": True, "warning": None})
         
+        # Ειδικός, ρυθμιζόμενος από settings: όταν paymentMethodType==3 (Μετρητά)
+        # και ο χρήστης έχει επιλέξει article-style MTYPE (π.χ. '14','16') διαφορετικό
+        # από τον ρυθμισμένο cash article-code → προτείνουμε την αλλαγή (special_case).
+        if payment_method_type == "3":
+            try:
+                settings = load_settings() or {}
+                cash_article_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                cash_article_label = (
+                    "Αγορών - Εξόδων Ταμειακή"
+                    if settings.get("article_movement_type_agoron_exodon_tameiaki")
+                    else "Ταμειακή"
+                )
+                if selected_mtype and "." not in selected_mtype and cash_article_code and selected_mtype != cash_article_code:
+                    return jsonify({
+                        "ok": True,
+                        "warning": (
+                            f"Προσοχή: Το παραστατικό έχει τρόπο πληρωμής Μετρητά αλλά επέλεξες κωδικό κίνησης '{selected_mtype}'. "
+                            f"Συνιστάται να χρησιμοποιήσεις τον κωδικό κίνησης '{cash_article_code}' ({cash_article_label}). Θέλεις να αλλάξετε?"
+                        ),
+                        "payment_method_type": payment_method_type,
+                        "expected_mtype": {"code": cash_article_code, "label": cash_article_label},
+                        "selected_mtype": selected_mtype,
+                        "special_case": True
+                    })
+            except Exception:
+                # non-fatal — πέφτουμε πίσω στο γενικό αποτέλεσμα
+                log.exception("validate_payment_mtype: special-case cash detection failed")
+
         # Ελεγξε αν ταιριάζει με το επιλεγμένο MTYPE
         expected = get_expected_mtype_for_payment(payment_method_type)
         
+        # Special handling: for cash (3) allow the user-configured article-style MTYPE
+        # (e.g. '42') to be treated as equivalent to the epsilon MTYPE ('3.4.2').
+        if payment_method_type == "3":
+            try:
+                settings = load_settings() or {}
+                cash_article_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                cash_article_label = (
+                    "Αγορών - Εξόδων Ταμειακή"
+                    if settings.get("article_movement_type_agoron_exodon_tameiaki")
+                    else "Ταμειακή"
+                )
+                if cash_article_code and selected_mtype and selected_mtype == cash_article_code:
+                    # treat configured article-code as a valid match for cash
+                    return jsonify({
+                        "ok": True,
+                        "warning": None,
+                        "payment_method_type": payment_method_type,
+                        "expected_mtype": {"code": cash_article_code, "label": cash_article_label, "matched": True},
+                        "selected_mtype": selected_mtype
+                    })
+            except Exception:
+                log.exception("validate_payment_mtype: post-expected matching check failed")
+
         if not expected["matched"]:
             # Άγνωστος τύπος πληρωμής
             return jsonify({
@@ -5131,21 +5189,7 @@ def api_validate_payment_mtype():
                 "selected_mtype": selected_mtype
             })
         
-        # Ειδικός έλεγχος για paymentMethodType 3 με MTYPE 15
-        if payment_method_type == "3" and selected_mtype == "15":
-            return jsonify({
-                "ok": True,
-                "warning": (
-                    f"Προσοχή: Το παραστατικό έχει τύπο πληρωμής {payment_method_type} "
-                    f"(μετρητά) και επέλεξες MTYPE '{selected_mtype}' (μετρητά). "
-                    f"Συνιστάται να χρησιμοποιήσεις MTYPE '3.4.2' (δαπάνη με μετρητά) "
-                    f"για σωστή ταξινόμηση. Θέλεις να αλλάξεις σε '3.4.2' ή να συνεχίσεις με '{selected_mtype}'?"
-                ),
-                "payment_method_type": payment_method_type,
-                "expected_mtype": {"code": "3.4.2", "label": "Δαπάνη με μετρητά"},
-                "selected_mtype": selected_mtype,
-                "special_case": True  # σηματοδοτεί ειδική περίπτωση
-            })
+
         
         # Όλα καλά
         return jsonify({
@@ -12945,6 +12989,141 @@ def api_admin_activity_logs():
     return jsonify({'logs': logs})
 
 
+@app.route("/api/admin/firebase-usage", methods=["GET"])
+@login_required
+def api_admin_firebase_usage():
+    """Return aggregated firebase.read bytes from activity.log for graphing.
+    Query params:
+      start (ISO8601) optional filter start time (UTC)
+      end   (ISO8601) optional filter end time (UTC)
+    Bundles points by hour.
+    """
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'error': 'Admin access required'}), 403
+
+    start_raw = request.args.get('start')
+    end_raw = request.args.get('end')
+    start_ts = None
+    end_ts = None
+    try:
+        if start_raw:
+            start_ts = datetime.datetime.fromisoformat(start_raw)
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.replace(tzinfo=timezone.utc)
+            start_ts = start_ts.astimezone(timezone.utc)
+        if end_raw:
+            end_ts = datetime.datetime.fromisoformat(end_raw)
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.replace(tzinfo=timezone.utc)
+            end_ts = end_ts.astimezone(timezone.utc)
+    except Exception:
+        return jsonify({'error': 'Invalid start/end timestamps'}), 400
+
+    log_path = os.path.join(os.getcwd(), 'data', 'activity.log')
+    buckets = {}
+    if os.path.exists(log_path):
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if 'firebase.read' not in line:
+                    continue
+                # parse timestamp at beginning ISO format
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                ts_str = parts[0] + ' ' + parts[1]
+                try:
+                    dt = datetime.datetime.fromisoformat(ts_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.astimezone(timezone.utc)
+                except Exception:
+                    continue
+                if start_ts and dt < start_ts:
+                    continue
+                if end_ts and dt > end_ts:
+                    continue
+                m = re.search(r'size=(\d+)', line)
+                if not m:
+                    continue
+                size = int(m.group(1))
+                bucket = dt.strftime('%Y-%m-%d %H:00')
+                buckets[bucket] = buckets.get(bucket, 0) + size
+    # convert to sorted list for charting
+    data = [{'ts': k, 'bytes': v} for k, v in sorted(buckets.items())]
+    return jsonify({'success': True, 'data': data})
+
+
+@app.route('/api/admin/firebase-sync-settings', methods=['GET', 'POST'])
+@login_required
+def api_admin_firebase_sync_settings():
+    """Get or update Firebase sync settings."""
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    if request.method == 'GET':
+        # Return current settings
+        enabled = os.getenv('FIREBASE_SYNC_ENABLED', '0') == '1'
+        interval = int(os.getenv('FIREBASE_SYNC_INTERVAL', '60'))
+        smart_sync = os.getenv('FIREBASE_SMART_SYNC', '1') == '1'
+        return jsonify({
+            'success': True,
+            'data': {
+                'enabled': enabled,
+                'interval': interval,
+                'smart_sync': smart_sync
+            }
+        })
+
+    # POST: update settings
+    try:
+        payload = request.get_json()
+        enabled = bool(payload.get('enabled'))
+        interval = max(10, min(3600, int(payload.get('interval', 60))))
+        smart_sync = bool(payload.get('smart_sync', True))
+        
+        # Update environment (in-memory and .env file)
+        os.environ['FIREBASE_SYNC_ENABLED'] = '1' if enabled else '0'
+        os.environ['FIREBASE_SYNC_INTERVAL'] = str(interval)
+        os.environ['FIREBASE_SMART_SYNC'] = '1' if smart_sync else '0'
+        
+        # Update .env file
+        env_file = os.path.join(os.getcwd(), '.env')
+        env_content = []
+        if os.path.exists(env_file):
+            with open(env_file, 'r') as f:
+                for line in f:
+                    if not any(line.startswith(k) for k in ['FIREBASE_SYNC_ENABLED=', 'FIREBASE_SYNC_INTERVAL=', 'FIREBASE_SMART_SYNC=']):
+                        env_content.append(line.rstrip('\n'))
+        
+        # Add/update settings
+        env_content.append(f'FIREBASE_SYNC_ENABLED={"1" if enabled else "0"}')
+        env_content.append(f'FIREBASE_SYNC_INTERVAL={interval}')
+        env_content.append(f'FIREBASE_SMART_SYNC={"1" if smart_sync else "0"}')
+        
+        with open(env_file, 'w') as f:
+            f.write('\n'.join(env_content) + '\n')
+        
+        logger.info(f'Firebase sync settings updated: enabled={enabled}, interval={interval}s, smart_sync={smart_sync}')
+        # record activity for admin panel
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=current_user.id,
+                group_name='system',
+                action='firebase_sync_settings_updated',
+                details={'enabled': enabled, 'interval': interval, 'smart_sync': smart_sync},
+                user_email=getattr(current_user, 'email', None),
+                user_username=getattr(current_user, 'username', None)
+            )
+        except Exception:
+            pass
+        
+        return jsonify({'success': True, 'message': 'Settings saved'})
+    except Exception as e:
+        logger.error(f'Error saving firebase sync settings: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
 @app.route('/api/admin/activity-logs/clear', methods=['POST'])
 @login_required
 def api_admin_activity_logs_clear():
@@ -12956,7 +13135,7 @@ def api_admin_activity_logs_clear():
     start_date = str(payload.get('start_date') or '').strip()
     end_date = str(payload.get('end_date') or '').strip()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.datetime.now(timezone.utc)
     cutoff_start = None
     cutoff_end = None
 
@@ -12976,8 +13155,8 @@ def api_admin_activity_logs_clear():
         elif period == 'custom':
             if not start_date or not end_date:
                 return jsonify({'ok': False, 'error': 'Απαιτούνται start_date και end_date για custom διάστημα.'}), 400
-            cutoff_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-            cutoff_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            cutoff_start = datetime.datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            cutoff_end = datetime.datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
             cutoff_end = cutoff_end.replace(hour=23, minute=59, second=59)
         else:
             return jsonify({'ok': False, 'error': 'Μη έγκυρο period. Επιτρεπτά: 1m, 2m, 3m, custom'}), 400
@@ -12990,7 +13169,7 @@ def api_admin_activity_logs_clear():
         variants = [str(ts).strip(), str(ts).strip().replace('Z', '+00:00')]
         for v in variants:
             try:
-                dt = datetime.fromisoformat(v)
+                dt = datetime.datetime.fromisoformat(v)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 return dt.astimezone(timezone.utc)

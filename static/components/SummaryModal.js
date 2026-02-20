@@ -131,12 +131,20 @@ export class SummaryModal extends ModalManager {
     // Close button
     const closeBtn = this.element.querySelector('.modal-summary-close');
     if (closeBtn) {
-      closeBtn.addEventListener('click', () => this.close());
+      closeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.close();
+      });
     }
 
     const cancelBtn = this.element.querySelector('.modal-cancel-btn');
     if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => this.close());
+      cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.close();
+      });
     }
 
     // Save button
@@ -429,6 +437,33 @@ export class SummaryModal extends ModalManager {
         this.onSave(this.currentSummary);
       }
 
+      // If the legacy save form exists, request submit so the global
+      // saveSummaryForm submit-interceptor (which performs payment/MTYPE
+      // validation and shows the confirmation modal) runs as expected.
+      const legacyForm = document.getElementById('saveSummaryForm');
+      if (legacyForm) {
+        try {
+          console.debug('SummaryModal: requesting legacy form submit', this.currentSummary);
+          if (typeof legacyForm.requestSubmit === 'function') {
+            legacyForm.requestSubmit();
+            // Do not close the modal here; the global save handler will
+            // hide/close it after successful save or keep it open on cancel.
+            return;
+          } else {
+            // Fallback: dispatch submit event (may be handled) then call
+            // form.submit() as last resort.
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            legacyForm.dispatchEvent(ev);
+            // last-resort synchronous submit (rare)
+            if (typeof legacyForm.submit === 'function') legacyForm.submit();
+            return;
+          }
+        } catch (err) {
+          console.warn('SummaryModal: legacy form submit failed', err);
+        }
+      }
+
+      // No legacy form -> close modal as before
       this.close();
     } finally {
       this.submitGuard.unlock();

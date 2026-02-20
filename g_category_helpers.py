@@ -195,8 +195,21 @@ def enrich_categories_with_mtype(
     
     # Παίρνουμε τα διαθέσιμα movement types
     movement_types = get_movement_types(settings)
-    
+
+    # Καθορισμός του κωδικού για το "Αγορών - Εξόδων Ταμειακή" από τα settings
+    # (χρησιμοποιείται στον client για γρήγορη σύγκριση).
+    cash_code = ''
+    cash_label = ''
+    for mt in movement_types:
+        # οι αντικειμενο-τύπου movment_types περιέχουν field "key"
+        if mt.get('key') == 'agoron_exodon_tameiaki':
+            cash_code = mt.get('value', '')
+            cash_label = mt.get('label', '')
+            break
+
     return {
         "categories": categories_data,
-        "mtype_options": movement_types
+        "mtype_options": movement_types,
+        "cash_mtype_code": cash_code,
+        "cash_mtype_label": cash_label,
     }

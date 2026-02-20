@@ -4927,9 +4927,20 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     }
     
     // Έλεγχος για Γ Κατηγορία και MTYPE
-    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
+    // Use invoiceMtypeSelect as a defensive fallback when window.G_CATEGORY_DATA
+    // is not available (some pages initialise the dropdown but not the global).
+    const invoiceSelectEl = document.getElementById('invoiceMtypeSelect');
+    const fallbackMtypeOptions = invoiceSelectEl ? Array.from(invoiceSelectEl.options).map(o => ({ value: o.value, label: (o.textContent || '').trim() })) : [];
+
+    const isGCategory = (
+      (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0)
+      || (fallbackMtypeOptions.length > 0)
+    );
+
     const isReceipt = summary.is_receipt === true || /αποδει/i.test(`${summary.type_name || ''} ${summary.category || summary.characteristic || ''}`);
-    
+
+    console.debug('saveSummaryForm: G-check', { isGCategory, isReceipt, fallbackMtypeOptions: fallbackMtypeOptions.length, summaryMark: summary.mark });
+
     // Έλεγχος αν έχει επαναληψιμή εισαγωγή ενεργοποιημένη
     const repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
     
@@ -4944,10 +4955,171 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
         console.warn('Failed to re-parse summary after DOM update', err);
       }
     }
+
+    // FORCE-SYNC fallback: if legacy hidden input lacks mtype, take value
+    // directly from any visible invoice/receipt MTYPE selects inside the modal
+    try {
+      const legacyInputEl = document.getElementById('summaryJsonInput');
+      const invoiceSelectEl = document.getElementById('invoiceMtypeSelect');
+      const receiptSelectEl = document.getElementById('receiptMtypeSelectSummary');
+      let forced = false;
+      if (legacyInputEl) {
+        let parsed = {};
+        try { parsed = JSON.parse(legacyInputEl.value || '{}') || {}; } catch(_) { parsed = {}; }
+        if (!parsed.mtype && invoiceSelectEl && invoiceSelectEl.value) {
+          parsed.mtype = invoiceSelectEl.value;
+          parsed.invoice_mtype = invoiceSelectEl.value;
+          forced = true;
+        }
+        if (!parsed.receipt_mtype && receiptSelectEl && receiptSelectEl.value) {
+          parsed.receipt_mtype = receiptSelectEl.value;
+          parsed.mtype = parsed.mtype || receiptSelectEl.value;
+          forced = true;
+        }
+        if (forced) {
+          legacyInputEl.value = JSON.stringify(parsed);
+          try { summary = JSON.parse(legacyInputEl.value || '{}'); } catch(_){}
+          console.debug('saveSummaryForm: forced-sync MTYPE from selects', { mtype: parsed.mtype, invoice_mtype: parsed.invoice_mtype, receipt_mtype: parsed.receipt_mtype });
+        }
+      }
+    } catch (syncErr) {
+      console.warn('saveSummaryForm: forced mtype sync failed', syncErr);
+    }
+
+    // Determine the currently chosen mtype.  `updateSummaryFromDom` has
+    // just been called above, but in case it doesn't exist or fails we still
+    // want to read the actual dropdown value – the DOM is authoritative.
+    const invoiceSelectEl2 = document.getElementById('invoiceMtypeSelect');
+    let selectedMtype = '';
+    if (invoiceSelectEl2 && invoiceSelectEl2.value) {
+      selectedMtype = String(invoiceSelectEl2.value).trim();
+    } else {
+      selectedMtype = String(summary.mtype || summary.invoice_mtype || '').trim();
+    }
     
-    const selectedMtype = summary.mtype || summary.invoice_mtype || '';
+    // Defensive fallback check: if the page exposes movement types (invoice select)
+    // but `isGCategory` detection fails, still run the cash->article pre-check.
+    try {
+      const paymentMethodType = String(summary.paymentMethodType || '').trim();
+      const invoiceSelectEl = document.getElementById('invoiceMtypeSelect');
+      const movementTypesFallback = invoiceSelectEl ? Array.from(invoiceSelectEl.options).map(o=>({ value: o.value, label: o.textContent||'' })) : [];
+      const movementTypesAny = (window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length)
+        ? window.G_CATEGORY_DATA.mtype_options
+        : movementTypesFallback;
+      const cashOpt = (movementTypesAny || []).find(mt => {
+        const lbl = String((mt && (mt.label || mt.text || '')) || '').toLowerCase();
+        return lbl.includes('αγορ') && lbl.includes('εξοδ') && lbl.includes('ταμει');
+      }) || null;
+      let cashMtypeCodeFallback = '';
+      if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.cash_mtype_code) {
+        cashMtypeCodeFallback = String(window.G_CATEGORY_DATA.cash_mtype_code).trim();
+      } else {
+        cashMtypeCodeFallback = String((cashOpt && (cashOpt.value || cashOpt.key)) || '').trim() || '';
+      }
+      console.debug('fallback cash-check values', { selectedMtype, cashMtypeCodeFallback, equal: selectedMtype === cashMtypeCodeFallback });
+
+      if (!isReceipt && paymentMethodType === '3' && selectedMtype && !selectedMtype.includes('.') && selectedMtype !== cashMtypeCodeFallback && movementTypesAny.length) {
+        console.debug('saveSummaryForm: fallback client-side cash pre-check (will prompt)', { selectedMtype, cashMtypeCodeFallback, movementTypesAnyCount: movementTypesAny.length });
+        const userChoice = confirm(
+          `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι το συνιστώμενο ταμειακό κίνημα (${cashMtypeCodeFallback || '—'}).\nΘες να το αλλάξω αυτόματα;` 
+        );
+        if (userChoice && cashMtypeCodeFallback) {
+          const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+          if (mtypeSelect) {
+            mtypeSelect.value = cashMtypeCodeFallback;
+            mtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          try {
+            const legacyInput = document.getElementById('summaryJsonInput');
+            if (legacyInput) {
+              const parsed = JSON.parse(legacyInput.value || '{}') || {};
+              parsed.mtype = cashMtypeCodeFallback; parsed.invoice_mtype = cashMtypeCodeFallback;
+              legacyInput.value = JSON.stringify(parsed);
+            }
+          } catch(e){ console.warn('fallback override update failed', e); }
+          // update component state too
+          if (typeof updateSummaryFromDom === 'function') {
+            try { updateSummaryFromDom(); } catch(e){ console.warn('fallback updateSummaryFromDom failed', e); }
+          }
+          } catch (e) { console.warn('fallback apply mtype failed', e); }
+        }
+      }
+    } catch (fallbackErr) {
+      console.warn('saveSummaryForm: fallback pre-check error', fallbackErr);
+    }
     
+    console.debug('saveSummaryForm: pre-validate', { paymentMethodType: summary.paymentMethodType, selectedMtype: selectedMtype, hasAFM: !!(summary.AFM_issuer || summary.AFM) });
+
     if (isGCategory && !isReceipt && selectedMtype && summary.mark && (summary.AFM_issuer || summary.AFM)) {
+      console.debug('saveSummaryForm: entering validation branch', { isGCategory, isReceipt, selectedMtype, paymentMethodType: summary.paymentMethodType });
+
+      // CLIENT-SIDE FAILSAFE: if paymentMethodType is cash (3) and the selected
+      // MTYPE is an article-style code different from the configured cash
+      // article-code, show the confirmation modal immediately so the user can
+      // change it without waiting for server validation (covers race/missing
+      // server-response cases).
+      try {
+        const paymentMethodType = String(summary.paymentMethodType || '').trim();
+        selectedMtype = String(selectedMtype || '').trim();
+        const movementTypes = (window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length)
+          ? window.G_CATEGORY_DATA.mtype_options
+          : (invoiceSelectEl ? Array.from(invoiceSelectEl.options).map(o=>({value:o.value,label:o.textContent||''})) : []);
+
+        // prefer server-provided cash MTYPE code/label if available
+        let cashMtypeCode = '';
+        let cashMtypeLabel = '';
+        if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.cash_mtype_code) {
+          cashMtypeCode = String(window.G_CATEGORY_DATA.cash_mtype_code).trim();
+          cashMtypeLabel = String(window.G_CATEGORY_DATA.cash_mtype_label || '').trim() || cashMtypeCode;
+        } else {
+          const cashMtypeOption = (movementTypes || []).find(mt => {
+            const lbl = String((mt && (mt.label || mt.text || mt.t || '')) || '').toLowerCase();
+            return lbl.includes('αγορ') && lbl.includes('εξοδ') && lbl.includes('ταμει');
+          }) || null;
+          cashMtypeCode = String((cashMtypeOption && (cashMtypeOption.value || cashMtypeOption.key)) || '').trim() || '16';
+          cashMtypeLabel = String((cashMtypeOption && (cashMtypeOption.label || cashMtypeOption.text)) || 'Αγορών - Εξόδων Ταμειακή');
+        }
+
+        console.debug('saveSummaryForm: cash-precheck values', { paymentMethodType, selectedMtype, cashMtypeCode, equal: selectedMtype === cashMtypeCode });
+        if (paymentMethodType === '3' && selectedMtype && selectedMtype !== cashMtypeCode) {
+          console.debug('saveSummaryForm: client-side cash pre-check triggered', { selectedMtype, cashMtypeCode });
+          const useCashNow = await showModalConfirm(
+            'Προειδοποίηση Τρόπου Πληρωμής',
+            `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι «${cashMtypeLabel}» (${cashMtypeCode}).\n\nΘέλεις να το αλλάξω τώρα αυτόματα;\n\n- OK: Αλλαγή τώρα σε «${cashMtypeLabel}»\n- Άκυρο: Συνέχεια με το τρέχον Είδος Κίνησης`,
+            'Αλλαγή τώρα',
+            'Συνέχεια έτσι'
+          );
+
+          if (useCashNow) {
+            // Apply immediately to UI and hidden input so subsequent flows see it
+            const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+            if (mtypeSelect) {
+              mtypeSelect.value = cashMtypeCode;
+              mtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const summaryInput = document.getElementById('summaryJsonInput');
+            if (summaryInput) {
+              try {
+                const s = JSON.parse(summaryInput.value || '{}') || {};
+                s.mtype = cashMtypeCode;
+                s.invoice_mtype = cashMtypeCode;
+                summaryInput.value = JSON.stringify(s);
+                selectedMtype = cashMtypeCode;
+                localStorage.setItem('saved_invoice_mtype', cashMtypeCode);
+                try { scheduleSummaryRefresh(200); } catch(_) {}
+                console.debug('saveSummaryForm: applied cash mtype override', cashMtypeCode);
+              } catch (e) { console.warn('Failed to apply cash mtype override', e); }
+            }
+            // ensure component state updated too
+            if (typeof updateSummaryFromDom === 'function') {
+              try { updateSummaryFromDom(); } catch(e){ console.warn('post-change updateSummaryFromDom failed', e); }
+            }
+          }
+        }
+      } catch (preErr) {
+        console.warn('saveSummaryForm: cash pre-check failed', preErr);
+      }
+
       try {
         const validationResp = await fetch('/api/validate_payment_mtype', {
           method: 'POST',
@@ -4964,31 +5136,25 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
           const validationData = await validationResp.json();
           if (validationData.warning) {
             if (validationData.special_case) {
-              // Ειδική περίπτωση: paymentMethodType 3 με MTYPE 15
+              const expected = (validationData.expected_mtype && validationData.expected_mtype.code) || '';
+              const expectedLabel = (validationData.expected_mtype && validationData.expected_mtype.label) || expected;
               const userChoice = confirm(
                 validationData.warning + '\n\n' +
-                'Επιλέξτε:\n' +
-                '- OK: Αλλαγή σε MTYPE 3.4.2 (δαπάνη με μετρητά)\n' +
-                '- Ακύρωση: Συνέχεια με MTYPE 15'
+                `Επιλέξτε:\n- OK: Αλλαγή σε ${expectedLabel} (${expected})\n- Ακύρωση: Συνέχεια με ${selectedMtype}`
               );
-              if (userChoice) {
-                // Αλλαγή σε 3.4.2
+              if (userChoice && expected) {
                 const mtypeSelect = document.getElementById('invoiceMtypeSelect');
-                if (mtypeSelect) {
-                  mtypeSelect.value = '3.4.2';
-                  // Ενημέρωση του summary JSON
-                  const summaryInput = document.getElementById('summaryJsonInput');
-                  if (summaryInput) {
-                    try {
-                      const summary = JSON.parse(summaryInput.value || '{}');
-                      summary.mtype = '3.4.2';
-                      summary.invoice_mtype = '3.4.2';
-                      summaryInput.value = JSON.stringify(summary);
-                      // Save to localStorage
-                      localStorage.setItem('saved_invoice_mtype', '3.4.2');
-                    } catch (e) {
-                      console.warn('Failed to update summary mtype', e);
-                    }
+                if (mtypeSelect) mtypeSelect.value = expected;
+                const summaryInput = document.getElementById('summaryJsonInput');
+                if (summaryInput) {
+                  try {
+                    const s = JSON.parse(summaryInput.value || '{}') || {};
+                    s.mtype = expected;
+                    s.invoice_mtype = expected;
+                    summaryInput.value = JSON.stringify(s);
+                    localStorage.setItem('saved_invoice_mtype', expected);
+                  } catch (e) {
+                    console.warn('Failed to apply expected mtype from validation', e);
                   }
                 }
               }
@@ -5497,6 +5663,85 @@ function readMappingFromUI(){
     }
     document.getElementById('modalCloseX')?.addEventListener('click', hideModal);
     document.getElementById('modalCloseBtn')?.addEventListener('click', hideModal);
+
+    // Ensure modal "Save" button triggers the same client-side pre-check as
+    // the saveSummaryForm submit handler. This covers cases where the modal
+    // save button is used directly and the submit handler may not run.
+    (function attachModalSavePrecheck(){
+      try {
+        // Broad listener: catch clicks on any Save-like button inside the
+        // summary modal (covers different modal implementations).
+        document.addEventListener('click', async function clickCapture(e){
+          try {
+            const btn = e.target.closest('#summaryModal button, #summaryModal input[type="submit"]');
+            if (!btn) return;
+            // ignore close/cancel explicitly
+            if (btn.matches('.modal-summary-close, .modal-cancel-btn')) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            const text = (btn.textContent || '').trim().toLowerCase();
+            const isSaveLike = btn.matches('.modal-save-btn') || btn.type === 'submit' || text.includes('αποθήκευση') || text.includes('αποθηκευση');
+            if (!isSaveLike) return;
+
+            // intercept and run pre-check before letting other handlers proceed
+            e.preventDefault();
+            e.stopImmediatePropagation();
+
+            const legacyForm = document.getElementById('saveSummaryForm');
+            const legacyInput = document.getElementById('summaryJsonInput');
+
+            // If no legacy form, allow normal flow
+            if (!legacyForm || !legacyInput) {
+              return;
+            }
+
+            let summary = {};
+            try { summary = JSON.parse(legacyInput.value || '{}') || {}; } catch(_) { summary = {}; }
+
+            const paymentMethodType = String(summary.paymentMethodType || '').trim();
+            const selectedMtype = summary.mtype || summary.invoice_mtype || document.getElementById('invoiceMtypeSelect')?.value || localStorage.getItem('saved_invoice_mtype') || '';
+
+            // Build movement types (prefer G_CATEGORY_DATA, else invoice select)
+            const invoiceSelectEl = document.getElementById('invoiceMtypeSelect');
+            const movementTypesAny = (window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length)
+              ? window.G_CATEGORY_DATA.mtype_options
+              : (invoiceSelectEl ? Array.from(invoiceSelectEl.options).map(o=>({ value:o.value, label:o.textContent||'' })) : []);
+
+            const cashOpt = (movementTypesAny || []).find(mt => {
+              const lbl = String((mt && (mt.label || mt.text || '')) || '').toLowerCase();
+              return lbl.includes('αγορ') && lbl.includes('εξοδ') && lbl.includes('ταμει');
+            }) || null;
+            const cashCode = String((cashOpt && (cashOpt.value || cashOpt.key)) || '').trim() || '';
+
+            // If invoice, cash payment and selected article-style MTYPE differs -> prompt
+            if (!(/αποδει/i.test((summary.type_name||summary.type||'').toString().toLowerCase())) && paymentMethodType === '3' && selectedMtype && !selectedMtype.includes('.') && selectedMtype !== cashCode && movementTypesAny.length) {
+              console.debug('modalSavePrecheck: prompting user', { selectedMtype, cashCode });
+              const useCashNow = await showModalConfirm(
+                'Προειδοποίηση Τρόπου Πληρωμής',
+                `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι «${(cashOpt && (cashOpt.label||cashOpt.text))||'Αγορών - Εξόδων Ταμειακή'}» (${cashCode}).\n\nΘέλεις να το αλλάξω τώρα αυτόματα;`,
+                'Αλλαγή τώρα',
+                'Συνέχεια έτσι'
+              );
+              if (useCashNow && cashCode) {
+                const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+                if (mtypeSelect) mtypeSelect.value = cashCode;
+                summary.mtype = cashCode; summary.invoice_mtype = cashCode; legacyInput.value = JSON.stringify(summary);
+                localStorage.setItem('saved_invoice_mtype', cashCode);
+              }
+            }
+
+            // finally submit the legacy form so the normal validation/save runs
+            if (typeof legacyForm.requestSubmit === 'function') legacyForm.requestSubmit(); else legacyForm.submit();
+
+          } catch (innerErr) {
+            console.warn('attachModalSavePrecheck click handler failed', innerErr);
+          }
+        }, true);
+
+      } catch (e) { console.warn('attachModalSavePrecheck failed', e); }
+    })();
 
     // Re-check presence
     const needs_after = {

@@ -73,6 +73,8 @@
   // --- Repeat enabled fetch/cache -------------------------------------------
   let repeatEnabled = null;   // null=unknown, true/false=server state
   let repeatMapping = {};
+  // store mark for which cash-warning dialog has been shown to avoid spam
+  let cashWarningShownMark = null;
   function fetchRepeatConfigOnce(){
     if (repeatEnabled !== null) return; // already fetched
     try{
@@ -172,6 +174,43 @@
       const repeatOn = (repeatEnabled === null)
         ? !!(byId('repeatEntrySwitch') && byId('repeatEntrySwitch').checked)
         : !!repeatEnabled;
+
+      // --- invoice cash/mtype mismatch check during repeat --------------
+      if (!FORCE_EDIT && repeatOn && !isReceiptSummary(obj)) {
+        const paymentMethodType = String(obj.paymentMethodType || '').trim();
+        const selectedMtype = String(obj.mtype || obj.invoice_mtype || '').trim();
+        function getCashCode(){
+          if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.cash_mtype_code) {
+            return String(window.G_CATEGORY_DATA.cash_mtype_code).trim();
+          }
+          const sel = document.getElementById('invoiceMtypeSelect');
+          if (sel) {
+            for (const o of sel.options) {
+              const lbl = String(o.textContent||'').toLowerCase();
+              if (lbl.includes('αγορ') && lbl.includes('εξοδ') && lbl.includes('ταμει')) {
+                return String(o.value||'').trim();
+              }
+            }
+          }
+          return '';
+        }
+        const cashCode = getCashCode();
+        if (paymentMethodType === '3' && selectedMtype && cashCode && selectedMtype !== cashCode) {
+          if (cashWarningShownMark !== obj.mark) {
+            cashWarningShownMark = obj.mark;
+            showModalConfirm('Προειδοποίηση',
+              `Τρόπος πληρωμής μετρητά αλλά Είδος Κίνησης=${selectedMtype} (αναμένεται ${cashCode}). Θέλεις αλλαγή;`,
+              'Αλλαγή τώρα','Συνέχεια').then(user => {
+                if (user) {
+                  obj.mtype = obj.invoice_mtype = cashCode;
+                  try { input.value = JSON.stringify(obj); } catch(_){}
+                }
+                safeSubmitSaveSummary();
+              });
+          }
+          return; // pause repeat until user responds
+        }
+      }
 
       if (!FORCE_EDIT && repeatOn && (receiptsSwitchOn || isReceiptSummary(obj))) {
         // hide modal if already shown

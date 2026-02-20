@@ -1064,7 +1064,7 @@ def _append_group_log(group: Group, message: str) -> None:
 def select_group():
     """Set the active group for the session. Expects form param 'group' (group name).
     Only allows selecting groups the current user belongs to.
-    Also attempts to ensure group data is available locally (lazy-pull from Firebase).
+    Also automatically downloads group data from Firebase (lazy-pull).
     Returns JSON for AJAX requests, redirect for form submissions.
     """
     group_name = (request.form.get('group') or request.json.get('group') if request.is_json else request.form.get('group')) or ''
@@ -1089,20 +1089,28 @@ def select_group():
         flash('Δεν έχετε πρόσβαση στην ομάδα.', 'error')
         return redirect(url_for('auth.list_groups')), 403
 
-    # Attempt lazy-pull if group data missing locally
+    # Set active group
+    session['active_group'] = grp.name
+    current_app.logger.info(f'Ο χρήστης {current_user.username} επέλεξε την ομάδα {group_name}')
+    
+    # Automatically download group data from Firebase (lazy-pull)
+    # This ensures files are available locally when user selects the group
     try:
         import firebase_config
         if getattr(grp, 'data_folder', None):
-            firebase_config.ensure_group_data_local(grp.data_folder)
+            current_app.logger.info(f'Κατέβασε αρχεία για την ομάδα {group_name} από το Firebase...')
+            success = firebase_config.ensure_group_data_local(grp.data_folder)
+            if success:
+                current_app.logger.info(f'Τα αρχεία της ομάδας {group_name} κατεβάστηκαν επιτυχώς')
+            else:
+                current_app.logger.warning(f'Αποτυχία κατέβασμα αρχείων για την ομάδα {group_name}')
     except Exception as e:
-        # Log but don't fail - lazy-pull is non-critical
-        current_app.logger.debug(f"Lazy-pull failed when selecting group {group_name}: {e}")
-
-    session['active_group'] = grp.name
+        # Log but don't fail - download is non-critical
+        current_app.logger.warning(f"Download failed when selecting group {group_name}: {e}")
     
     # Return JSON for AJAX requests, redirect for form submissions
     if request.is_json:
-        return jsonify({'ok': True, 'message': f'Επιλέχθηκε η ομάδα: {grp.name}'}), 200
+        return jsonify({'ok': True, 'message': f'Επιλέχθηκε η ομάδα: {grp.name}', 'data_folder': getattr(grp, 'data_folder', None)}), 200
     else:
         flash(f'Επιλέχθηκε η ομάδα: {grp.name}', 'info')
         return redirect(url_for('auth.list_groups'))
@@ -1137,6 +1145,18 @@ def api_login():
             db.session.rollback()
         except Exception:
             pass
+    
+    # Sync user's groups from Firestore (if Firebase is enabled)
+    # This ensures the user's group memberships are up-to-date
+    try:
+        firebase_uid = getattr(user, 'firebase_uid', None) or getattr(user, 'pw_hash', None)
+        if firebase_uid:
+            firebase_config.sync_user_groups_from_firestore(user.id, firebase_uid)
+            logger.debug('User %s groups synced from Firestore on login', user.username)
+    except Exception as e:
+        logger.debug('Failed to sync groups from Firestore for user %s: %s', user.username, e)
+        # Continue anyway - syncing is not critical
+    
     return jsonify({'ok': True, 'username': user.username})
 
 
