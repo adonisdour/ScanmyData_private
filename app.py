@@ -9521,7 +9521,9 @@ def save_summary():
 
             tameiaki_mtype = str(settings.get("article_movement_type_tameiaki", "14") or "").strip()
             cash_account = str(settings.get("account_g_cash", "") or "").strip()
-            supplier_account = str(settings.get("account_g_supplier_wholesale", "") or "").strip()
+            is_receipt = bool(base_entry.get("is_receipt"))
+            supplier_account_key = "account_g_supplier_retail" if is_receipt else "account_g_supplier_wholesale"
+            supplier_account = str(settings.get(supplier_account_key, "") or "").strip()
             if not (tameiaki_mtype and cash_account and supplier_account):
                 return False
 
@@ -9536,16 +9538,18 @@ def save_summary():
             mirror_entry["mtype_label"] = "Ταμειακή"
             mirror_entry["_auto_cash_payment"] = True
             mirror_entry["book_category"] = "G"
-            mirror_entry["is_receipt"] = bool(base_entry.get("is_receipt"))
+            mirror_entry["is_receipt"] = is_receipt
 
+            supplier_desc = "Χρέωση - Προμηθευτής λιανικής (auto)" if is_receipt else "Χρέωση - Προμηθευτής χονδρικής (auto)"
+            supplier_category = "προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής"
             amt_str = str(base_entry.get("totalValue") or "0")
             mirror_entry["lines"] = [
                 {
                     "id": "mirror_debit",
-                    "description": "Χρέωση - Προμηθευτής χονδρικής (auto)",
+                    "description": supplier_desc,
                     "amount": amt_str,
                     "vat": "0",
-                    "category": "προμηθευτής_χονδρικής",
+                    "category": supplier_category,
                     "vat_category": ""
                 },
                 {

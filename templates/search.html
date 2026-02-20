@@ -1337,19 +1337,16 @@ try {
   const RECEIPT_MTYPE_STORAGE_KEY = 'receipt_mtype';
 
   function loadReceiptMtype(){
-    // Try to load from backend first
-    const vat = "{{ vat or '' }}";
-    if (vat && window.__cachedReceiptMtype !== undefined) {
-      return window.__cachedReceiptMtype;
+    // Server/cached value is authoritative.
+    if (window.__cachedReceiptMtype !== undefined) {
+      return String(window.__cachedReceiptMtype || '');
     }
-    // Fallback to localStorage
-    try { return localStorage.getItem(RECEIPT_MTYPE_STORAGE_KEY) || ''; }
-    catch(e){ return ''; }
+    return '';
   }
 
   async function loadReceiptMtypeFromBackend(){
     try {
-      const vat = "{{ vat or '' }}";
+      const vat = (window._repeatModalVAT || "{{ vat or '' }}" || '').trim();
       if (!vat) return '';
       
       const resp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), {
@@ -1359,6 +1356,7 @@ try {
       
       if (data.ok && data.repeat_entry && data.repeat_entry.receipt_mtype) {
         window.__cachedReceiptMtype = data.repeat_entry.receipt_mtype;
+        window.__repeat_receipt_mtype = data.repeat_entry.receipt_mtype;
         return data.repeat_entry.receipt_mtype;
       }
     } catch(e) {
@@ -1368,6 +1366,9 @@ try {
   }
 
   function saveReceiptMtype(mtype){
+    // Keep local cache for UX continuity.
+    window.__cachedReceiptMtype = mtype || '';
+    window.__repeat_receipt_mtype = mtype || '';
     try { localStorage.setItem(RECEIPT_MTYPE_STORAGE_KEY, mtype || ''); }
     catch(e){ console.warn('Failed to save receipt MTYPE', e); }
   }
@@ -1398,7 +1399,7 @@ try {
 
     // Load from backend first
     const backendMtype = await loadReceiptMtypeFromBackend();
-    const currentMtype = backendMtype || loadReceiptMtype();
+    const currentMtype = backendMtype || loadReceiptMtype() || '';
     populateMtypeDropdown(select, currentMtype);
 
     // Ensure user interactions on this select update the hidden summary inputs
@@ -1461,6 +1462,8 @@ try {
         });
         
         if (saveResp.ok) {
+          window.__cachedReceiptMtype = mtype;
+          window.__repeat_receipt_mtype = mtype;
           if(typeof showFlash === 'function'){
             showFlash('Αποθηκεύτηκε ο κωδικός κίνησης για αποδείξεις: ' + (mtype || '(κενό)'), 'success', 3000);
           }
@@ -2275,7 +2278,7 @@ if (typeof window !== 'undefined') {
 
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
-    clearBtn.className = 'px-3 py-2 border rounded text-sm ml-2 clear-category';
+    clearBtn.className = 'px-3 py-2 border rounded text-sm ml-2 modal-warning-btn modal-warning-btn--danger dark:bg-red-600 dark:hover:bg-red-700 clear-category';
     clearBtn.innerText = 'Καθαρισμός';
     btnwrap.appendChild(clearBtn);
 
@@ -2804,7 +2807,7 @@ if (typeof window !== 'undefined') {
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.id = 'clearCategory';
-  clearBtn.className = 'px-3 py-2 border rounded text-sm ml-2';
+  clearBtn.className = 'px-3 py-2 border rounded text-sm ml-2 modal-warning-btn modal-warning-btn--danger dark:bg-red-600 dark:hover:bg-red-700';
   clearBtn.innerText = 'Καθαρισμός';
   clearBtn.addEventListener('click', function(){
     obj.lines[0].category = '';
@@ -5089,19 +5092,9 @@ function __rc_current_mark_for_debug(){
 }
 
 async function __rc_debug_repeat_log(eventName, details){
-  try {
-    const payload = {
-      event: String(eventName || 'unknown').slice(0, 120),
-      mark: __rc_current_mark_for_debug(),
-      details: (details && typeof details === 'object') ? details : { value: details }
-    };
-    await fetch('/api/debug/repeat_warning_log', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-  } catch(_) {}
+  // logging disabled – API removed
+  // stub exists so all callsites remain valid
+  return;
 }
 
 (function __rc_install_console_capture(){
@@ -5942,6 +5935,24 @@ try {
       const markData = await markRes.json().catch(() => null);
       const nextMark = (markData && markData.mark) ? markData.mark : '';
 
+      // Repeat receipts: πάρε authoritative receipt_mtype από server settings πελάτη.
+      let serverReceiptMtype = '';
+      try {
+        const repeatOnNow = !!document.getElementById('repeatEntrySwitch')?.checked;
+        const activeVat = (window._repeatModalVAT || "{{ vat or '' }}" || '').trim();
+        if (repeatOnNow && activeVat) {
+          const repRes = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
+          const repData = await repRes.json().catch(() => null);
+          serverReceiptMtype = String(repData?.repeat_entry?.receipt_mtype || '').trim();
+          if (serverReceiptMtype) {
+            window.__cachedReceiptMtype = serverReceiptMtype;
+            window.__repeat_receipt_mtype = serverReceiptMtype;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch server receipt_mtype for repeat receipts flow', e);
+      }
+
       // Prepare summary object για modal
       const summaryObj = {
         mark: nextMark,
@@ -5959,6 +5970,11 @@ try {
   category: 'αποδειξακια',
   is_receipt: true,
   number: (j.progressive_aa || '')};
+
+      if (serverReceiptMtype) {
+        summaryObj.receipt_mtype = serverReceiptMtype;
+        summaryObj.mtype = serverReceiptMtype;
+      }
 
       // Έλεγχος: Αν δεν υπάρχει issuer_name, κάλεσε VAT validator
       if (!summaryObj.Name && summaryObj.AFM_issuer) {
@@ -6172,6 +6188,27 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
         }
       }
     } catch (e) { console.warn('merge summaryDataInput -> summary failed', e); }
+
+    // Authoritative server override για αποδείξεις σε repeat mode:
+    // αν υπάρχει receipt_mtype στο repeat_entry του πελάτη, χρησιμοποίησέ το.
+    try {
+      const repeatOnNow = !!document.getElementById('repeatEntrySwitch')?.checked;
+      const activeVat = (window._repeatModalVAT || "{{ vat or '' }}" || '').trim();
+      if (repeatOnNow && activeVat) {
+        const repRes = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
+        const repData = await repRes.json().catch(() => null);
+        const serverReceiptMtype = String(repData?.repeat_entry?.receipt_mtype || '').trim();
+        if (serverReceiptMtype) {
+          summary.receipt_mtype = serverReceiptMtype;
+          summary.mtype = serverReceiptMtype;
+          window.__cachedReceiptMtype = serverReceiptMtype;
+          window.__repeat_receipt_mtype = serverReceiptMtype;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to enforce server receipt_mtype before receipt save', e);
+    }
+
     const res = await fetchWithOverlay('/save_summary', {
       method: 'POST',
       credentials: 'same-origin',

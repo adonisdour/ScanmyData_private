@@ -259,7 +259,7 @@ def _account_key_candidates_g(canon: str, rate: int) -> List[str]:
     ]
 
 
-def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int) -> str:
+def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int, is_receipt: bool = False) -> str:
     """Βρίσκει λογαριασμό Γ Κατηγορίας"""
     setts = _settings_norm(settings)
     for key in _account_key_candidates_g(canon, rate):
@@ -271,11 +271,17 @@ def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int) -> str:
 
     # Fallbacks για ειδικές mirror κατηγορίες
     canon_s = str(canon or "").strip().lower()
-    supplier_aliases = {"προμηθευτής_χονδρικής", "προμηθευτης_χονδρικης", "προμηθευτής", "προμηθευτης"}
+    supplier_aliases = {
+        "προμηθευτής_χονδρικής", "προμηθευτης_χονδρικης",
+        "προμηθευτής_λιανικής", "προμηθευτης_λιανικης",
+        "προμηθευτής", "προμηθευτης", "supplier_wholesale", "supplier_retail"
+    }
+    supplier_retail_aliases = {"προμηθευτής_λιανικής", "προμηθευτης_λιανικης", "supplier_retail"}
     cash_aliases = {"ταμείο", "ταμειο", "cash", "ταμειο_λογαριασμος"}
 
     if canon_s in supplier_aliases:
-        val = setts.get(_norm_key("account_g_supplier_wholesale"), "")
+        supplier_key = "account_g_supplier_retail" if (is_receipt or canon_s in supplier_retail_aliases) else "account_g_supplier_wholesale"
+        val = setts.get(_norm_key(supplier_key), "")
         if isinstance(val, str) and val.strip() and _validate_g_account_format(val.strip()):
             return val.strip()
 
@@ -331,7 +337,7 @@ def _account_detail_for_line_g(
                 break
 
     if not chosen:
-        fallback_account = _get_account_for_g(settings, canon, target_rate)
+        fallback_account = _get_account_for_g(settings, canon, target_rate, is_receipt=is_receipt)
         if fallback_account:
             chosen = fallback_account
             used_key = "fallback_special_category"
