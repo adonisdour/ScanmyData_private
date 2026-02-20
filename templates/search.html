@@ -147,7 +147,7 @@
             <h3 class="text-lg font-semibold">
                  Περίληψη Παραστατικού - <span id="summaryModalMark">MARK</span>
             </h3>
-            <button id="modalCloseX" class="text-gray-500 text-xl font-bold">✕</button>
+            <button type="button" id="modalCloseX" class="text-gray-500 text-xl font-bold modal-summary-close">✕</button>
         </div>
 
         <!-- SUMMARY INFO -->
@@ -171,7 +171,7 @@
         <div id="invoiceMtypeContainer" class="mt-4" style="display:none;">
             <label class="font-medium text-sm">Είδος Κίνησης (για Γ Κατηγορία)</label>
             <select id="invoiceMtypeSelect" class="mt-1 p-2 border rounded w-full max-w-md">
-                <option value="">-- επίλεξε είδος κίνησης --</option>
+                <option value="">-- παρακαλώ επιλέξτε --</option>
             </select>
         </div>
 
@@ -198,7 +198,7 @@
                     <input type="hidden" id="scrapeCategoryField" name="scrape_category" value="">
                     <input type="hidden" id="scrapeForceField" name="scrape_force" value="false">
                 </form>
-                <button type="button" id="modalCloseBtn" class="px-3 py-2 border rounded">Κλείσιμο</button>
+                <button type="button" id="modalCloseBtn" class="px-3 py-2 border rounded modal-summary-close">Κλείσιμο</button>
             </div>
         </div>
 
@@ -1487,6 +1487,96 @@ try {
   });
 
   // Monitor receipt toggle + repeat toggle changes
+  // Έλεγχος τρόπου πληρωμής για επαναληπτική εισαγωγή τιμολογίων (invoices)
+  // Παυσιμο της διαδικασίας με ίδιο τρόπο όπως η παύση του επαναχαρακτηρισμού
+  async function checkAndWarnPaymentMethodForInvoices(){
+    // ΑΠΛΗ ΛΟΓΙΚΗ: 
+    // Αν έχουμε payment method 3 (cash) + selected mtype ≠ cash MTYPE
+    // Τότε δείξε warning και σταμάτα
+    // Ισχύει ΤΟΣΟ σε repeat mode ΟΣΟ και όταν repeat mode είναι κλειστή
+    try {
+      const isReceipts = isReceiptsOn();
+      
+      if(isReceipts) return;
+      
+      const summaryInput = document.getElementById('summaryJsonInput');
+      if(!summaryInput) return;
+      
+      let summary = {};
+      try {
+        summary = JSON.parse(summaryInput.value || '{}') || {};
+      } catch(e) {
+        return;
+      }
+      
+      const paymentMethodType = String(summary.paymentMethodType || '').trim();
+      if(paymentMethodType !== '3') {
+        // Δεν είναι μετρητά - δεν ελέγχουμε
+        return;
+      }
+      
+      // Πάρε το cash MTYPE
+      if(!window.G_CATEGORY_DATA || !Array.isArray(window.G_CATEGORY_DATA.mtype_options)) {
+        return;
+      }
+      
+      const movementTypes = window.G_CATEGORY_DATA.mtype_options || [];
+      let cashMtypeCode = '';
+      let cashMtypeLabel = '';
+      
+      if(window.G_CATEGORY_DATA.cash_mtype_code) {
+        cashMtypeCode = String(window.G_CATEGORY_DATA.cash_mtype_code).trim();
+        cashMtypeLabel = String(window.G_CATEGORY_DATA.cash_mtype_label || '').trim() || cashMtypeCode;
+      } else {
+        const cashMtypeOption = movementTypes.find(mt => {
+          const lbl = String((mt && mt.label) || '').toLowerCase();
+          return lbl.includes('αγορ') && lbl.includes('εξοδ') && lbl.includes('ταμει');
+        }) || null;
+        cashMtypeCode = String((cashMtypeOption && cashMtypeOption.value) || '14').trim();
+        cashMtypeLabel = String((cashMtypeOption && cashMtypeOption.label) || 'Αγορών - Εξόδων Ταμειακή').trim();
+      }
+      
+      let selectedMtype = String(
+        summary.mtype || summary.invoice_mtype || 
+        document.getElementById('invoiceMtypeSelect')?.value || ''
+      ).trim();
+      
+      if(!selectedMtype) return;
+      
+      console.log('[PaymentCheck] Invoice payment=3 (cash), selectedMtype=' + selectedMtype + ', expected=' + cashMtypeCode);
+      
+      // Αν έχουμε mismatch payment=cash αλλά mtype≠cash mtype, δείξε warning
+      if(selectedMtype && selectedMtype !== cashMtypeCode) {
+        console.warn('[PaymentCheck] MISMATCH: cash payment (3) but mtype=' + selectedMtype + ' ≠ ' + cashMtypeCode);
+        
+        const userConfirmed = await showModalConfirm(
+          '⚠️ Προειδοποίηση Τρόπου Πληρωμής',
+          `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι «${cashMtypeLabel}».\n\nΘέλεις να το αλλάξω τώρα αυτόματα;`,
+          'Αλλαγή τώρα',
+          'Συνέχεια έτσι'
+        );
+        
+        if(userConfirmed) {
+          const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+          if(mtypeSelect) {
+            mtypeSelect.value = cashMtypeCode;
+            mtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          
+          summary.mtype = cashMtypeCode;
+          summary.invoice_mtype = cashMtypeCode;
+          summaryInput.value = JSON.stringify(summary);
+          
+          if(typeof updateSummaryFromDom === 'function') {
+            try { updateSummaryFromDom(); } catch(e){ console.warn('updateSummaryFromDom failed', e); }
+          }
+        }
+      }
+    } catch(e) {
+      console.error('[PaymentCheck] Exception:', e);
+    }
+  }
+
   async function checkAndOpenReceiptMtypeModal(){
     const isReceipts = isReceiptsOn();
     const isRepeat = isRepeatEntryEnabled();
@@ -1495,6 +1585,16 @@ try {
     if(isReceipts && isRepeat && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
       console.log('Auto-opening receipt MTYPE modal (receipts + repeat enabled)');
       openReceiptMtypeModal();
+    }
+    
+    // Έλεγχος τρόπου πληρωμής για invoices σε repeat mode
+    if(!isReceipts && isRepeat) {
+      console.log('[checkAndOpenReceiptMtypeModal] Calling checkAndWarnPaymentMethodForInvoices for invoices');
+      try {
+        await checkAndWarnPaymentMethodForInvoices();
+      } catch(e) {
+        console.warn('[checkAndOpenReceiptMtypeModal] checkAndWarnPaymentMethodForInvoices error:', e);
+      }
     }
   }
 
@@ -1557,6 +1657,8 @@ try {
   // Expose for manual access
   window.openReceiptMtypeModal = openReceiptMtypeModal;
   window.getReceiptMtype = loadReceiptMtype;
+  window.checkAndWarnPaymentMethodForInvoices = checkAndWarnPaymentMethodForInvoices;
+  window.isRepeatEntryEnabled = isRepeatEntryEnabled;
 
   // Hook into receipt confirmation to include MTYPE
   // This will be used when confirming receipts
@@ -1892,61 +1994,123 @@ if (typeof window !== 'undefined') {
       return String((opt && (opt.value||opt.key))||'').trim();
     }
     async function handlePrecheck(e){
+      console.log('[handlePrecheck] Starting precheck before save');
+      
+      // Αρχικά κάλεσε το πλήρες payment method check
+      try {
+        console.log('[handlePrecheck] Waiting for G_CATEGORY_DATA');
+        let dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+        let attempts = 0;
+        
+        // Περίμενε μέχρι 750ms για τα δεδομένα
+        while(!dataReady && attempts < 15) {
+          await new Promise(r => setTimeout(r, 50));
+          dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+          attempts++;
+        }
+        
+        if(dataReady) {
+          console.log('[handlePrecheck] Calling checkAndWarnPaymentMethodForInvoices');
+          // Must call via window since function may be in different scope
+          if (typeof window.checkAndWarnPaymentMethodForInvoices === 'function') {
+            await window.checkAndWarnPaymentMethodForInvoices();
+          } else if (typeof checkAndWarnPaymentMethodForInvoices === 'function') {
+            await checkAndWarnPaymentMethodForInvoices();
+          } else {
+            console.warn('[handlePrecheck] checkAndWarnPaymentMethodForInvoices not available');
+          }
+        } else {
+          console.warn('[handlePrecheck] G_CATEGORY_DATA not available, skipping payment check');
+        }
+      } catch(err) {
+        console.warn('[handlePrecheck] Payment check failed:', err);
+        // Don't block submission on payment check error - it's just a warning
+      }
+      
+      // Backup payment check for repeat mode invoices
+      console.log('[handlePrecheck-Fallback] Starting fallback payment check');
       const summary = getCurrentSummary();
       const paymentMethodType = String(summary.paymentMethodType||'').trim();
-      // Prefer whatever the user currently has selected in the DOM – the hidden
-      // JSON may be stale until `updateSummaryFromDom` runs.
-      const selEl = document.getElementById('invoiceMtypeSelect');
-      let selected = '';
-      if (selEl && selEl.value) {
-        selected = String(selEl.value).trim();
+      console.log('[handlePrecheck-Fallback] Payment method type:', paymentMethodType);
+      
+      // Get selected MTYPE from DOM or summary
+      const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+      let selectedMtype = '';
+      if (mtypeSelect && mtypeSelect.value) {
+        selectedMtype = String(mtypeSelect.value).trim();
+        console.log('[handlePrecheck-Fallback] Got MTYPE from DOM select:', selectedMtype);
       } else {
-        selected = String(summary.mtype || summary.invoice_mtype || localStorage.getItem('saved_invoice_mtype') || '').trim();
+        selectedMtype = String(summary.mtype || summary.invoice_mtype || localStorage.getItem('saved_invoice_mtype') || '').trim();
+        console.log('[handlePrecheck-Fallback] Got MTYPE from summary/localStorage:', selectedMtype);
       }
+      
       const cashCode = getCashMtypeCode();
-      debugLog('precheck', {paymentMethodType,selected,cashCode});
-      if (paymentMethodType==='3' && selected && cashCode && selected !== cashCode){
-        const user = await showModalConfirm('Προειδοποίηση',
-          `Τρόπος πληρωμής μετρητά αλλά Είδος Κίνησης=${selected} (αναμένεται ${cashCode}). Θέλεις αλλαγή;`,
-          'Αλλαγή τώρα','Συνέχεια');
+      console.log('[handlePrecheck-Fallback] Cash MTYPE code:', cashCode);
+      console.log('[handlePrecheck-Fallback] Conditions - paymentMethodType===3:', paymentMethodType==='3', 'selected:', !!selectedMtype, 'cashCode:', !!cashCode, 'mismatch:', selectedMtype !== cashCode);
+      
+      // Check for cash payment with wrong MTYPE
+      if (paymentMethodType==='3' && selectedMtype && cashCode && selectedMtype !== cashCode){
+        console.log('[handlePrecheck-Fallback] MISMATCH DETECTED - Cash payment but MTYPE is not cash MTYPE');
+        const user = await showModalConfirm(
+          '⚠️ Προειδοποίηση Τρόπου Πληρωμής',
+          `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι «Αγορών - Εξόδων Ταμειακή» (${cashCode}).\n\nΘέλεις να το αλλάξω τώρα αυτόματα;`,
+          'Αλλαγή τώρα',
+          'Συνέχεια'
+        );
         if (user){
-          const selEl2 = document.getElementById('invoiceMtypeSelect');
-          if (selEl2){
-            selEl2.value = cashCode;
-            try { selEl2.dispatchEvent(new Event('change',{bubbles:true})); } catch(_){ }
+          console.log('[handlePrecheck-Fallback] User confirmed - updating MTYPE to cash code');
+          const sel = document.getElementById('invoiceMtypeSelect');
+          if (sel){
+            sel.value = cashCode;
+            try { sel.dispatchEvent(new Event('change',{bubbles:true})); } catch(e){ console.warn('change event failed', e); }
           }
-          const input = document.getElementById('summaryJsonInput');
-          if (input){
+          const inp = document.getElementById('summaryJsonInput');
+          if (inp){
             try{
-              const s = JSON.parse(input.value||'{}')||{};
-              s.mtype = cashCode;
-              s.invoice_mtype = cashCode;
-              input.value = JSON.stringify(s);
+              const obj = JSON.parse(inp.value||'{}')||{};
+              obj.mtype = cashCode;
+              obj.invoice_mtype = cashCode;
+              inp.value = JSON.stringify(obj);
             }catch(e){ console.warn('cash-precheck update failed',e); }
           }
           localStorage.setItem('saved_invoice_mtype', cashCode);
-          try{ updateSummaryFromDom(); } catch(_) {}
-          // other code may rely on summary refresh when the modal is open
-          try { scheduleSummaryRefresh(200); } catch(_) {}
-          debugLog('precheck applied', cashCode);
+          try{ updateSummaryFromDom(); } catch(e){ console.warn('updateSummaryFromDom failed', e); }
+          console.log('[handlePrecheck-Fallback] MTYPE update complete');
+        } else {
+          console.log('[handlePrecheck-Fallback] User chose Continue - proceeding without MTYPE change');
         }
       } else {
-        debugLog('precheck skipped');
+        console.log('[handlePrecheck-Fallback] No mismatch or conditions not met, skipping payment check');
       }
     }
     document.addEventListener('DOMContentLoaded', function(){
+      console.log('[SubmitListener] Installing submit listener on saveSummaryForm');
       document.getElementById('saveSummaryForm')?.addEventListener('submit', function(e){
-        if (document.getElementById('scrapeUrlField')?.value) return; // receipt path
+        console.log('[SubmitListener] Submit event fired!', e);
+        const scrapeUrl = document.getElementById('scrapeUrlField')?.value;
+        console.log('[SubmitListener] scrapeUrlField value:', scrapeUrl);
+        if (scrapeUrl) {
+          console.log('[SubmitListener] Receipt path detected, skipping handlePrecheck');
+          return; // receipt path
+        }
+        console.log('[SubmitListener] Preventing default and calling handlePrecheck');
         e.preventDefault();
-        handlePrecheck(e).then(()=>{ try{ e.target.submit(); }catch(_){} });
+        handlePrecheck(e).then(()=>{ 
+          console.log('[SubmitListener] handlePrecheck resolved, calling e.target.submit()');
+          try{ e.target.submit(); }catch(err){ console.error('[SubmitListener] submit() failed:', err); } 
+        }).catch((err) => {
+          console.error('[SubmitListener] handlePrecheck rejected:', err);
+        });
       });
       document.addEventListener('click', function(ev){
         const btn = ev.target.closest('#summaryModal button, #summaryModal input[type="submit"]');
         if (!btn) return;
-        // ignore close/cancel so they don't accidentally trigger a save
+        // close/cancel buttons: actually close the modal
         if (btn.matches('.modal-summary-close, .modal-cancel-btn')){
           ev.preventDefault();
           ev.stopPropagation();
+          hideSummaryModal();
+          removeForceEditParamFromUrl();
           return;
         }
         const txt=(btn.textContent||'').toLowerCase();
@@ -1956,6 +2120,9 @@ if (typeof window !== 'undefined') {
         }
       }, true);
     });
+    
+    // Expose handlePrecheck to global scope
+    window.handlePrecheck = handlePrecheck;
   })();
 }
 
@@ -1983,6 +2150,9 @@ if (typeof window !== 'undefined') {
     return;
   }
 
+  // Το IIFE παρακάτω χειρίζεται όλο το rendering - επέστρεψε μετά από αυτό
+  let returnAfterIIFE = false;
+
   try {
     const markCandidates = [obj && (obj.mark || obj.MARK || obj.Mark), obj && obj.number];
     const rawMark = markCandidates.find(val => val != null && String(val).trim() !== '');
@@ -2004,6 +2174,7 @@ if (typeof window !== 'undefined') {
 
   // helper to persist back to the hidden input
     (function(){
+  console.log('[RenderSummary-IIFE] Inside IIFE, setting up rendering functions');
   function safeParseJson(s){
     try { return JSON.parse(s || '{}'); } catch(e){ return {}; }
   }
@@ -2415,8 +2586,10 @@ if (typeof window !== 'undefined') {
 
   // render everything into the container
   function renderSummaryLines(){
+    console.log('[RenderSummary-IIFE] renderSummaryLines called');
     if(!container) return;
     const summary = normalizeSummary(getSummaryObj());
+    console.log('[RenderSummary-IIFE] Summary lines count:', summary?.lines?.length || 0);
     const lines = summary.lines || [];
     const categories = getCategories();
 
@@ -2599,13 +2772,22 @@ if (typeof window !== 'undefined') {
     try { obs.observe(modal, { attributes: true, attributeFilter:['style','class'] }); } catch(e){ /* ignore */ }
   }
 
-  // expose for debug and for RC_AUTO_INJECT modal
   window._renderSummaryLines = renderSummaryLines;
   window.buildTableHTML = buildTableHTML;
   window.buildSingleLineHTML = buildSingleLineHTML;
   window.wireInteractions = wireInteractions;
   window.updateSummaryFromDom = updateSummaryFromDom;
+  
+  console.log('[RenderSummary] IIFE completed, marking renderAfterIIFE=true');
+  returnAfterIIFE = true; // Σήμα ότι το IIFE τελείωσε
 })();
+
+  console.log('[RenderSummary] After IIFE, returnAfterIIFE =', returnAfterIIFE);
+  // Αν το IIFE έκανε rendering, δεν συνεχίζουμε με τον παλιό κώδικα
+  if (returnAfterIIFE) {
+    console.log('[RenderSummary] IIFE already rendered, skipping legacy code');
+    return;
+  }
   function persist() {
     summaryInput.value = JSON.stringify(obj || {});
   }
@@ -3177,13 +3359,13 @@ document.addEventListener('DOMContentLoaded', replayPersistedReceiptFlash, { onc
           sessionId,
           version: pollVersion || 0,
           attached: !!isAttached,
-        hasRemoteDevice: !!hasRemoteDevice,
-        lastRemoteActivity,
-        mode: remoteMode,
-        repeat: remoteRepeatEnabled,
-        autoSubmit: !!remoteAutoSubmitEnabled,
-        summaryVersion: lastSummaryVersion || 0,
-      };
+          hasRemoteDevice: !!hasRemoteDevice,
+          lastRemoteActivity,
+          mode: remoteMode,
+          repeat: remoteRepeatEnabled,
+          autoSubmit: !!remoteAutoSubmitEnabled,
+          summaryVersion: lastSummaryVersion || 0,
+        };
         if (expiresAt){
           const expIso = new Date(expiresAt).toISOString();
           if (expIso) state.expiresAt = expIso;
@@ -5013,15 +5195,34 @@ function normalizeVatKey(s){
 }
 
 // --- εφαρμογή του ενεργού mapping στις γραμμές + auto submit ---
-function applyMappingToSummaryAndSubmitUsingMapping(mapping){
+async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
+  console.log('[RepeatSubmit] applyMappingToSummaryAndSubmitUsingMapping called', mapping);
   const input = document.getElementById('summaryJsonInput');
   const form  = document.getElementById('saveSummaryForm');
-  if (!input || !form) return false;
+  if (!input || !form) {
+    console.warn('[RepeatSubmit] Missing input or form', { input: !!input, form: !!form });
+    return false;
+  }
 
+  // DEBUG: Log raw input value
+  const rawInputValue = input.value || '{}';
+  console.log('[RepeatSubmit] Raw input value length:', rawInputValue.length);
+  console.log('[RepeatSubmit] Raw input (first 500 chars):', rawInputValue.substring(0, 500));
+  
   let obj;
-  try { obj = JSON.parse(input.value || '{}'); } catch(e){ obj = {}; }
+  try { obj = JSON.parse(rawInputValue); } catch(e){ 
+    console.warn('[RepeatSubmit] Failed to parse summary', e);
+    console.log('[RepeatSubmit] Attempted to parse:', rawInputValue.substring(0, 200));
+    obj = {}; 
+  }
   const lines = Array.isArray(obj.lines) ? obj.lines : [];
-  if (!lines.length) return false;
+  console.log('[RepeatSubmit] Parsed obj keys:', Object.keys(obj));
+  console.log('[RepeatSubmit] Parsed obj.lines:', obj.lines);
+  console.log('[RepeatSubmit] Summary lines count:', lines.length);
+  if (!lines.length) {
+    console.warn('[RepeatSubmit] No lines found');
+    return false;
+  }
 
   // Βεβαιώσου ότι έχουμε όλα τα κλειδιά ποσοστών
   const M = Object.assign(
@@ -5047,10 +5248,17 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   input.value = JSON.stringify(obj);
 
   // Αν λείπουν κατηγορίες -> άστο να φανεί το modal για χειροκίνητα
-  if (missing) return false;
+  if (missing) {
+    console.log('[RepeatSubmit] Missing categories, aborting auto-submit');
+    return false;
+  }
 
   // Προστασία: μην ξανα-γίνει submit δεύτερη φορά
-  if (window.__repeat_auto_submitting) return true;
+  if (window.__repeat_auto_submitting) {
+    console.log('[RepeatSubmit] Already submitting, skipping');
+    return true;
+  }
+  console.log('[RepeatSubmit] Setting __repeat_auto_submitting flag');
   window.__repeat_auto_submitting = true;
 
   // Καθάρισε τυχόν πεδία receipts (για να μην μπερδέψουν το submit)
@@ -5061,9 +5269,150 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   if (c) c.value = '';
   if (f) f.value = 'false';
 
-  // Κάνε submit στο υπάρχον flow σου
-  try { form.submit(); } catch(_) { window.__repeat_auto_submitting = false; return false; }
-  return true;
+  console.log('[RepeatSubmit] About to submit form');
+  
+  // ΚΡΙΣΙΜΟ: INLINE payment check ΠΡΙΝ το submit
+  // Γιατί το requestSubmit() ΔΕΝ trigger custom event listeners
+  console.log('[RepeatSubmit-PaymentCheck] Starting inline payment validation');
+  
+  try {
+    // === INLINE PAYMENT METHOD vs MTYPE CHECK ===
+    const summaryStr = input.value || '{}';
+    let summary = {};
+    try { summary = JSON.parse(summaryStr); } catch (_) {}
+    
+    console.log('[RepeatSubmit-PaymentCheck] Full summary keys:', Object.keys(summary));
+    
+    const paymentMethodType = String(summary.paymentMethodType || '').trim();
+    const paymentMethodLabel = String(summary.paymentMethodLabel || '').toLowerCase();
+    console.log('[RepeatSubmit-PaymentCheck] Payment method type:', paymentMethodType, 'label:', paymentMethodLabel);
+    
+    // Fallback: if paymentMethodType is empty but label contains "μετρητ", assume cash (3)
+    const deducedPaymentType = !paymentMethodType && paymentMethodLabel.includes('μετρητ') ? '3' : paymentMethodType;
+    console.log('[RepeatSubmit-PaymentCheck] Deduced payment type:', deducedPaymentType);
+    
+    // Get selected MTYPE
+    const mtypeSelect = document.getElementById('invoiceMtypeSelect');
+    let selectedMtype = '';
+    if (mtypeSelect && mtypeSelect.value) {
+      selectedMtype = String(mtypeSelect.value).trim();
+      console.log('[RepeatSubmit-PaymentCheck] Got MTYPE from DOM:', selectedMtype);
+    } else {
+      selectedMtype = String(summary.mtype || summary.invoice_mtype || localStorage.getItem('saved_invoice_mtype') || '').trim();
+      console.log('[RepeatSubmit-PaymentCheck] Got MTYPE from summary/storage:', selectedMtype);
+    }
+    
+    // Get cash MTYPE code from G_CATEGORY_DATA or by pattern matching
+    let cashCode = '';
+    let cashLabel = '';
+    if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.cash_mtype_code) {
+      cashCode = String(window.G_CATEGORY_DATA.cash_mtype_code).trim();
+      console.log('[RepeatSubmit-PaymentCheck] Got cash MTYPE from G_CATEGORY_DATA:', cashCode);
+    } 
+    if (window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options)) {
+      // Find by label contains 'αγορ' + 'εξοδ' + 'ταμει'
+      for (let opt of window.G_CATEGORY_DATA.mtype_options) {
+        const label = String(opt.label || '').toLowerCase();
+        const code = String(opt.code || '').trim();
+        if (label.includes('αγορ') && label.includes('εξοδ') && label.includes('ταμει')) {
+          if (!cashCode) cashCode = code;
+          cashLabel = opt.label || '';
+          console.log('[RepeatSubmit-PaymentCheck] Found cash MTYPE by pattern - code:', code, 'label:', opt.label);
+          break;
+        }
+      }
+    }
+    
+    console.log('[RepeatSubmit-PaymentCheck] Final cash MTYPE code:', cashCode, 'label:', cashLabel);
+    console.log('[RepeatSubmit-PaymentCheck] Selected MTYPE:', selectedMtype);
+    console.log('[RepeatSubmit-PaymentCheck] Condition checks - deducedPayment:', deducedPaymentType, 'isCash:', deducedPaymentType==='3', 'hasMtype:', !!selectedMtype, 'hasCashCode:', !!cashCode, 'isMismatch:', selectedMtype !== cashCode);
+    
+    // Check: Cash payment (3) must have cash MTYPE
+    if (deducedPaymentType === '3' && selectedMtype && cashCode && selectedMtype !== cashCode) {
+      console.log('[RepeatSubmit-PaymentCheck] MISMATCH DETECTED: Cash payment but wrong MTYPE');
+      console.log('[RepeatSubmit-PaymentCheck] Details:', { deducedPaymentType, selectedMtype, cashCode, cashLabel });
+      
+      // Show modal asking user - with fallback to browser alert if showModalConfirm not available
+      let userChoice = false;
+      const modalTitle = '⚠️ Προειδοποίηση Τρόπου Πληρωμής';
+      const modalMsg = `Το παραστατικό έχει τρόπο πληρωμής «Μετρητά», αλλά το επιλεγμένο Είδος Κίνησης δεν είναι «${cashLabel || 'Αγορών - Εξόδων Ταμειακή'}».\n\nΘέλεις να το αλλάξω τώρα αυτόματα;`;
+      
+      if (typeof showModalConfirm === 'function') {
+        try {
+          userChoice = await showModalConfirm(
+            modalTitle,
+            modalMsg,
+            'Αλλαγή τώρα',
+            'Συνέχεια'
+          );
+          console.log('[RepeatSubmit-PaymentCheck] User choice from modal:', userChoice ? 'Confirmed' : 'Cancelled');
+        } catch(modalErr) {
+          console.error('[RepeatSubmit-PaymentCheck] showModalConfirm failed:', modalErr);
+          // Fallback to browser confirm
+          userChoice = confirm(modalMsg);
+          console.log('[RepeatSubmit-PaymentCheck] Fallback browser confirm choice:', userChoice);
+        }
+      } else {
+        console.log('[RepeatSubmit-PaymentCheck] showModalConfirm not available, using browser confirm');
+        userChoice = confirm(modalMsg);
+        console.log('[RepeatSubmit-PaymentCheck] Browser confirm choice:', userChoice);
+      }
+      
+      if (userChoice) {
+        // User wants to change MTYPE to cash
+        console.log('[RepeatSubmit-PaymentCheck] User confirmed - Updating MTYPE to:', cashCode);
+        if (mtypeSelect) {
+          mtypeSelect.value = cashCode;
+          mtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          console.log('[RepeatSubmit-PaymentCheck] Updated DOM select value');
+        }
+        // Update hidden JSON
+        summary.mtype = cashCode;
+        summary.invoice_mtype = cashCode;
+        input.value = JSON.stringify(summary);
+        console.log('[RepeatSubmit-PaymentCheck] Updated hidden JSON input');
+        // Update localStorage
+        localStorage.setItem('saved_invoice_mtype', cashCode);
+        // Try to update DOM
+        if (typeof updateSummaryFromDom === 'function') {
+          try {
+            updateSummaryFromDom();
+            console.log('[RepeatSubmit-PaymentCheck] Called updateSummaryFromDom()');
+          } catch (e) {
+            console.log('[RepeatSubmit-PaymentCheck] updateSummaryFromDom failed:', e);
+          }
+        }
+        console.log('[RepeatSubmit-PaymentCheck] MTYPE update completed');
+      } else {
+        console.log('[RepeatSubmit-PaymentCheck] User cancelled - keeping original MTYPE:', selectedMtype);
+      }
+    } else {
+      console.log('[RepeatSubmit-PaymentCheck] No payment/MTYPE mismatch detected - conditions not met');
+      console.log('[RepeatSubmit-PaymentCheck] Breakdown:', { 
+        isCashPayment: deducedPaymentType === '3',
+        hasMtype: !!selectedMtype, 
+        hasCashCode: !!cashCode,
+        mismatch: selectedMtype !== cashCode 
+      });
+    }
+    
+    console.log('[RepeatSubmit-PaymentCheck] Payment validation complete');
+    
+    // Now submit form
+    if (form.requestSubmit) {
+      console.log('[RepeatSubmit] Using requestSubmit() after payment check');
+      form.requestSubmit();
+    } else {
+      console.log('[RepeatSubmit] Using form.submit() after payment check');
+      form.submit();
+    }
+    
+    return true;
+  } catch(err) {
+    console.error('[RepeatSubmit-PaymentCheck] Error during validation or submit:', err);
+    window.__repeat_auto_submitting = false;
+    return false;
+  }
 }
   // ---------- Initialization: load server repeat_entry config ----------
   (async function initRepeatEntry(){
@@ -5111,18 +5460,36 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
 
         // If repeat enabled and mapping exists and modal_summary present -> auto apply mapping now
         if (enabled && mapping && Object.keys(mapping).length && summaryInput) {
-        const receiptsOn = !!(useReceiptsSwitch && useReceiptsSwitch.checked);
+          console.log('[RepeatInit] Checking auto-submit conditions', { enabled, hasMapping: !!mapping, summaryInput: !!summaryInput });
+          console.log('[RepeatInit] summaryInput.value length:', summaryInput.value?.length || 0);
+          console.log('[RepeatInit] summaryInput.value (first 300 chars):', (summaryInput.value || '').substring(0, 300));
+          const receiptsOn = !!(useReceiptsSwitch && useReceiptsSwitch.checked);
+          console.log('[RepeatInit] receiptsOn:', receiptsOn);
           // ΝΕΟ: Αν υπάρχει το yellow box (ALLOW_EDIT_EXISTING = true και όχι force_edit), μην κάνε αυτόματη καταχώρηση
           // Περίμενε τον χρήστη να επιλέξει (Επιβεβαίωση ή Άκυρο)
           const hasYellowBox = ALLOW_EDIT_EXISTING && !FORCE_EDIT;
+          console.log('[RepeatInit] hasYellowBox:', hasYellowBox, 'ALLOW_EDIT_EXISTING:', ALLOW_EDIT_EXISTING, 'FORCE_EDIT:', FORCE_EDIT);
           if (!receiptsOn && !FORCE_EDIT && !hasYellowBox) {
+            console.log('[RepeatInit] All conditions met, calling applyMappingToSummaryAndSubmitUsingMapping');
             const did = applyMappingToSummaryAndSubmitUsingMapping(mapping);
-          if (did) {
-            const sm = document.getElementById('summaryModal');
-          if (sm) sm.style.display = 'none';
-      }
-    }
-  }
+            console.log('[RepeatInit] applyMappingToSummaryAndSubmitUsingMapping returned:', did);
+            if (did) {
+              const sm = document.getElementById('summaryModal');
+              if (sm) {
+                console.log('[RepeatInit] Hiding summary modal');
+                sm.style.display = 'none';
+              }
+            }
+          } else {
+            console.log('[RepeatInit] Auto-submit conditions NOT met', { receiptsOn, FORCE_EDIT, hasYellowBox });
+          }
+        } else {
+          console.log('[RepeatInit] Auto-submit prerequisites not met', { 
+            enabled, 
+            hasMapping: !!(mapping && Object.keys(mapping).length), 
+            summaryInput: !!summaryInput 
+          });
+        }
 
         // Wire edit button
         if(editRepeatBtn){
@@ -5283,6 +5650,32 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
     } catch(e) { console.warn('renderSummaryLinesFromObject error', e); }
 
     m.style.display = 'flex';
+    
+    // Έλεγχος τρόπου πληρωμής για invoices σε repeating mode
+    // ΣΗΜΑΝΤΙΚΟ: Αναμονή για να είναι σίγουρα φορτωμένα τα MTYPE δεδομένα
+    setTimeout(async () => {
+      try {
+        console.log('[ModalOpen] Checking payment method for repeat entry');
+        let dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+        let attempts = 0;
+        
+        // Αναμονή αν τα δεδομένα δεν είναι ακόμα διαθέσιμα
+        while(!dataReady && attempts < 15) {
+          await new Promise(r => setTimeout(r, 50));
+          dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+          attempts++;
+        }
+        
+        if(dataReady) {
+          console.log('[ModalOpen] Payment method check running');
+          await checkAndWarnPaymentMethodForInvoices();
+        } else {
+          console.debug('[ModalOpen] Skipping payment check - G_CATEGORY_DATA not available');
+        }
+      } catch(e) {
+        console.warn('[ModalOpen] Payment method check error:', e);
+      }
+    }, 350);
   }
   removeForceEditParamFromUrl();
 }, 80);
@@ -5635,12 +6028,12 @@ try {
         totalValue: j.total_amount || '',
         totalNetValue: j.total_amount || '',
         totalVatAmount: (j.raw && (j.raw.totalVatAmount || j.raw.totalVat)) || '',
-        lines: []
-      ,
-  type: 'ΑΠΟΔΕΙΞΗ',
-  category: 'αποδειξακια',
-  is_receipt: true,
-  number: (j.progressive_aa || '')};
+        lines: [],
+        type: 'ΑΠΟΔΕΙΞΗ',
+        category: 'αποδειξακια',
+        is_receipt: true,
+        number: (j.progressive_aa || '')
+      };
 
       // Έλεγχος: Αν δεν υπάρχει issuer_name, κάλεσε VAT validator
       if (!summaryObj.Name && summaryObj.AFM_issuer) {
@@ -6260,7 +6653,34 @@ document.addEventListener("DOMContentLoaded", function(){
         } catch(_) {}
       }
 
-      if (modal) if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { modal.style.display = 'flex'; }
+      if (modal) if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { 
+        modal.style.display = 'flex';
+        
+        // Έλεγχος τρόπου πληρωμής για invoices σε repeating mode
+        setTimeout(async () => {
+          try {
+            console.log('[DOMContentLoaded] Running payment method check');
+            let dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+            let attempts = 0;
+            
+            // Αναμονή αν τα δεδομένα δεν είναι ακόμα διαθέσιμα
+            while(!dataReady && attempts < 15) {
+              await new Promise(r => setTimeout(r, 50));
+              dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+              attempts++;
+            }
+            
+            if(dataReady) {
+              console.log('[DOMContentLoaded] G_CATEGORY_DATA ready, checking payment method');
+              await checkAndWarnPaymentMethodForInvoices();
+            } else {
+              console.debug('[DOMContentLoaded] G_CATEGORY_DATA not available, skipping payment check');
+            }
+          } catch(e) {
+            console.warn('[DOMContentLoaded] Payment check error:', e);
+          }
+        }, 350);
+      }
     } else {
       // ensure modal remains hidden on load
       if (modal) modal.style.display = 'none';
@@ -7086,7 +7506,31 @@ function readMappingFromUI(){
         // if modal is hidden, ensure it's visible when populate invoked by scraper flow
         try {
           if (modal && modal.style.display === 'none') {
-            if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { modal.style.display = 'flex'; }
+            if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { 
+              modal.style.display = 'flex';
+              
+              // Έλεγχος τρόπου πληρωμής για invoices σε repeating mode
+              setTimeout(async () => {
+                try {
+                  console.log('[SummaryPopulate] Running payment method check');
+                  let dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+                  let attempts = 0;
+                  
+                  while(!dataReady && attempts < 15) {
+                    await new Promise(r => setTimeout(r, 50));
+                    dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+                    attempts++;
+                  }
+                  
+                  if(dataReady) {
+                    console.log('[SummaryPopulate] Checking payment method');
+                    await checkAndWarnPaymentMethodForInvoices();
+                  }
+                } catch(e) {
+                  console.warn('[SummaryPopulate] Payment check error:', e);
+                }
+              }, 350);
+            }
           }
         } catch(e){}
 
@@ -7237,7 +7681,31 @@ function readMappingFromUI(){
             } else if (typeof populateSummaryModal === 'function') {
               try { populateSummaryModal(obj); } catch(e){ dbg('populateSummaryModal failed', e); }
             }
-            if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { modal.style.display = 'flex'; }
+            if (!(window.__RC_FLAGS && window.__RC_FLAGS.autoHandled)) { 
+              modal.style.display = 'flex';
+              
+              // Έλεγχος τρόπου πληρωμής για invoices σε repeating mode
+              setTimeout(async () => {
+                try {
+                  console.log('[ModalWatcher] Running payment method check');
+                  let dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+                  let attempts = 0;
+                  
+                  while(!dataReady && attempts < 15) {
+                    await new Promise(r => setTimeout(r, 50));
+                    dataReady = window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options);
+                    attempts++;
+                  }
+                  
+                  if(dataReady) {
+                    console.log('[ModalWatcher] Checking payment method');
+                    await checkAndWarnPaymentMethodForInvoices();
+                  }
+                } catch(e) {
+                  console.warn('[ModalWatcher] Payment check error:', e);
+                }
+              }, 350);
+            }
           } catch(e){ dbg('show modal failed', e); }
         } else {
           // keep hidden
