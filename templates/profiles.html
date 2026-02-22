@@ -38,7 +38,13 @@
 </style>
 
 <div class="bg-white rounded shadow p-6">
-  <h2 class="text-lg font-semibold mb-4">Προφίλ Χαρακτηρισμών (Τιμολόγια)</h2>
+  <h2 class="text-lg font-semibold mb-2">Προφίλ Χαρακτηρισμών
+    (<span id="modeHeadline">{{ 'Αποδείξεις' if mode=='receipts' else 'Τιμολόγια' }}</span>)
+  </h2>
+  <div class="mb-4">
+    <a href="{{ url_for('profiles_page', vat=vat, mode='invoices') }}" class="text-sm mr-4 font-medium {{ '' if mode!='invoices' else 'underline' }}">Τιμολόγια</a>
+    <a href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="text-sm font-medium {{ '' if mode!='receipts' else 'underline' }}">Αποδείξεις</a>
+  </div>
 
   <div class="grid md:grid-cols-2 gap-6">
     <!-- Αριστερή στήλη: Δημιουργία/Ενημέρωση -->
@@ -52,6 +58,9 @@
 
         <div class="grid grid-cols-1 gap-2">
           <label class="text-sm font-medium">Αντιστοίχιση κατηγοριών</label>
+          {% if mode == 'receipts' %}
+          <div class="text-xs text-gray-600">Επιλέξτε για κάθε ποσοστό ΦΠΑ την κατηγορία που θα χρησιμοποιηθεί σε αποδείξεις.</div>
+          {% endif %}
 
           <div class="flex items-center gap-3">
   <div class="w-24 text-sm font-medium">0%</div>
@@ -129,6 +138,7 @@
 // ID-first profiles: list from /api/profiles; save uses id when present
 (function(){
   const VAT = "{{ vat or active_credential_vat or '' }}";
+  const MODE = "{{ mode }}"; // invoices or receipts
   const listEl = document.getElementById('profList');
   const msgEl  = document.getElementById('profMsg');
   const saveBtn = document.getElementById('btnSaveProf');
@@ -294,7 +304,9 @@
   }
 
   async function fetchCharProfiles(){
-    const r = await fetch(`/api/char_profiles?vat=${encodeURIComponent(VAT)}`, {credentials:'same-origin'});
+    let url = `/api/char_profiles?vat=${encodeURIComponent(VAT)}`;
+    if (MODE === 'receipts') url += '&mode=receipts';
+    const r = await fetch(url, {credentials:'same-origin'});
     return r.json();
   }
   async function fetchCanonicalProfiles(){
@@ -520,8 +532,8 @@
       return;
     }
     try{
-      const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping }
-                                        : { name, map: mapping };
+      const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping, mode: MODE }
+                                        : { name, map: mapping, mode: MODE };
       const resp = await fetch('/api/profiles/save', {
         method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
         body: JSON.stringify(payload)
