@@ -304,8 +304,7 @@
   }
 
   async function fetchCharProfiles(){
-    let url = `/api/char_profiles?vat=${encodeURIComponent(VAT)}`;
-    if (MODE === 'receipts') url += '&mode=receipts';
+    let url = `/api/char_profiles?vat=${encodeURIComponent(VAT)}&mode=${encodeURIComponent(MODE || 'invoices')}`;
     const r = await fetch(url, {credentials:'same-origin'});
     return r.json();
   }
@@ -353,8 +352,13 @@
   }
 
   async function loadData(){
-    const [j, canonical] = await Promise.all([ fetchCharProfiles(), fetchCanonicalProfiles() ]);
-    const profs = canonical && Array.isArray(canonical.profiles) ? canonical.profiles : [];
+    const [j, canonical] = await Promise.all([
+      fetchCharProfiles(),
+      MODE === 'receipts' ? Promise.resolve({ profiles: [], options: [] }) : fetchCanonicalProfiles()
+    ]);
+    const profs = MODE === 'receipts'
+      ? ((j && Array.isArray(j.profiles)) ? j.profiles : [])
+      : ((canonical && Array.isArray(canonical.profiles)) ? canonical.profiles : []);
 
     if(j && j.vat_constraints){
       VAT_CONSTRAINTS = j.vat_constraints || {};
@@ -376,7 +380,7 @@
       sel.appendChild(new Option('-επιλέξτε-',''));
       const tags = mergeTagSources(
         j && (j.expense_tags || j.options),
-        canonical && canonical.options,
+        MODE === 'receipts' ? [] : (canonical && canonical.options),
         SERVER_EXPENSE_TAGS,
         categoriesFromProfiles(profs)
       );
@@ -399,7 +403,7 @@
       row.dataset.name = p.name;
       row.dataset.id   = p.id || '';
       row.tabIndex = 0;
-      const mapping = p.map || {};
+      const mapping = p.map || p.mapping || {};
       row.dataset.mapping = JSON.stringify(mapping || {});
       row.innerHTML = `
         <div class="flex flex-col gap-2">
@@ -489,7 +493,14 @@
   delConfirm.addEventListener('click', async ()=>{
     if(!pendingDeleteName) return;
     try{
-      if(pendingDeleteId){
+      if(MODE === 'receipts'){
+        await fetch('/api/char_profiles/delete', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          credentials:'same-origin',
+          body: JSON.stringify({ vat: VAT, name: pendingDeleteName, mode: 'receipts' })
+        });
+      } else if(pendingDeleteId){
         await fetch('/api/profiles/delete', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ id: pendingDeleteId }) });
       }else{
         await fetch('/api/char_profiles/delete', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ vat: VAT, name: pendingDeleteName }) });
@@ -532,12 +543,21 @@
       return;
     }
     try{
-      const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping, mode: MODE }
-                                        : { name, map: mapping, mode: MODE };
-      const resp = await fetch('/api/profiles/save', {
-        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
-        body: JSON.stringify(payload)
-      });
+      let resp;
+      if (MODE === 'receipts') {
+        const payload = { vat: VAT, name, mapping, mode: 'receipts' };
+        resp = await fetch('/api/char_profiles/save', {
+          method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+          body: JSON.stringify(payload)
+        });
+      } else {
+        const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping, mode: MODE }
+                                          : { name, map: mapping, mode: MODE };
+        resp = await fetch('/api/profiles/save', {
+          method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+          body: JSON.stringify(payload)
+        });
+      }
       const j = await resp.json();
       if(j && j.ok){
         showBanner('Το προφίλ αποθηκεύτηκε επιτυχώς.', 'success', 6000);

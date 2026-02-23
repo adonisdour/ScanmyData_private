@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import re
+import base64
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
@@ -16,6 +17,152 @@ HEADERS = {
 }
 MARK_RE = re.compile(r"\b\d{15}\b")  # 15-digit MARK
 VAT_RE = re.compile(r"\b\d{9}\b")    # 9-digit AFM
+
+def _extract_mydatapi_url_from_text(text, base_url=None):
+    if not text:
+        return None
+    normalized = str(text)
+    normalized = normalized.replace('\\/', '/').replace('\\u002F', '/').replace('\\u003D', '=')
+    normalized = normalized.replace('&amp;', '&')
+
+    patterns = [
+        r'https?://mydatapi\.aade\.gr/[^\s"\'<>]*TimologioQR/QRInfo\?q=[^\s"\'<>]+',
+        r'/(?:myDATA|mydata)/TimologioQR/QRInfo\?q=[^\s"\'<>]+'
+    ]
+    for pat in patterns:
+        m = re.search(pat, normalized, re.I)
+        if not m:
+            continue
+        candidate = m.group(0).strip('"\' )>;')
+        if candidate.startswith('/'):
+            if base_url:
+                candidate = urljoin(base_url, candidate)
+            else:
+                continue
+        return candidate
+    return None
+
+
+def _resolve_mydatapi_via_browser(url, timeout=20, debug=False):
+    """
+    JS-aware fallback: ανοίγει τη σελίδα και προσπαθεί να πατήσει το κουμπί
+    "Προβολή μέσω MyData" για να πιάσει το τελικό mydatapi URL.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return None
+
+    timeout_ms = int(max(timeout, 8) * 1000)
+    candidates = [url + ("&" if "?" in url else "?") + "peppol=true", url]
+    seen = set()
+    candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
+    found = {"url": None}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(ignore_https_errors=True)
+            page = context.new_page()
+
+            def _capture_request(req):
+                ru = req.url
+                if "mydatapi.aade.gr" in ru and "TimologioQR/QRInfo" in ru:
+                    found["url"] = ru
+
+            page.on("request", _capture_request)
+
+            for cu in candidates:
+                try:
+                    page.goto(cu, wait_until="networkidle", timeout=timeout_ms)
+                    page.wait_for_timeout(4500)
+                except Exception:
+                    continue
+
+                # try direct extraction again after JS render
+                rendered = page.content()
+                rendered_url = _extract_mydatapi_url_from_text(rendered, page.url)
+                if rendered_url:
+                    browser.close()
+                    return rendered_url
+
+                if found["url"]:
+                    browser.close()
+                    return found["url"]
+                if "mydatapi.aade.gr" in page.url and "TimologioQR/QRInfo" in page.url:
+                    browser.close()
+                    return page.url
+
+                clicked = False
+
+                # 1) target buttons whose runtime text contains MyData
+                buttons = page.locator("button")
+                btn_count = min(buttons.count(), 40)
+                for i in range(btn_count):
+                    btn = buttons.nth(i)
+                    try:
+                        text = (btn.inner_text(timeout=1000) or "").strip().lower()
+                    except Exception:
+                        continue
+                    if "mydata" not in text and "my data" not in text:
+                        continue
+                    try:
+                        with page.expect_popup(timeout=5000) as popinfo:
+                            btn.click(timeout=5000)
+                        pop = popinfo.value
+                        try:
+                            pop.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                        except Exception:
+                            pass
+                        if "mydatapi.aade.gr" in pop.url and "TimologioQR/QRInfo" in pop.url:
+                            browser.close()
+                            return pop.url
+                    except Exception:
+                        try:
+                            btn.click(timeout=5000)
+                            clicked = True
+                        except Exception:
+                            continue
+
+                # 2) fallback selectors
+                for sel in ["a:has-text('MyData')", "button.opButton"]:
+                    loc = page.locator(sel)
+                    if loc.count() <= 0:
+                        continue
+                    try:
+                        with page.expect_popup(timeout=3500) as popinfo:
+                            loc.first.click(timeout=3500)
+                        pop = popinfo.value
+                        if "mydatapi.aade.gr" in pop.url and "TimologioQR/QRInfo" in pop.url:
+                            browser.close()
+                            return pop.url
+                    except Exception:
+                        try:
+                            loc.first.click(timeout=3500)
+                            clicked = True
+                        except Exception:
+                            continue
+
+                if clicked:
+                    try:
+                        page.wait_for_timeout(1800)
+                    except Exception:
+                        pass
+
+                if found["url"]:
+                    browser.close()
+                    return found["url"]
+                if "mydatapi.aade.gr" in page.url and "TimologioQR/QRInfo" in page.url:
+                    browser.close()
+                    return page.url
+
+            browser.close()
+    except Exception as e:
+        if debug:
+            print("megasoft browser fallback error:", e)
+
+    return found["url"]
 
 
 # -------------------- WEDOCONNECT --------------------
@@ -938,6 +1085,155 @@ def scrape_vsgr(url):
     return marks, counterpart_vat
 
 
+# -------------------- MEGASOFT --------------------
+def scrape_megasoft(url):
+    """
+    Προσπαθεί να εντοπίσει και να ακολουθήσει το "Προβολή μέσω myDATA" link.
+    Αν βρει mydatapi URL, χρησιμοποιεί scrape_mydatapi.
+    """
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+
+    candidates = [url + ("&" if "?" in url else "?") + "peppol=true", url]
+    html = None
+    base = url
+
+    for cu in candidates:
+        try:
+            r = sess.get(cu, timeout=20, allow_redirects=True)
+            r.raise_for_status()
+            html = r.text
+            base = r.url
+            if re.search(r"Αναγνωριστικό\s*ΦΠΑ\s*Αγοραστή|ΒΤ-48|myDATA|TimologioQR", html, re.I):
+                break
+        except Exception:
+            continue
+
+    if not html:
+        return [], None
+
+    soup = BeautifulSoup(html, "html.parser")
+    mydatapi_url = _extract_mydatapi_url_from_text(html, base)
+    if not mydatapi_url:
+        parsed = urlparse(url)
+        qrcode_value = parse_qs(parsed.query).get("QrCode", [""])[0]
+        candidate_targets = []
+        button_ids = []
+
+        for a in soup.find_all("a", href=True):
+            href = a.get("href") or ""
+            txt = (a.get_text(" ", strip=True) or "") + " " + href
+            if "mydata" in txt.lower() or "timologioqr" in txt.lower() or "invoiceinspect/mydata" in txt.lower():
+                candidate_targets.append(urljoin(base, href))
+
+        # button-based discovery (e.g. "Προβολή μέσω MyData")
+        for btn in soup.find_all("button"):
+            btxt = btn.get_text(" ", strip=True) or ""
+            if not re.search(r"mydata|timologioqr|προβολή\s*μέσω\s*mydata", btxt, re.I):
+                continue
+            bid = btn.get("id")
+            if bid:
+                button_ids.append(bid)
+
+            formaction = btn.get("formaction")
+            if formaction:
+                candidate_targets.append(urljoin(base, formaction))
+
+            form_id = btn.get("form")
+            if form_id:
+                form_el = soup.find("form", attrs={"id": form_id})
+                if form_el and form_el.get("action"):
+                    candidate_targets.append(urljoin(base, form_el.get("action")))
+
+            parent_form = btn.find_parent("form")
+            if parent_form and parent_form.get("action"):
+                candidate_targets.append(urljoin(base, parent_form.get("action")))
+
+            onclick = str(btn.get("onclick", ""))
+            m_on = re.search(r"(?:location\.href\s*=|window\.open\s*\(|window\.location(?:\.href)?\s*=)\s*['\"]([^'\"]+)['\"]", onclick, re.I)
+            if m_on:
+                candidate_targets.append(urljoin(base, m_on.group(1)))
+
+        for el in soup.find_all(True):
+            attrs = el.attrs or {}
+            text_blob = " ".join([
+                str(attrs.get("data-url", "")),
+                str(attrs.get("data-href", "")),
+                str(attrs.get("onclick", "")),
+                el.get_text(" ", strip=True) if hasattr(el, "get_text") else "",
+            ])
+            if not re.search(r"mydata|timologioqr|invoiceinspect/mydata", text_blob, re.I):
+                continue
+
+            for attr_name in ("data-url", "data-href", "href"):
+                val = attrs.get(attr_name)
+                if val:
+                    candidate_targets.append(urljoin(base, str(val)))
+
+            onclick = str(attrs.get("onclick", ""))
+            m = re.search(r"(?:location\.href|window\.open|window\.location(?:\.href)?)\s*\(\s*['\"]([^'\"]+)['\"]", onclick, re.I)
+            if m:
+                candidate_targets.append(urljoin(base, m.group(1)))
+
+        # Search script handlers by button id / generic mydata urls
+        for script in soup.find_all("script"):
+            sc = script.string or script.get_text() or ""
+            direct = _extract_mydatapi_url_from_text(sc, base)
+            if direct:
+                candidate_targets.append(direct)
+
+            for m in re.finditer(r"/(?:invoiceinspect/mydata|invoiceinspect/qr)[^\s\"\'<>]*", sc, re.I):
+                candidate_targets.append(urljoin(base, m.group(0)))
+
+            for bid in button_ids:
+                if bid and bid in sc:
+                    m2 = re.search(r"(?:location\.href\s*=|window\.open\s*\(|window\.location(?:\.href)?\s*=)\s*['\"]([^'\"]+)['\"]", sc, re.I)
+                    if m2:
+                        candidate_targets.append(urljoin(base, m2.group(1)))
+
+        if qrcode_value:
+            q_enc = requests.utils.quote(qrcode_value, safe="")
+            candidate_targets.extend([
+                urljoin(base, f"/invoiceinspect/mydata?QrCode={q_enc}"),
+                urljoin(base, f"/invoiceinspect/qr?QrCode={q_enc}&openMydata=true"),
+                urljoin(base, f"/invoiceinspect/qr?QrCode={q_enc}&mydata=true"),
+            ])
+
+        seen = set()
+        candidate_targets = [c for c in candidate_targets if c and not (c in seen or seen.add(c))]
+
+        for target in candidate_targets:
+            try:
+                rr = sess.get(target, timeout=20, allow_redirects=True)
+                rr.raise_for_status()
+                mydatapi_url = _extract_mydatapi_url_from_text(rr.url, rr.url) or _extract_mydatapi_url_from_text(rr.text, rr.url)
+                if mydatapi_url:
+                    break
+            except Exception:
+                continue
+
+    if mydatapi_url:
+        data = scrape_mydatapi(mydatapi_url)
+        mark = data.get("MARK") if data else None
+        afm = data.get("ΑΦΜ Πελάτη") if data else None
+        marks = [mark] if mark and mark != "N/A" else []
+        counterpart_vat = afm if afm and afm != "N/A" else None
+        return marks, counterpart_vat
+
+    # JS-aware fallback: real button click via headless browser
+    browser_url = _resolve_mydatapi_via_browser(url, timeout=20, debug=False)
+    if browser_url:
+        data = scrape_mydatapi(browser_url)
+        mark = data.get("MARK") if data else None
+        afm = data.get("ΑΦΜ Πελάτη") if data else None
+        marks = [mark] if mark and mark != "N/A" else []
+        counterpart_vat = afm if afm and afm != "N/A" else None
+        return marks, counterpart_vat
+
+    # Do not return AFM from blind QrCode decode fallback: often misleading.
+    return [], None
+
+
 # -------------------- MAIN --------------------
 def main():
     url = input("Εισάγετε το URL: ").strip()
@@ -987,6 +1283,10 @@ def main():
     elif "vs.gr" in domain:
         source = "VS.gr"
         marks, counterpart_vat = scrape_vsgr(url)
+
+    elif "megasoft" in domain or "invoicelink" in domain:
+        source = "Megasoft"
+        marks, counterpart_vat = scrape_megasoft(url)
 
     else:
         print("Άγνωστο URL. Δεν μπορεί να γίνει scrape.")

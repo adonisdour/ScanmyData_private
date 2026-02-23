@@ -3,23 +3,55 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=Europe/Athens
+    TZ=Europe/Athens \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
-# ΜΟΝΟ τα απαραίτητα runtime deps:
-# - libzbar0 (pyzbar), poppler-utils (pdf2image), libjpeg-dev + zlib1g-dev (Pillow)
+# Runtime deps:
+# - existing libs for pyzbar/pdf2image/Pillow
+# - extra libs required by Playwright Chromium fallback (Megasoft -> MyData button click)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzbar0 \
     poppler-utils \
     libjpeg-dev \
     zlib1g-dev \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxrender1 \
+    libxshmfence1 \
+    libxtst6 \
  && rm -rf /var/lib/apt/lists/*
 
 # Πρώτα τα requirements για caching
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip setuptools wheel \
- && pip install --no-cache-dir -r /app/requirements.txt
+ && pip install --no-cache-dir -r /app/requirements.txt \
+ && python -m playwright install chromium
 
 # Μετά όλος ο κώδικας
 COPY . /app

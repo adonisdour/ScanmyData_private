@@ -101,7 +101,7 @@
                        class="toggle-switch">
             </label>
             <span id="receiptsSwitchOn" class="text-sm">Αποδείξεις</span>
-            <div class="relative hidden" id="receiptsModeChooser">
+            <div class="relative" id="receiptsModeChooser">
               <button type="button"
                       id="receiptsSwitchOnButton"
                       class="text-sm inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100"
@@ -109,7 +109,7 @@
                 <span>Αποδείξεις</span>
                 <span aria-hidden="true">▾</span>
               </button>
-              <div id="receiptsModeMenu" class="hidden absolute right-0 mt-1 min-w-[140px] bg-white border border-slate-200 rounded shadow z-30">
+              <div id="receiptsModeMenu" class="hidden absolute left-0 mt-1 min-w-[140px] bg-white border border-slate-200 rounded shadow z-30">
                 <button type="button" data-receipt-mode="analysis" class="w-full text-left px-3 py-2 text-sm hover:bg-sky-50"><span class="receipt-mode-tick inline-block w-4">✓</span><span>Ανάλυση</span></button>
                 <button type="button" data-receipt-mode="mixed" class="w-full text-left px-3 py-2 text-sm hover:bg-sky-50"><span class="receipt-mode-tick inline-block w-4">✓</span><span>Μικτό</span></button>
               </div>
@@ -124,6 +124,9 @@
             <label for="repeatEntrySwitch" class="text-sm">Επαναληψιμη εισαγωγή</label>
             <input type="checkbox" id="repeatEntrySwitch" class="toggle-switch">
             <button type="button" id="editRepeatMappingBtn" class="ml-2 px-2 py-1 border rounded text-sm hidden">Επεξεργασία</button>
+        <!-- New button for editing receipt classification (shown only when
+             receipts+analysis+repeat are active) -->
+        <button type="button" id="editReceiptClassBtn" class="ml-2 px-2 py-1 border rounded text-sm hidden">Επεξεργασία Χαρακτηρισμού</button>
         </div>
 
         <!-- Toggle switch for receipts scrape -->
@@ -506,21 +509,23 @@ function isReceiptsOn(){
 }
 
 function isReceiptAnalysisOn(){
-  // analysis state may be driven by the receipts mode chooser (stored in
-  // localStorage) or by an explicit flag present on the current summary
-  // object.  The old checkbox has been removed.
+  // analysis state is driven only by the receipts mode chooser.
+  // Do not infer from summary payload flags because that can force the
+  // summary modal into analysis UI while user is in mixed mode.
   try {
     const mode = localStorage.getItem('rc:receiptMode');
     if (String(mode || '').toLowerCase() === 'analysis') return true;
   } catch(_){ }
-  try {
-    const inp = document.getElementById('summaryJsonInput');
-    if (inp && inp.value) {
-      const obj = JSON.parse(inp.value || '{}');
-      if (obj && obj.receipt_analysis_enabled) return true;
-    }
-  } catch(_){ }
   return false;
+}
+
+function isReceiptModeAnalysisStrict(){
+  try {
+    const mode = localStorage.getItem('rc:receiptMode');
+    return String(mode || '').toLowerCase() === 'analysis';
+  } catch(_){
+    return false;
+  }
 }
 
 function setActiveProfileHint(name){
@@ -842,6 +847,7 @@ function katToPercent(k){
   const btnCancel  = document.getElementById('repeatModalCancel');
   const btnX       = document.getElementById('repeatModalCloseX');
   const btnEdit    = document.getElementById('editRepeatMappingBtn');
+  const btnEditReceiptClass = document.getElementById('editReceiptClassBtn');
 
   const show = () => modal.style.display = 'flex';
   const hide = () => modal.style.display = 'none';
@@ -1255,6 +1261,11 @@ function katToPercent(k){
 }
   
   document.getElementById('editRepeatMappingBtn')?.addEventListener('click', openModal);
+  document.getElementById('editReceiptClassBtn')?.addEventListener('click', ()=>{
+    if (typeof openReceiptClassModal === 'function') {
+      openReceiptClassModal(window._lastSummaryObj || {});
+    }
+  });
   
 
   // Εξαγωγή για χρήση από αλλού
@@ -1528,9 +1539,11 @@ try {
   async function checkAndOpenReceiptMtypeModal(){
     const isReceipts = isReceiptsOn();
     const isRepeat = isRepeatEntryEnabled();
+    const isAnalysis = isReceiptAnalysisOn();
     
-    // Άνοιγμα modal ΠΑΝΤΑ όταν receipts + repeat ενεργοποιημένα (ανεξάρτητα από αποθηκευμένη τιμή)
-    if(isReceipts && isRepeat && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
+    // Στο Μικτό: άνοιγμα μόνο του modal κωδικού κίνησης αποδείξεων.
+    // Στην Ανάλυση: το πεδίο MTYPE εμφανίζεται ενσωματωμένο στο receiptClassModal.
+    if(isReceipts && isRepeat && !isAnalysis && G_CATEGORY_DATA && G_CATEGORY_DATA.mtype_options){
       console.log('Auto-opening receipt MTYPE modal (receipts + repeat enabled)');
       openReceiptMtypeModal();
     }
@@ -1622,6 +1635,21 @@ try {
   document.addEventListener('DOMContentLoaded', () => {
     const sw = document.getElementById('useReceiptsSwitch');
     if (!sw) return;
+    // whenever the receipts switch flips we should refresh the edit button
+    if (typeof window.updateReceiptClassEditButton === 'function') {
+      window.updateReceiptClassEditButton();
+    }
+    // also react when the repeat-entry switch toggles so we can show the
+    // classification modal automatically and keep the edit button in sync
+    document.getElementById('repeatEntrySwitch')?.addEventListener('change', function(){
+      if (typeof window.updateReceiptClassEditButton === 'function') {
+        window.updateReceiptClassEditButton();
+      }
+      const repeat = !!this.checked;
+      if (isReceiptsOn() && repeat && isReceiptAnalysisOn()) {
+        try { openReceiptClassModal(window._lastSummaryObj || {}); } catch(_){ }
+      }
+    });
 
     // Αν υπάρχει ?use_receipts=1/0 στο URL, γράψ’ το στο localStorage (authoritative)
     try {
@@ -2065,14 +2093,28 @@ if (typeof window !== 'undefined') {
 // Helper: show transient flash (client-side)
 /* ====== Render summary lines into modal and wire handlers ====== */
  function renderSummaryLinesFromObject(obj) {
+  // keep a reference so other logic (toggles) can re-open the modal later
+  window._lastSummaryObj = obj || {};
+  // if the summary itself is a receipt, ensure the switch is checked so the
+  // user sees the receipts UI (dropdown, URL field, etc.)
+  try {
+    if (obj && obj.is_receipt) {
+      const sw = document.getElementById('useReceiptsSwitch');
+      if (sw && !sw.checked) {
+        sw.checked = true;
+        sw.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+  } catch (_) {}
   const receiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked) || !!obj?.is_receipt;
   const RECEIPT_CATEGORY = 'αποδειξακια';
   // if the summary object itself is marked as requiring analysis, bypass the
   // normal summary modal and open the dedicated receipt-classification modal
   // open classification modal whenever we are handling receipts and
-  // analysis is active either because the user selected that mode or
-  // because the incoming summary object itself carries the flag.
-  if (receiptsMode && (isReceiptAnalysisOn() || (obj && obj.receipt_analysis_enabled))) {
+  // analysis is active due to the user or the object, **and** repeat mode is
+  // enabled (per request).
+  const isRepeat = !!document.getElementById('repeatEntrySwitch')?.checked;
+  if (receiptsMode && isRepeat && isReceiptAnalysisOn()) {
     // avoid showing the standard modal
     try { hideSummaryModal(); } catch(_) {}
     if (typeof openReceiptClassModal === 'function') {
@@ -2095,15 +2137,12 @@ if (typeof window !== 'undefined') {
     lines = obj.raw.lines;
   }
 
-  // when we're displaying receipts in *mixed* mode we don't want to
-  // present the user with the per-line classification UI – they should see
-  // a simple, read‑only summary just like the old modal.
-  if (receiptsMode && !isReceiptAnalysisOn()) {
-    const header = document.getElementById('summaryLinesHeader');
-    if (header) header.style.display = 'none';
-    container.style.display = 'none';
-    return;
-  }
+  // Ensure summary UI is visible in receipts mixed mode as well.
+  // Legacy behavior expects the summary modal renderer to run so
+  // MTYPE dropdowns and line rendering are available.
+  const header = document.getElementById('summaryLinesHeader');
+  if (header) header.style.display = '';
+  container.style.display = '';
 
   if (!receiptsMode && (!lines || lines.length === 0)) {
     return;
@@ -2463,11 +2502,15 @@ if (typeof window !== 'undefined') {
       repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
     }
     
-    // Εμφάνιση dropdown αν:
-    // 1. Είναι Γ Κατηγορία
-    // Πάντα να φαίνεται το dropdown για επιλογή/επιβεβαίωση MTYPE
+    // Εμφάνιση dropdown μόνο για τιμολόγια (όχι για αποδείξεις).
+    const isReceiptsMode = isReceiptsOn();
+    const isSummaryReceipt = summary && (
+      summary.is_receipt === true ||
+      /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || ''))
+    );
+
     const savedMtype = summary.mtype || summary.invoice_mtype || '';
-    const shouldShow = isGCategory;
+    const shouldShow = isGCategory && !isReceiptsMode && !isSummaryReceipt;
     
     if (shouldShow) {
       // Show container
@@ -8658,7 +8701,19 @@ document.addEventListener('submit', function(ev){
   const receiptsModeChooser = document.getElementById('receiptsModeChooser');
   const receiptsModeBtn = document.getElementById('receiptsSwitchOnButton');
   const receiptsModeMenu = document.getElementById('receiptsModeMenu');
+  // if server provided a summary object and it is a receipt, default the
+  // switch to receipts so the chooser is visible without user interaction.
+  try {
+    const initialSummary = {{ modal_summary | tojson | safe if modal_summary else 'null' }};
+    if (initialSummary && initialSummary.is_receipt && sw && !sw.checked) {
+      sw.checked = true;
+      try { sw.dispatchEvent(new Event('change', { bubbles: true })); } catch(_) {}
+    }
+  } catch(_) {}
+  
+  // helper button for editing receipt classification
   const markInput = document.getElementById('markInput');
+  const btnEditReceiptClass = document.getElementById('editReceiptClassBtn');
   let hasReceiptCustomCategories = (function(){
     try { return !!{{ 'true' if has_receipt_custom_categories else 'false' }}; }
     catch(_) { return false; }
@@ -8696,6 +8751,8 @@ document.addEventListener('submit', function(ev){
       // keep true if server already said true
       hasReceiptCustomCategories = hasReceiptCustomCategories || newVal;
       receiptCustomCheckDone = true;
+      // recalc disabled state in case menu already exists
+      updateAnalysisOption();
     } catch(_) {
       console.warn('refreshReceiptCustomAvailability: fetch failed');
       // do not flip the flag back to false if it was true
@@ -8706,9 +8763,58 @@ document.addEventListener('submit', function(ev){
     }
   }
 
-  function shouldShowReceiptsChooser(){
-    return !!hasReceiptCustomCategories;
+  // debugging helper: slap a message to the server so it will append to a file
+  function logDebug(msg){
+    try { fetch('/_debug_log?msg='+encodeURIComponent(msg)); } catch(_){ }
   }
+  window.__rcLogDebug = logDebug;
+  // record that our JS bundle executed
+  logDebug('script_loaded');
+  // catch any uncaught errors and promise rejections to help diagnose failures
+  window.addEventListener('error', function(ev){
+    try { logDebug('js_error:'+ev.message); } catch(_){}
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    try { logDebug('js_promise_error:'+(ev.reason && ev.reason.message)); } catch(_){}
+  });
+
+  // chooser should always be visible when receipts mode is on;
+  // availability of analysis is governed separately
+  function shouldShowReceiptsChooser(){
+    logDebug('shouldShowReceiptsChooser');
+    return true;
+  }
+
+  // grey/disable analysis option when no receipt-custom categories exist
+  function updateAnalysisOption(){
+    if (!receiptsModeMenu) return;
+    const btn = receiptsModeMenu.querySelector('[data-receipt-mode="analysis"]');
+    if (!btn) return;
+    if (!hasReceiptCustomCategories) {
+      btn.classList.add('opacity-50');
+    } else {
+      btn.classList.remove('opacity-50');
+    }
+  }
+
+  // update visibility of the receipt-class edit button; we show it when the
+  // user is in receipts mode, has both analysis & repeat enabled, and custom
+  // categories exist.
+  function updateReceiptClassEditButton(){
+    if(!btnEditReceiptClass) return;
+    const receiptsMode = isReceiptsOn();
+    const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
+    const analysisOn = isReceiptModeAnalysisStrict();
+    if(receiptsMode && repeatOn && analysisOn && hasReceiptCustomCategories){
+      btnEditReceiptClass.classList.remove('hidden');
+    } else {
+      btnEditReceiptClass.classList.add('hidden');
+    }
+    // also update the analysis option whenever button visibility might change
+    updateAnalysisOption();
+  }
+
+  window.updateReceiptClassEditButton = updateReceiptClassEditButton;
 
   function hasSavedReceiptMode(){
     try {
@@ -8736,6 +8842,7 @@ document.addEventListener('submit', function(ev){
     return el;
   }
   function applyUI(isReceipts){
+    logDebug('applyUI:'+isReceipts);
     const urlInput = ensureUrlInput();
     const hasSavedMode = hasSavedReceiptMode();
     const showChooser = shouldShowReceiptsChooser();
@@ -8743,35 +8850,32 @@ document.addEventListener('submit', function(ev){
     if (isReceipts){
       markInput && markInput.classList.add('hidden');
       urlInput && urlInput.classList.remove('hidden');
-      if (receiptsModeChooser) {
-        if (showChooser) receiptsModeChooser.classList.remove('hidden');
-        else receiptsModeChooser.classList.add('hidden');
-      }
-      if (receiptsModeLabel) {
-        if (showChooser) receiptsModeLabel.classList.add('hidden');
-        else receiptsModeLabel.classList.remove('hidden');
-      }
-      if (receiptsModeBtn && showChooser) {
-        receiptsModeBtn.classList.remove('opacity-50','pointer-events-none');
-        receiptsModeBtn.setAttribute('aria-disabled', 'false');
-      }
-      if (!hasSavedMode) {
-        updateReceiptModeMenuTick('mixed');
-      }
     } else {
       markInput && markInput.classList.remove('hidden');
       urlInput && urlInput.classList.add('hidden');
-      if (receiptsModeChooser) receiptsModeChooser.classList.add('hidden');
-      if (receiptsModeLabel) receiptsModeLabel.classList.remove('hidden');
-      if (receiptsModeBtn) {
-        receiptsModeBtn.classList.add('opacity-50','pointer-events-none');
-        receiptsModeBtn.setAttribute('aria-disabled', 'true');
-      }
-      if (receiptsModeMenu) receiptsModeMenu.classList.add('hidden');
     }
+    // chooser visibility is independent of switch position
+    if (receiptsModeChooser) {
+      if (showChooser) receiptsModeChooser.classList.remove('hidden');
+      else receiptsModeChooser.classList.add('hidden');
+    }
+    if (receiptsModeLabel) {
+      if (showChooser) receiptsModeLabel.classList.add('hidden');
+      else receiptsModeLabel.classList.remove('hidden');
+    }
+    if (receiptsModeBtn && showChooser) {
+      receiptsModeBtn.classList.remove('opacity-50','pointer-events-none');
+      receiptsModeBtn.setAttribute('aria-disabled', 'false');
+    }
+    if (!hasSavedMode) {
+      updateReceiptModeMenuTick('mixed');
+    }
+    // refresh our helper button after UI changes
+    updateReceiptClassEditButton();
   }
 
   function updateReceiptModeMenuTick(mode){
+    logDebug('updateReceiptModeMenuTick:'+mode);
     if (!receiptsModeMenu) return;
     const normalized = String(mode || '').toLowerCase() === 'analysis' ? 'analysis' : 'mixed';
     receiptsModeMenu.querySelectorAll('[data-receipt-mode]').forEach(btn => {
@@ -8781,10 +8885,13 @@ document.addEventListener('submit', function(ev){
       btn.classList.toggle('font-semibold', selected);
       if (tick) tick.style.visibility = selected ? 'visible' : 'hidden';
     });
+    // update disabled/grey state of analysis option
+    updateAnalysisOption();
   }
 
   function applyReceiptMode(mode, fire = true, persist = true){
     const normalized = String(mode || '').toLowerCase() === 'analysis' ? 'analysis' : 'mixed';
+    logDebug('applyReceiptMode:'+normalized);
     if (persist) {
       try { localStorage.setItem('rc:receiptMode', normalized); } catch(_) {}
     }
@@ -8795,7 +8902,19 @@ document.addEventListener('submit', function(ev){
         : 'Τρέχον mode: Μικτό (κλικ για αλλαγή)');
     }
     applyUI(!!(sw && sw.checked));
+    // after switching receipt mode the edit button may need updating
+    updateReceiptClassEditButton();
+
+    if (normalized === 'analysis') {
+      const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
+      const receiptsOn = !!(sw && sw.checked);
+      if (receiptsOn && repeatOn && typeof openReceiptClassModal === 'function') {
+        try { openReceiptClassModal(window._lastSummaryObj || {}); } catch(_) {}
+      }
+    }
   }
+
+  window.applyReceiptMode = applyReceiptMode;
 
   if (!sw) return;
   // restore saved value
@@ -8827,6 +8946,8 @@ document.addEventListener('submit', function(ev){
   }, 200);
 
   sw.addEventListener('change', async () => {
+    logDebug('switch_change:' + sw.checked);
+    updateReceiptClassEditButton();
     localStorage.setItem(KEY, sw.checked ? '1' : '0');
     if (sw.checked && !receiptCustomCheckDone) {
       await refreshReceiptCustomAvailability();
@@ -8846,14 +8967,21 @@ document.addEventListener('submit', function(ev){
 
   if (receiptsModeBtn && receiptsModeMenu) {
     receiptsModeBtn.addEventListener('click', function(ev){
+      logDebug('header_arrow_click');
       ev.preventDefault();
       ev.stopPropagation();
+      // if receipts switch is off, turn it on automatically so the chooser
+      // makes sense (users were clicking the arrow expecting it to just work)
+      if (sw && !sw.checked) {
+        sw.checked = true;
+        sw.dispatchEvent(new Event('change', { bubbles: true }));
+      }
       if (!sw || !sw.checked) return;
-      if (!shouldShowReceiptsChooser()) return;
+      // chooser always shown when receipts switch on
       receiptsModeMenu.classList.toggle('hidden');
     });
-
     receiptsModeMenu.addEventListener('click', function(ev){
+      logDebug('menu_click');
       const opt = ev.target && ev.target.closest ? ev.target.closest('[data-receipt-mode]') : null;
       if (!opt) return;
       const mode = opt.getAttribute('data-receipt-mode') || 'mixed';
@@ -8946,6 +9074,10 @@ function closeReceiptClassModal(){
 }
 
 function openReceiptClassModal(summaryObj){
+    try {
+      if (typeof window.__rcLogDebug === 'function') window.__rcLogDebug('openReceiptClassModal');
+      else fetch('/_debug_log?msg='+encodeURIComponent('openReceiptClassModal'));
+    } catch(_) {}
     const tmpl = document.getElementById('rc-receipt-modals-template');
     if(tmpl){
         if(!document.getElementById('receiptClassModal')){
@@ -8962,27 +9094,105 @@ function openReceiptClassModal(summaryObj){
 
     const list = document.getElementById('receiptClassList');
     const selProf = document.getElementById('charProfileSelectClass');
+    const activeVat = "{{ vat or '' }}";
+    const isRepeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
+    const isAnalysisMode = isReceiptAnalysisOn();
+    const hasGCategoryMtype = !!(window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length);
+    const showCombinedMtype = isRepeatEnabled && isAnalysisMode && hasGCategoryMtype;
+    const VAT_ROWS = [
+      { key: 'kat_fpa_a', vat: '0%', label: 'ΦΠΑ 0%' },
+      { key: 'kat_fpa_b', vat: '6%', label: 'ΦΠΑ 6%' },
+      { key: 'kat_fpa_g', vat: '13%', label: 'ΦΠΑ 13%' },
+      { key: 'kat_fpa_d', vat: '17%', label: 'ΦΠΑ 17%' },
+      { key: 'kat_fpa_e', vat: '24%', label: 'ΦΠΑ 24%' }
+    ];
+    let receiptConstraints = {};
+    let receiptCategories = [];
+
+    let mtypeWrap = document.getElementById('receiptClassMtypeWrap');
+    if (!mtypeWrap && list && list.parentElement) {
+      mtypeWrap = document.createElement('div');
+      mtypeWrap.id = 'receiptClassMtypeWrap';
+      mtypeWrap.className = 'mt-4';
+      mtypeWrap.innerHTML =
+        '<label class="text-sm font-medium">Κωδικός Κίνησης Αποδείξεων (Γ Κατηγορία) <span class="text-red-600">*</span></label>' +
+        '<select id="receiptClassMtypeSelect" class="border rounded px-2 py-1 w-full mt-1">' +
+          '<option value="">-- επιλέξτε είδος κίνησης --</option>' +
+        '</select>';
+      list.parentElement.appendChild(mtypeWrap);
+    }
+
+    async function setupCombinedMtype(){
+      if(!mtypeWrap) return;
+      if(!showCombinedMtype){
+        mtypeWrap.style.display = 'none';
+        return;
+      }
+
+      const mtypeSelect = document.getElementById('receiptClassMtypeSelect');
+      if(!mtypeSelect) return;
+      mtypeWrap.style.display = '';
+
+      let savedReceiptMtype = '';
+      try {
+        if (activeVat) {
+          const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
+          const getData = await getResp.json().catch(() => null);
+          savedReceiptMtype = String(getData?.repeat_entry?.receipt_mtype || '').trim();
+        }
+      } catch(_) {}
+      if (!savedReceiptMtype) {
+        try { savedReceiptMtype = String(localStorage.getItem('receipt_mtype') || localStorage.getItem('saved_receipt_mtype') || '').trim(); } catch(_) {}
+      }
+
+      mtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
+      (window.G_CATEGORY_DATA.mtype_options || []).forEach(mt => {
+        const opt = document.createElement('option');
+        opt.value = mt.value;
+        opt.textContent = mt.label + ' (' + mt.value + ')';
+        if (savedReceiptMtype && mt.value === savedReceiptMtype) opt.selected = true;
+        mtypeSelect.appendChild(opt);
+      });
+    }
+
+    function labelForCat(cat){
+      try {
+        if (typeof window.labelForCategory === 'function') return window.labelForCategory(cat);
+      } catch(_) {}
+      return cat;
+    }
+
+    function allowedForVat(cat, vatKey){
+      const key = String(cat || '').trim();
+      if (!key) return false;
+      const arr = receiptConstraints && receiptConstraints[key];
+      if (!Array.isArray(arr) || !arr.length) return false;
+      return arr.includes(vatKey);
+    }
 
     function renderRows(map){
         if(!list) return;
         list.innerHTML='';
-        const lines = (summaryObj && summaryObj.lines) ? summaryObj.lines : [];
-        const vatCats = [...new Set(lines.map(l => l.vatCategory || l.vat || '').filter(v=>v))];
-        if(vatCats.length === 0) vatCats.push('');
-        let cats = [];
-        try {
-          if (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length) {
-            cats = window.RECEIPT_CUSTOMER_CATEGORIES.slice();
-          } else if (Array.isArray(window.CUSTOMER_CATEGORIES) && window.CUSTOMER_CATEGORIES.length) {
-            cats = window.CUSTOMER_CATEGORIES.slice();
-          }
-        } catch(_) { cats = []; }
-        vatCats.forEach(vc=>{
+        const normalized = (typeof normalizeMapping === 'function') ? normalizeMapping(map || {}) : (map || {});
+        const cats = (receiptCategories && receiptCategories.length)
+          ? receiptCategories.slice()
+          : (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) ? window.RECEIPT_CUSTOMER_CATEGORIES.slice() : []);
+
+        VAT_ROWS.forEach(rowMeta=>{
             const row = document.createElement('div'); row.className='flex items-center gap-2';
-            const lbl=document.createElement('span'); lbl.className='w-24 font-semibold'; lbl.innerText=vc||'–'; row.appendChild(lbl);
+            row.dataset.key = rowMeta.key;
+            row.dataset.vat = rowMeta.vat;
+            const lbl=document.createElement('span'); lbl.className='w-24 font-semibold'; lbl.innerText=rowMeta.label; row.appendChild(lbl);
             const sel=document.createElement('select'); sel.className='border rounded px-2 py-1 flex-1';
             const o0=document.createElement('option'); o0.value=''; o0.textContent='--'; sel.appendChild(o0);
-            cats.forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=(window.labelForCategory?window.labelForCategory(c):c); if(map && map[vc]===c) o.selected=true; sel.appendChild(o); });
+            cats.forEach(c=>{
+              if(!allowedForVat(c, rowMeta.vat)) return;
+              const o=document.createElement('option');
+              o.value=c;
+              o.textContent=labelForCat(c);
+              if(normalized && normalized[rowMeta.vat]===c) o.selected=true;
+              sel.appendChild(o);
+            });
             row.appendChild(sel);
             list.appendChild(row);
         });
@@ -8990,20 +9200,28 @@ function openReceiptClassModal(summaryObj){
 
     async function loadProfiles(){
         try{
-            const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent('') + (isReceiptsOn() ? '&mode=receipts' : ''), {credentials:'same-origin'});
+        const q = new URLSearchParams();
+        if (activeVat) q.set('vat', activeVat);
+        q.set('mode', 'receipts');
+        const r = await fetch('/api/char_profiles?' + q.toString(), {credentials:'same-origin'});
             const j = await r.json();
             const profs = Array.isArray(j.profiles)? j.profiles : [];
+            receiptConstraints = (j && j.vat_constraints && typeof j.vat_constraints === 'object') ? j.vat_constraints : {};
+            receiptCategories = Array.isArray(j.expense_tags) ? j.expense_tags.slice() : [];
             const defMap = (summaryObj && summaryObj.mapping)? normalizeMapping(summaryObj.mapping):{};
             if(selProf){
                 selProf.innerHTML='';
                 const o0=document.createElement('option'); o0.value=''; o0.textContent='Γενικό'; o0.dataset.mapping=JSON.stringify(defMap); selProf.appendChild(o0);
                 profs.forEach(p=>{
-                    const o=document.createElement('option'); o.value=p.id||p.name||'';
+                  const profileName = String(p.name || '').trim();
+                  if(!profileName) return;
+                  const o=document.createElement('option'); o.value=profileName;
                     o.textContent=p.name||'(χωρίς όνομα)';
                     o.dataset.mapping=JSON.stringify(normalizeMapping(p.mapping||{}));
                     selProf.appendChild(o);
                 });
             }
+            renderRows(defMap);
         }catch(e){ console.warn('loadProfiles failed', e); }
     }
 
@@ -9017,25 +9235,79 @@ function openReceiptClassModal(summaryObj){
 
     renderRows(summaryObj && summaryObj.mapping?normalizeMapping(summaryObj.mapping):{});
     loadProfiles();
+    setupCombinedMtype();
 
-    modal.querySelector('#receiptClassCloseX')?.addEventListener('click', closeReceiptClassModal);
-    modal.querySelector('#receiptClassCancel')?.addEventListener('click', closeReceiptClassModal);
-    modal.querySelector('#receiptClassSave')?.addEventListener('click', async ()=>{
-        const out={};
+    const closeBtnX = modal.querySelector('#receiptClassCloseX');
+    const cancelBtn = modal.querySelector('#receiptClassCancel');
+    const saveBtn = modal.querySelector('#receiptClassSave');
+    if (closeBtnX) closeBtnX.onclick = closeReceiptClassModal;
+    if (cancelBtn) cancelBtn.onclick = closeReceiptClassModal;
+    if (saveBtn) saveBtn.onclick = async ()=>{
+      const out={ kat_fpa_a:'', kat_fpa_b:'', kat_fpa_g:'', kat_fpa_d:'', kat_fpa_e:'' };
         list.querySelectorAll('div.flex.items-center').forEach(row=>{
-            const vatKey=row.querySelector('span')?.innerText||'';
+        const mapKey = row.dataset.key || '';
             const sel=row.querySelector('select');
-            if(sel && sel.value){ out[vatKey]=sel.value; }
+        if(mapKey && sel){ out[mapKey]=sel.value || ''; }
         });
-        const profName=selProf?.value||'';
+        let receiptMtypeValue = '';
+        if (showCombinedMtype) {
+          const mtypeSelect = document.getElementById('receiptClassMtypeSelect');
+          receiptMtypeValue = String(mtypeSelect?.value || '').trim();
+          if (!receiptMtypeValue) {
+            showFlash('Επίλεξε Κωδικό Κίνησης Αποδείξεων.', 'error', 3500);
+            return;
+          }
+        }
+        const profName=(selProf?.value||'').trim();
+        if(!profName){
+          showFlash('Επίλεξε προφίλ αποδείξεων ή δημιούργησε νέο από το +.', 'error', 3500);
+          return;
+        }
+      if(!out.kat_fpa_a || !out.kat_fpa_b || !out.kat_fpa_g || !out.kat_fpa_d || !out.kat_fpa_e){
+        showFlash('Συμπλήρωσε κατηγορία για όλα τα ποσοστά ΦΠΑ.', 'error', 3500);
+        return;
+      }
         try{
-            const r = await fetch('/api/char_profiles/save', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({vat:'',name:profName,mapping:out,mode:'receipts'})});
+          const r = await fetch('/api/char_profiles/save', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({vat:activeVat,name:profName,mapping:out,mode:'receipts'})});
             const j=await r.json();
             if(j && j.ok) showFlash('Το προφίλ αποθηκεύτηκε.', 'success', 3000);
             else showFlash('Σφάλμα αποθήκευσης.', 'error', 3000);
         }catch(e){ showFlash('Σφάλμα αποθήκευσης.', 'error', 3000); }
+
+        if (showCombinedMtype && activeVat) {
+          try {
+            const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
+            const getData = await getResp.json().catch(() => null);
+            const rep = getData?.repeat_entry || {};
+            await fetch('/api/repeat_entry/save', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              credentials: 'same-origin',
+              body: JSON.stringify({
+                vat: activeVat,
+                enabled: !!rep.enabled,
+                mapping: rep.mapping || {},
+                profile_name: rep.profile_name || profName || '',
+                invoice_mtype: rep.invoice_mtype || '',
+                receipt_mtype: receiptMtypeValue
+              })
+            });
+            try {
+              localStorage.setItem('receipt_mtype', receiptMtypeValue);
+              localStorage.setItem('saved_receipt_mtype', receiptMtypeValue);
+            } catch(_) {}
+            window.__cachedReceiptMtype = receiptMtypeValue;
+            window.__repeat_receipt_mtype = receiptMtypeValue;
+          } catch(e) {
+            console.warn('Failed to save combined receipt mtype', e);
+            showFlash('Το προφίλ αποθηκεύτηκε, αλλά ο Κωδικός Κίνησης δεν αποθηκεύτηκε.', 'warning', 4000);
+          }
+        }
+
+        // make sure edit button is visible once a profile has been saved
+        updateReceiptClassEditButton();
         closeReceiptClassModal();
-    });
+    };
 }
 
 // if page loads with an analysis summary already present, open the modal

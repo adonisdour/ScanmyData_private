@@ -2,12 +2,13 @@
 # scraper.py - unified scrapers producing same output schema for multiple sources
 import re
 import json
+import base64
 import requests
 import urllib.request
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from datetime import datetime
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -24,8 +25,6 @@ VAT_RE = re.compile(r"\b\d{9}\b")
 AMOUNT_RE = re.compile(r"(-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)")
 DATE_PATTERNS = [r"(\d{4}-\d{2}-\d{2})", r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})", r"(\d{4}\/\d{2}\/\d{2})"]
 
-# ---------- helpers ----------
-
 def _fetch_url_text(url, headers=None, timeout=15, debug=False):
     """
     Best-effort fetch with retries for unstable endpoints (e.g. AADE pages).
@@ -34,6 +33,7 @@ def _fetch_url_text(url, headers=None, timeout=15, debug=False):
     headers = headers or HEADERS
     last_err = None
 
+    # 1) direct requests attempts
     for _ in range(2):
         try:
             r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
@@ -43,6 +43,7 @@ def _fetch_url_text(url, headers=None, timeout=15, debug=False):
         except Exception as e:
             last_err = e
 
+    # 2) session-based attempt with explicit connection close
     try:
         sess = requests.Session()
         req_headers = dict(headers)
@@ -54,6 +55,7 @@ def _fetch_url_text(url, headers=None, timeout=15, debug=False):
     except Exception as e:
         last_err = e
 
+    # 3) urllib fallback (different HTTP stack)
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -64,8 +66,10 @@ def _fetch_url_text(url, headers=None, timeout=15, debug=False):
         last_err = e
 
     if debug and last_err is not None:
-        print("www1 fetch error:", last_err)
+        print("fetch failed after retries:", last_err)
     raise last_err if last_err is not None else RuntimeError("Unknown fetch error")
+
+# ---------- helpers ----------
 
 def _clean_amount_to_comma(raw):
     """
@@ -304,6 +308,408 @@ def _clean_amount_to_comma(s):
     # ensure no currency symbol
     return formatted
 
+def _amount_to_float(raw):
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    s = s.replace("€", "").replace("EUR", "")
+    s = re.sub(r"[^\d\.,\-]", "", s)
+    if not s:
+        return None
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "")
+            s = s.replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _float_to_comma(v):
+    if v is None:
+        return None
+    try:
+        return _clean_amount_to_comma(f"{float(v):.2f}")
+    except Exception:
+        return None
+
+def _normalize_vat_rate_key(rate):
+    if rate is None:
+        return None
+    s = str(rate).strip().replace("%", "").replace(",", ".")
+    if not s:
+        return None
+    try:
+        num = float(s)
+        if num < 0 or num > 100:
+            return None
+        if num.is_integer():
+            return str(int(num))
+        return ("%s" % num).rstrip("0").rstrip(".")
+    except Exception:
+        m = re.search(r"\d{1,2}(?:[\.,]\d+)?", str(rate))
+        if not m:
+            return None
+        return _normalize_vat_rate_key(m.group(0))
+
+def _extract_vat_breakdown_from_xml_root(root):
+    if root is None:
+        return {}
+    rows = {}
+    vat_category_to_rate = {
+        "1": "24",
+        "2": "13",
+        "3": "6",
+        "4": "17",
+        "5": "9",
+        "6": "4",
+        "7": "0",
+        "8": "0",
+    }
+
+    def _add_row(rate, net_val=None, vat_val=None, gross_val=None):
+        key = _normalize_vat_rate_key(rate)
+        if not key:
+            return
+        row = rows.setdefault(key, {"net": 0.0, "vat": 0.0, "gross": 0.0})
+        if net_val is not None:
+            row["net"] += net_val
+        if vat_val is not None:
+            row["vat"] += vat_val
+        if gross_val is not None:
+            row["gross"] += gross_val
+
+    # UBL TaxSubtotal blocks
+    for subtotal in root.findall(".//{*}TaxSubtotal"):
+        rate = None
+        for el in subtotal.iter():
+            ln = _ns_strip(el.tag).lower()
+            txt = (el.text or "").strip()
+            if not txt:
+                continue
+            if ln in ("percent", "taxpercent", "vatrate", "rate") and rate is None:
+                rate = txt
+        net_val = None
+        vat_val = None
+        gross_val = None
+        taxable = subtotal.find(".//{*}TaxableAmount")
+        tax = subtotal.find(".//{*}TaxAmount")
+        if taxable is not None and (taxable.text or "").strip():
+            net_val = _amount_to_float(taxable.text)
+        if tax is not None and (tax.text or "").strip():
+            vat_val = _amount_to_float(tax.text)
+        if net_val is not None and vat_val is not None:
+            gross_val = net_val + vat_val
+        _add_row(rate, net_val, vat_val, gross_val)
+
+    # myDATA invoiceDetails blocks (vatCategory + netValue + vatAmount)
+    for details in root.findall(".//{*}invoiceDetails"):
+        rate = None
+        vat_category = None
+        net_val = None
+        vat_val = None
+        gross_val = None
+        for el in details.iter():
+            ln = _ns_strip(el.tag).lower()
+            txt = (el.text or "").strip()
+            if not txt:
+                continue
+            if ln in ("vatpercent", "vatrate", "percent", "rate") and rate is None:
+                rate = txt
+            elif ln == "vatcategory" and vat_category is None:
+                vat_category = txt
+            elif ln in ("netvalue", "taxableamount", "lineextensionamount") and net_val is None:
+                net_val = _amount_to_float(txt)
+            elif ln in ("vatamount", "taxamount") and vat_val is None:
+                vat_val = _amount_to_float(txt)
+            elif ln in ("grossvalue", "linegrossvalue") and gross_val is None:
+                gross_val = _amount_to_float(txt)
+
+        if rate is None and vat_category is not None:
+            rate = vat_category_to_rate.get(str(vat_category).strip())
+        if gross_val is None and net_val is not None and vat_val is not None:
+            gross_val = net_val + vat_val
+
+        _add_row(rate, net_val, vat_val, gross_val)
+
+    if rows:
+        result = {
+            k: {
+                "net_amount": _float_to_comma(v.get("net")),
+                "vat_amount": _float_to_comma(v.get("vat")),
+                "gross_amount": _float_to_comma(v.get("gross")),
+            }
+            for k, v in rows.items()
+        }
+        result["__inferred__"] = False
+        return result
+    return {}
+
+def _extract_vat_breakdown_from_html(soup, html_text=""):
+    if soup is None:
+        return {}
+    rows = {}
+    inferred_used = False
+
+    def _guess_rate_from_amounts(net_val, vat_val):
+        if net_val is None or vat_val is None or net_val == 0:
+            return None
+        target = (vat_val / net_val) * 100.0
+        candidates = [24.0, 13.0, 6.0, 17.0, 9.0, 4.0, 0.0]
+        best = min(candidates, key=lambda c: abs(c - target))
+        if abs(best - target) <= 1.0:
+            return _normalize_vat_rate_key(best)
+        return None
+
+    def _add_row(rate, net_val=None, vat_val=None, gross_val=None):
+        key = _normalize_vat_rate_key(rate)
+        if not key:
+            return
+        if net_val is None and vat_val is None and gross_val is None:
+            return
+        row = rows.setdefault(key, {"net": 0.0, "vat": 0.0, "gross": 0.0})
+        if net_val is not None:
+            row["net"] += net_val
+        if vat_val is not None:
+            row["vat"] += vat_val
+        if gross_val is not None:
+            row["gross"] += gross_val
+
+    # Table-based extraction (best effort)
+    for tr in soup.find_all("tr"):
+        txt = tr.get_text(" ", strip=True)
+        if not txt:
+            continue
+        low = txt.lower()
+        if "%" not in txt:
+            continue
+        if not any(tok in low for tok in ("φπα", "fpa", "vat", "tax")):
+            continue
+        m_rate = re.search(r"(\d{1,2}(?:[\.,]\d+)?)\s*%", txt)
+        if not m_rate:
+            continue
+        amounts = [
+            _amount_to_float(m.group(1))
+            for m in re.finditer(r"(-?\d{1,3}(?:[\.,]\d{3})*(?:[\.,]\d+)?|\d+(?:[\.,]\d+)?)", txt)
+        ]
+        amounts = [a for a in amounts if a is not None]
+        if not amounts:
+            continue
+        net_val = vat_val = gross_val = None
+        if len(amounts) >= 3:
+            net_val, vat_val, gross_val = amounts[-3], amounts[-2], amounts[-1]
+        elif len(amounts) == 2:
+            net_val, vat_val = amounts[-2], amounts[-1]
+            gross_val = net_val + vat_val
+        else:
+            gross_val = amounts[-1]
+        _add_row(m_rate.group(1), net_val, vat_val, gross_val)
+
+    # VAT-summary-table extraction (e.g. "Ανάλυση Φ.Π.Α.")
+    if not rows:
+        for table in soup.find_all("table"):
+            table_text = table.get_text(" ", strip=True)
+            if not re.search(r"φ\.?π\.?α\.?|vat", table_text, re.I):
+                continue
+            if not re.search(r"%", table_text):
+                continue
+            if not re.search(r"αν[άα]λυση|analysis|καθαρ[όο]\s*ποσ[όο]\s*αν[άα]\s*φ\.?π\.?α\.?|αξ[ίι]α\s*φ\.?π\.?α\.?|tax\s*subtotal|tax\s*summary", table_text, re.I):
+                continue
+
+            for tr in table.find_all("tr"):
+                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+                if len(cells) < 2:
+                    continue
+                row_txt = " ".join(cells)
+                # skip header-like rows
+                if re.search(r"καθαρ|ποσό|ανάλυση|φ\.?π\.?α\.?|vat", row_txt, re.I) and not re.search(r"\d", row_txt):
+                    continue
+
+                rate = None
+                for cell in cells:
+                    m_rate = re.search(r"(\d{1,2}(?:[\.,]\d+)?)\s*%", cell)
+                    if m_rate:
+                        rate = m_rate.group(1)
+                        break
+                if rate is None:
+                    for cell in cells:
+                        rate_val = _amount_to_float(cell)
+                        if rate_val is not None and 0 <= rate_val <= 100:
+                            rate = str(rate_val)
+                            break
+                if rate is None:
+                    continue
+
+                numeric_vals = [_amount_to_float(c) for c in cells]
+                numeric_vals = [v for v in numeric_vals if v is not None]
+                net_val = vat_val = None
+                if len(numeric_vals) >= 2:
+                    net_val, vat_val = numeric_vals[-2], numeric_vals[-1]
+                elif len(numeric_vals) == 1:
+                    vat_val = numeric_vals[0]
+                gross_val = None
+                if net_val is not None and vat_val is not None:
+                    gross_val = net_val + vat_val
+                _add_row(rate, net_val, vat_val, gross_val)
+
+    # Text fallback for patterns like "ΦΠΑ 24%"
+    if not rows and html_text:
+        for line in re.split(r"[\n\r]+", html_text):
+            low = line.lower()
+            if not any(tok in low for tok in ("φπα", "fpa", "vat", "tax")):
+                continue
+            m_rate = re.search(r"(\d{1,2}(?:[\.,]\d+)?)\s*%", line)
+            if not m_rate:
+                continue
+            amounts = [
+                _amount_to_float(m.group(1))
+                for m in re.finditer(r"(-?\d{1,3}(?:[\.,]\d{3})*(?:[\.,]\d+)?|\d+(?:[\.,]\d+)?)", line)
+            ]
+            amounts = [a for a in amounts if a is not None]
+            if not amounts:
+                continue
+            if len(amounts) >= 2:
+                net_val, vat_val = amounts[-2], amounts[-1]
+                _add_row(m_rate.group(1), net_val, vat_val, net_val + vat_val)
+            else:
+                _add_row(m_rate.group(1), None, None, amounts[-1])
+
+    # AADE receipt table fallback (Καθαρή αξία Α-Ε + ΦΠΑ Α-Δ, without explicit %)
+    if not rows:
+        net_by_cat = {}
+        vat_by_cat = {}
+        cat_rate_map = {
+            "A": "24", "B": "13", "C": "6", "D": "17", "E": "0",
+            "Α": "24", "Β": "13", "Γ": "6", "Δ": "17", "Ε": "0",
+        }
+        greek_to_latin = {"Α": "A", "Β": "B", "Γ": "C", "Δ": "D", "Ε": "E"}
+
+        for tr in soup.find_all("tr"):
+            tds = tr.find_all(["td", "th"])
+            if len(tds) < 2:
+                continue
+            label = tds[0].get_text(" ", strip=True)
+            val_txt = tds[1].get_text(" ", strip=True)
+            if not label:
+                continue
+
+            m_net = re.search(r"καθαρ[ήη]\s*αξ[ίι]α\s*([A-EΑ-Ε])", label, re.I)
+            m_vat = re.search(r"φπα\s*([A-EΑ-Ε])", label, re.I)
+            amount_val = _amount_to_float(val_txt)
+            if amount_val is None:
+                continue
+
+            if m_net:
+                cat = m_net.group(1).upper()
+                cat = greek_to_latin.get(cat, cat)
+                net_by_cat[cat] = amount_val
+            elif m_vat:
+                cat = m_vat.group(1).upper()
+                cat = greek_to_latin.get(cat, cat)
+                vat_by_cat[cat] = amount_val
+
+        for cat in sorted(set(net_by_cat.keys()) | set(vat_by_cat.keys())):
+            net_val = net_by_cat.get(cat)
+            vat_val = vat_by_cat.get(cat)
+            if (net_val is None and vat_val is None) or ((net_val or 0.0) == 0.0 and (vat_val or 0.0) == 0.0):
+                continue
+
+            rate = cat_rate_map.get(cat)
+            if rate is None:
+                rate = _guess_rate_from_amounts(net_val, vat_val)
+                if rate is not None:
+                    inferred_used = True
+            else:
+                # Category letters imply VAT class, not explicit percentage in page.
+                inferred_used = True
+
+            if rate is not None:
+                gross_val = (net_val or 0.0) + (vat_val or 0.0)
+                _add_row(rate, net_val, vat_val, gross_val)
+
+    # Field-based fallback for pages that expose only net/vat/total without explicit rate
+    if not rows:
+        net_raw = _extract_input_or_text(soup, "namount", "netAmount", "net_amount", "netvalue", "netValue", "taxableAmount")
+        vat_raw = _extract_input_or_text(soup, "vat", "vatamount", "vat_amount", "taxAmount", "tax_amount", "totalVatAmount")
+        gross_raw = _extract_input_or_text(soup, "tamount", "t_amount", "totalAmount", "total_amount", "totalGrossValue")
+
+        net_val = _amount_to_float(net_raw)
+        vat_val = _amount_to_float(vat_raw)
+        gross_val = _amount_to_float(gross_raw)
+        if gross_val is None and net_val is not None and vat_val is not None:
+            gross_val = net_val + vat_val
+
+        guessed_rate = _guess_rate_from_amounts(net_val, vat_val)
+        if guessed_rate is not None:
+            inferred_used = True
+            _add_row(guessed_rate, net_val, vat_val, gross_val)
+
+    result = {
+        k: {
+            "net_amount": _float_to_comma(v.get("net")),
+            "vat_amount": _float_to_comma(v.get("vat")),
+            "gross_amount": _float_to_comma(v.get("gross")),
+        }
+        for k, v in rows.items()
+    }
+    if result:
+        result["__inferred__"] = inferred_used
+    return result
+
+def _merge_vat_analysis(out_dict, new_analysis):
+    if not isinstance(out_dict, dict):
+        return
+    if not isinstance(new_analysis, dict) or not new_analysis:
+        return
+    inferred_flag = bool(new_analysis.get("__inferred__", False)) if isinstance(new_analysis, dict) else False
+    existing = out_dict.get("vat_analysis")
+    if not isinstance(existing, dict):
+        cleaned = {k: v for k, v in new_analysis.items() if k != "__inferred__"}
+        out_dict["vat_analysis"] = cleaned
+        out_dict["vat_analysis_inferred"] = inferred_flag
+        return
+
+    out_dict["vat_analysis_inferred"] = bool(out_dict.get("vat_analysis_inferred", False) or inferred_flag)
+
+    for rate, vals in new_analysis.items():
+        if rate == "__inferred__":
+            continue
+        if rate not in existing:
+            existing[rate] = vals
+            continue
+        old_vals = existing.get(rate, {})
+        sums = {
+            "net_amount": _amount_to_float(old_vals.get("net_amount")),
+            "vat_amount": _amount_to_float(old_vals.get("vat_amount")),
+            "gross_amount": _amount_to_float(old_vals.get("gross_amount")),
+        }
+        adds = {
+            "net_amount": _amount_to_float(vals.get("net_amount")),
+            "vat_amount": _amount_to_float(vals.get("vat_amount")),
+            "gross_amount": _amount_to_float(vals.get("gross_amount")),
+        }
+        merged = {}
+        for key in ("net_amount", "vat_amount", "gross_amount"):
+            left = sums.get(key)
+            right = adds.get(key)
+            if left is None and right is None:
+                merged[key] = None
+            else:
+                merged[key] = _float_to_comma((left or 0.0) + (right or 0.0))
+        existing[rate] = merged
+
+def _ensure_vat_analysis(out_dict):
+    if isinstance(out_dict, dict) and "vat_analysis" not in out_dict:
+        out_dict["vat_analysis"] = None
+    if isinstance(out_dict, dict) and "vat_analysis_inferred" not in out_dict:
+        out_dict["vat_analysis_inferred"] = False
+
 def _text_of(el):
     if not el:
         return ""
@@ -330,6 +736,30 @@ def _extract_input_or_text(soup, *ids_or_names):
             t = sel.get_text(" ", strip=True)
             if t:
                 return t
+    return None
+
+def _extract_mydatapi_url_from_text(text, base_url=None):
+    if not text:
+        return None
+    normalized = str(text)
+    normalized = normalized.replace('\\/', '/').replace('\\u002F', '/').replace('\\u003D', '=')
+    normalized = normalized.replace('&amp;', '&')
+
+    patterns = [
+        r'https?://mydatapi\.aade\.gr/[^\s"\'<>]*TimologioQR/QRInfo\?q=[^\s"\'<>]+',
+        r'/(?:myDATA|mydata)/TimologioQR/QRInfo\?q=[^\s"\'<>]+'
+    ]
+    for pat in patterns:
+        m = re.search(pat, normalized, re.I)
+        if not m:
+            continue
+        candidate = m.group(0).strip('"\' )>;')
+        if candidate.startswith('/'):
+            if base_url:
+                candidate = urljoin(base_url, candidate)
+            else:
+                continue
+        return candidate
     return None
 
 def _extract_from_jsonld(soup):
@@ -430,12 +860,10 @@ def scrape_www1_aade(url, timeout=15, debug=False):
     """
     res = {"issuer_vat": None, "issue_date": None, "issuer_name": None,
            "progressive_aa": None, "doc_type": None, "total_amount": None,
-           "is_invoice": False, "MARK": None, "source": "AADE_www1"}
+           "is_invoice": False, "MARK": None, "source": "AADE_www1", "vat_analysis": None,
+           "vat_analysis_inferred": False}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout)
-        r.raise_for_status()
-        r.encoding = r.apparent_encoding or "utf-8"
-        html = r.text
+        html = _fetch_url_text(url, headers=HEADERS, timeout=timeout, debug=debug)
     except Exception as e:
         if debug: print("www1 fetch error:", e)
         return res
@@ -469,6 +897,9 @@ def scrape_www1_aade(url, timeout=15, debug=False):
             m_mark = MARK_RE.search(val)
             if m_mark:
                 res["MARK"] = m_mark.group(0)
+    # VAT analysis (best effort)
+    _merge_vat_analysis(res, _extract_vat_breakdown_from_html(soup, html))
+
     # fallback searches across page if some fields missing
     if not res["issuer_vat"]:
         m = VAT_RE.search(html)
@@ -486,7 +917,8 @@ def scrape_mydatapi(url, timeout=12, debug=False):
     """
     out = {"issuer_vat": None, "issue_date": None, "issuer_name": None,
            "progressive_aa": None, "doc_type": None, "total_amount": None,
-           "is_invoice": False, "MARK": None, "source": "MyData"}
+           "is_invoice": False, "MARK": None, "source": "MyData", "vat_analysis": None,
+           "vat_analysis_inferred": False}
     try:
         r = requests.get(url, headers=HEADERS, timeout=timeout)
         r.raise_for_status()
@@ -592,6 +1024,8 @@ def scrape_mydatapi(url, timeout=12, debug=False):
                         if iname_c: out["issuer_name"] = iname_c
             except Exception:
                 continue
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
+
     if out["doc_type"] and re.search(r"τιμολό?γιο|τιμολογιο|τιμολόγιο", out["doc_type"], re.I):
         out["is_invoice"] = True
     return out
@@ -610,16 +1044,43 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
     """
     out = {"issuer_vat": None, "issue_date": None, "issuer_name": None,
            "progressive_aa": None, "doc_type": None, "total_amount": None,
-           "is_invoice": False, "MARK": None, "source": "Wedoconnect"}
+           "is_invoice": False, "MARK": None, "source": "Wedoconnect", "vat_analysis": None,
+           "vat_analysis_inferred": False}
     sess = requests.Session()
     sess.headers.update(HEADERS)
-    try:
-        r = sess.get(url, timeout=timeout)
-        r.raise_for_status()
-        html = r.text
-    except Exception as e:
-        if debug: print("wedoconnect fetch error:", e)
+
+    parsed_in = urlparse(url)
+    fetch_urls = [url]
+    if "vs.gr" in (parsed_in.netloc or "").lower() and "/iv/invoice/" in (parsed_in.path or "").lower():
+        q = parse_qs(parsed_in.query)
+        if str(q.get("peppol", [""])[0]).lower() != "true":
+            sep = "&" if parsed_in.query else "?"
+            peppol_url = f"{url}{sep}peppol=true"
+            fetch_urls = [peppol_url, url]
+
+    last_error = None
+    r = None
+    html = None
+    used_url = None
+    for candidate_url in fetch_urls:
+        try:
+            rr = sess.get(candidate_url, timeout=timeout)
+            rr.raise_for_status()
+            candidate_html = rr.text
+            if ("peppol=true" in candidate_url) and ("Ημερομηνία Έκδοσης" not in candidate_html) and ("Ανάλυση Φ.Π.Α." not in candidate_html):
+                continue
+            r = rr
+            html = candidate_html
+            used_url = candidate_url
+            break
+        except Exception as e:
+            last_error = e
+
+    if r is None or html is None:
+        if debug: print("wedoconnect fetch error:", last_error)
         return out
+    if debug and used_url and used_url != url:
+        print("wedoconnect using URL:", used_url)
 
     soup = BeautifulSoup(html, "html.parser")
     # quick MARK from page
@@ -725,6 +1186,7 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
             for k, v in extracted.items():
                 if v and not out.get(k):
                     out[k] = v
+            _merge_vat_analysis(out, _extract_vat_breakdown_from_xml_root(root))
             if out.get("MARK") is None and extracted.get("MARK"):
                 out["MARK"] = extracted["MARK"]
             parsed_xml_found = True
@@ -753,6 +1215,7 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
                 for k, v in extracted.items():
                     if v and not out.get(k):
                         out[k] = v
+                _merge_vat_analysis(out, _extract_vat_breakdown_from_xml_root(root))
                 parsed_xml_found = True
                 break
             except Exception:
@@ -776,6 +1239,53 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", html)
         if m:
             out["issue_date"] = _norm_date_to_ddmmyyyy(m.group(1))
+
+    # table-structured fallback (common in vs.gr-like invoice pages)
+    for table in soup.find_all("table"):
+        rows = [[c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])] for tr in table.find_all("tr")]
+        rows = [r for r in rows if r]
+        if len(rows) < 2:
+            continue
+
+        header = [h.strip().lower() for h in rows[0]]
+        for data_row in rows[1:]:
+            # column-mapped row when header and row have same column count
+            if len(data_row) == len(header) and len(header) >= 2:
+                mapped = {header[i]: data_row[i] for i in range(len(header))}
+
+                if not out.get("issue_date"):
+                    for hk, hv in mapped.items():
+                        if "ημερομην" in hk or "date" in hk:
+                            out["issue_date"] = _norm_date_to_ddmmyyyy(hv)
+                            break
+
+                if not out.get("doc_type"):
+                    for hk, hv in mapped.items():
+                        if "είδος" in hk or "παραστα" in hk or "type" in hk:
+                            if hv and hv.strip():
+                                out["doc_type"] = hv.strip()
+                                break
+
+            # key:value style rows
+            if len(data_row) >= 2:
+                key = (data_row[0] or "").strip().lower()
+                val = (data_row[1] or "").strip()
+
+                if not out.get("issue_date") and ("ημερομην" in key or "date" in key):
+                    out["issue_date"] = _norm_date_to_ddmmyyyy(val)
+
+                if "πληρωτ" in key or "payable" in key:
+                    amount = _clean_amount_to_comma(val)
+                    if amount:
+                        out["total_amount"] = amount
+                elif not out.get("total_amount") and ("σύνολο" in key or "συνολο" in key):
+                    amount = _clean_amount_to_comma(val)
+                    if amount:
+                        out["total_amount"] = amount
+
+                if not out.get("doc_type") and ("είδος" in key or "παραστα" in key or "type" in key):
+                    if val:
+                        out["doc_type"] = val
 
     # If doc_type still missing, try to find in page text or extracted doc_type
     if not out.get("doc_type"):
@@ -817,6 +1327,8 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
     if out["total_amount"]:
         out["total_amount"] = _clean_amount_to_comma(out["total_amount"])
 
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
+
     return out
 
 def scrape_einvoice(url, timeout=15, debug=False):
@@ -826,7 +1338,8 @@ def scrape_einvoice(url, timeout=15, debug=False):
     """
     out = {"issuer_vat": None, "issue_date": None, "issuer_name": None,
            "progressive_aa": None, "doc_type": None, "total_amount": None,
-           "is_invoice": False, "MARK": None, "source": "ECOS"}
+           "is_invoice": False, "MARK": None, "source": "ECOS", "vat_analysis": None,
+           "vat_analysis_inferred": False}
     sess = requests.Session()
     sess.headers.update(HEADERS)
     try:
@@ -890,6 +1403,7 @@ def scrape_einvoice(url, timeout=15, debug=False):
             for k,v in extracted.items():
                 if v and not out.get(k):
                     out[k]=v
+            _merge_vat_analysis(out, _extract_vat_breakdown_from_xml_root(root))
             if out.get("total_amount") and out.get("issuer_vat"):
                 break
     # fallback: HTML search
@@ -899,6 +1413,7 @@ def scrape_einvoice(url, timeout=15, debug=False):
     if not out["total_amount"]:
         m = re.search(r"€\s*([0-9\.,]+)", html)
         if m: out["total_amount"]=_clean_amount_to_comma(m.group(1))
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
     if out.get("doc_type") and re.search(r"τιμολό?γιο|τιμολογιο", out["doc_type"], re.I):
         out["is_invoice"]=True
     return out
@@ -913,7 +1428,8 @@ def scrape_impact(url, timeout=15, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "Impact"
+        "is_invoice": False, "MARK": None, "source": "Impact", "vat_analysis": None,
+        "vat_analysis_inferred": False
     }
 
     sess = requests.Session()
@@ -1021,6 +1537,8 @@ def scrape_impact(url, timeout=15, debug=False):
     if not out["total_amount"]:
         m = re.search(r"€\s*([0-9\.,]+)", html)
         if m: out["total_amount"] = _clean_amount_to_comma(m.group(1))
+
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
 
     return out
 
@@ -1225,6 +1743,8 @@ def scrape_epsilon(url, timeout=20, debug=False):
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
         "MARK": None, "is_invoice": False, "tried_url": None,
+        "vat_analysis": None,
+        "vat_analysis_inferred": False,
         "source": "Epsilon-getfile-only" if "epsilon" in parsed.netloc.lower() else "Parochos-getfile-only"
     }
 
@@ -1254,6 +1774,7 @@ def scrape_epsilon(url, timeout=20, debug=False):
             extracted = _extract_from_ubl_root(root)
             for k, v in extracted.items():
                 if v: out[k] = v
+            _merge_vat_analysis(out, _extract_vat_breakdown_from_xml_root(root))
             itype = out.get("doc_type")
             if itype and str(itype).strip() not in NON_INVOICE_CODES:
                 out["is_invoice"] = True
@@ -1301,6 +1822,7 @@ def scrape_epsilon(url, timeout=20, debug=False):
             if not out["issue_date"]:
                 md = re.search(r"(\d{2}\/\d{2}\/\d{4})", page_txt)
                 if md: out["issue_date"] = _fmt_date_to_ddmmyyyy(md.group(1))
+            _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, text))
 
             if out.get("doc_type") and str(out["doc_type"]).strip() not in NON_INVOICE_CODES:
                 out["is_invoice"] = True
@@ -1337,7 +1859,8 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "e-Invoicing.gr"
+        "is_invoice": False, "MARK": None, "source": "e-Invoicing.gr", "vat_analysis": None,
+        "vat_analysis_inferred": False
     }
 
     parsed = urlparse(url)
@@ -1477,6 +2000,8 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
         m = re.search(r"([0-9\.,]+)\s*EUR", html)
         if m:
             out["total_amount"] = _clean_amount_to_comma(m.group(1))
+
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
     
     return out
 
@@ -1491,7 +2016,8 @@ def scrape_s1ecos(url, timeout=15, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "S1ECOS"
+        "is_invoice": False, "MARK": None, "source": "S1ECOS", "vat_analysis": None,
+        "vat_analysis_inferred": False
     }
 
     sess = requests.Session()
@@ -1589,6 +2115,8 @@ def scrape_s1ecos(url, timeout=15, debug=False):
         m = re.search(r"€\s*([0-9\.,]+)", html)
         if m: out["total_amount"] = _clean_amount_to_comma(m.group(1))
 
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
+
     return out
 
 
@@ -1601,7 +2129,8 @@ def scrape_pegcloud(url, timeout=15, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "Pegcloud"
+        "is_invoice": False, "MARK": None, "source": "Pegcloud", "vat_analysis": None,
+        "vat_analysis_inferred": False
     }
     
     sess = requests.Session()
@@ -1665,6 +2194,8 @@ def scrape_pegcloud(url, timeout=15, debug=False):
     # Detect invoice keyword
     if re.search(r"τιμολό?γιο|invoice", html, re.I):
         out["is_invoice"] = True
+
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
     
     return out
 
@@ -1678,7 +2209,8 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "e-Invoicing.gr"
+        "is_invoice": False, "MARK": None, "source": "e-Invoicing.gr", "vat_analysis": None,
+        "vat_analysis_inferred": False
     }
     
     parsed = urlparse(url)
@@ -1705,7 +2237,7 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     try:
         r = sess.get(api_url, timeout=timeout)
         r.raise_for_status()
-        r.encoding = 'utf-8'
+        r.encoding = r.apparent_encoding or 'utf-8'
     except Exception as e:
         if debug: print(f"[e-invoicing.gr RequestError] {e}")
         return out
@@ -1761,7 +2293,240 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
     # Detect invoice
     if re.search(r"τιμολό?γιο|invoice", html, re.I):
         out["is_invoice"] = True
+
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
     
+    return out
+
+
+def scrape_megasoft(url, timeout=20, debug=False):
+    """
+    Megasoft InvoiceLink QR pages.
+    Χρησιμοποιεί τεχνική τύπου scraper.py: προσθήκη peppol=true και parsing από rendered HTML labels.
+    """
+    out = {
+        "issuer_vat": None, "issue_date": None, "issuer_name": None,
+        "progressive_aa": None, "doc_type": None, "total_amount": None,
+        "is_invoice": False, "MARK": None, "source": "Megasoft", "vat_analysis": None,
+        "vat_analysis_inferred": False
+    }
+
+    sess = requests.Session()
+    sess.headers.update(HEADERS)
+
+    peppol_url = url
+    if "peppol=true" not in url.lower():
+        peppol_url = url + ("&" if "?" in url else "?") + "peppol=true"
+
+    html = None
+    last_err = None
+    for candidate in [peppol_url, url]:
+        try:
+            r = sess.get(candidate, timeout=timeout, allow_redirects=True)
+            r.raise_for_status()
+            html_candidate = r.text
+            # προτίμησε το peppol όταν έχει πραγματικό invoice content
+            if ("peppol=true" in candidate.lower()) and re.search(r"Αναγνωριστικό\s*ΦΠΑ\s*Αγοραστή|ΒΤ-48|Είδος\s*Παραστατικού|Ημερομηνία\s*Έκδοσης|Σύνολο|Φ\.Π\.Α", html_candidate, re.I):
+                html = html_candidate
+                break
+            if html is None:
+                html = html_candidate
+        except Exception as e:
+            last_err = e
+
+    if html is None:
+        if debug:
+            print("megasoft fetch error:", last_err)
+        return out
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Preferred path: follow "Προβολή μέσω myDATA" target and reuse myDATA scraper
+    mydatapi_url = _extract_mydatapi_url_from_text(html, base_url=url)
+    if not mydatapi_url:
+        parsed = urlparse(url)
+        qrcode_value = parse_qs(parsed.query).get("QrCode", [""])[0]
+        candidate_targets = []
+        button_ids = []
+
+        # a[href]
+        for a in soup.find_all("a", href=True):
+            href = a.get("href") or ""
+            txt = (a.get_text(" ", strip=True) or "") + " " + href
+            if "mydata" in txt.lower() or "timologioqr" in txt.lower() or "invoiceinspect/mydata" in txt.lower():
+                candidate_targets.append(urljoin(url, href))
+
+        # button-based discovery (e.g. "Προβολή μέσω MyData")
+        for btn in soup.find_all("button"):
+            btxt = btn.get_text(" ", strip=True) or ""
+            if not re.search(r"mydata|timologioqr|προβολή\s*μέσω\s*mydata", btxt, re.I):
+                continue
+            bid = btn.get("id")
+            if bid:
+                button_ids.append(bid)
+
+            formaction = btn.get("formaction")
+            if formaction:
+                candidate_targets.append(urljoin(url, formaction))
+
+            form_id = btn.get("form")
+            if form_id:
+                form_el = soup.find("form", attrs={"id": form_id})
+                if form_el and form_el.get("action"):
+                    candidate_targets.append(urljoin(url, form_el.get("action")))
+
+            parent_form = btn.find_parent("form")
+            if parent_form and parent_form.get("action"):
+                candidate_targets.append(urljoin(url, parent_form.get("action")))
+
+            onclick = str(btn.get("onclick", ""))
+            m_on = re.search(r"(?:location\.href\s*=|window\.open\s*\(|window\.location(?:\.href)?\s*=)\s*['\"]([^'\"]+)['\"]", onclick, re.I)
+            if m_on:
+                candidate_targets.append(urljoin(url, m_on.group(1)))
+
+        # elements with data-url / data-href / onclick
+        for el in soup.find_all(True):
+            attrs = el.attrs or {}
+            text_blob = " ".join([
+                str(attrs.get("data-url", "")),
+                str(attrs.get("data-href", "")),
+                str(attrs.get("onclick", "")),
+                el.get_text(" ", strip=True) if hasattr(el, "get_text") else "",
+            ])
+            if not re.search(r"mydata|timologioqr|invoiceinspect/mydata", text_blob, re.I):
+                continue
+
+            for attr_name in ("data-url", "data-href", "href"):
+                val = attrs.get(attr_name)
+                if val:
+                    candidate_targets.append(urljoin(url, str(val)))
+
+            onclick = str(attrs.get("onclick", ""))
+            m = re.search(r"(?:location\.href|window\.open|window\.location(?:\.href)?)\s*\(\s*['\"]([^'\"]+)['\"]", onclick, re.I)
+            if m:
+                candidate_targets.append(urljoin(url, m.group(1)))
+
+        # Search script handlers by button id / generic mydata urls
+        for script in soup.find_all("script"):
+            sc = script.string or script.get_text() or ""
+            direct = _extract_mydatapi_url_from_text(sc, base_url=url)
+            if direct:
+                candidate_targets.append(direct)
+
+            for m in re.finditer(r"/(?:invoiceinspect/mydata|invoiceinspect/qr)[^\s\"\'<>]*", sc, re.I):
+                candidate_targets.append(urljoin(url, m.group(0)))
+
+            for bid in button_ids:
+                if bid and bid in sc:
+                    m2 = re.search(r"(?:location\.href\s*=|window\.open\s*\(|window\.location(?:\.href)?\s*=)\s*['\"]([^'\"]+)['\"]", sc, re.I)
+                    if m2:
+                        candidate_targets.append(urljoin(url, m2.group(1)))
+
+        # explicit known endpoint candidates with same QrCode
+        if qrcode_value:
+            q_enc = quote(qrcode_value, safe="")
+            candidate_targets.extend([
+                urljoin(url, f"/invoiceinspect/mydata?QrCode={q_enc}"),
+                urljoin(url, f"/invoiceinspect/qr?QrCode={q_enc}&openMydata=true"),
+                urljoin(url, f"/invoiceinspect/qr?QrCode={q_enc}&mydata=true"),
+            ])
+
+        seen = set()
+        candidate_targets = [c for c in candidate_targets if c and not (c in seen or seen.add(c))]
+
+        for candidate in candidate_targets:
+            try:
+                rr = sess.get(candidate, timeout=timeout, allow_redirects=True)
+                rr.raise_for_status()
+                mydatapi_url = (
+                    _extract_mydatapi_url_from_text(rr.url, base_url=rr.url)
+                    or _extract_mydatapi_url_from_text(rr.text, base_url=rr.url)
+                )
+                if mydatapi_url:
+                    break
+            except Exception:
+                continue
+
+    if mydatapi_url:
+        if debug:
+            print("megasoft resolved myDATA URL:", mydatapi_url)
+        mydata_out = scrape_mydatapi(mydatapi_url, timeout=timeout, debug=debug)
+        if isinstance(mydata_out, dict) and any(mydata_out.get(k) for k in ("MARK", "issuer_vat", "issue_date", "total_amount", "vat_analysis")):
+            mydata_out["source"] = "Megasoft->MyData"
+            _ensure_vat_analysis(mydata_out)
+            return mydata_out
+
+    # JS-aware fallback from scraper.py (real button click with Playwright)
+    if not mydatapi_url:
+        try:
+            from scraper import _resolve_mydatapi_via_browser
+            browser_url = _resolve_mydatapi_via_browser(url, timeout=timeout, debug=debug)
+        except Exception:
+            browser_url = None
+        if browser_url:
+            if debug:
+                print("megasoft browser-resolved myDATA URL:", browser_url)
+            mydata_out = scrape_mydatapi(browser_url, timeout=timeout, debug=debug)
+            if isinstance(mydata_out, dict) and any(mydata_out.get(k) for k in ("MARK", "issuer_vat", "issue_date", "total_amount", "vat_analysis")):
+                mydata_out["source"] = "Megasoft->MyData"
+                _ensure_vat_analysis(mydata_out)
+                return mydata_out
+
+    # MARK
+    m_mark = re.search(r"\b(\d{15})\b", html)
+    if m_mark:
+        out["MARK"] = m_mark.group(1)
+
+    # issue_date
+    m_date = re.search(r"Ημερομηνία\s*Έκδοσης[^\d]*(\d{1,2}[\/-]\d{1,2}[\/-]\d{4})", html, re.I)
+    if not m_date:
+        m_date = re.search(r"(\d{1,2}[\/-]\d{1,2}[\/-]\d{4})", html)
+    if m_date:
+        out["issue_date"] = _norm_date_to_ddmmyyyy(m_date.group(1))
+
+    # doc type
+    m_dtype = re.search(r"Είδος\s*Παραστατικού\s*</[^>]+>\s*<[^>]+>\s*([^<\n]+)", html, re.I)
+    if m_dtype:
+        out["doc_type"] = m_dtype.group(1).strip()
+    else:
+        dtype_match = re.search(r"(?:Είδος|Type|Document)\s*[:]\s*([^\n<]+)", html, re.I)
+        if dtype_match:
+            out["doc_type"] = dtype_match.group(1).strip()
+
+    # VAT extraction by BT-48 (from scraper.py approach)
+    for row in soup.find_all("tr"):
+        row_text = row.get_text(" ", strip=True)
+        if re.search(r"Αναγνωριστικό\s*ΦΠΑ\s*Αγοραστή.*ΒΤ-48", row_text, re.I):
+            spans = row.find_all(["span", "td", "div"])
+            for span in reversed(spans):
+                txt = span.get_text(" ", strip=True)
+                m_vat = re.search(r"(\d{9})", txt)
+                if m_vat:
+                    out["issuer_vat"] = m_vat.group(1)
+                    break
+            if out["issuer_vat"]:
+                break
+
+    if not out["issuer_vat"]:
+        all_vats = re.findall(r"\b(\d{9})\b", html)
+        if all_vats:
+            out["issuer_vat"] = all_vats[0]
+
+    # NOTE: intentionally no blind AFM fallback from decoded QrCode payload,
+    # because this can return misleading AFM values.
+
+    # total amount
+    m_total = re.search(r"(?:ΠΛΗΡΩΤΕΟ\s*ΠΟΣΟ|Σύνολο|Total|Amount)[^\d\n]*([0-9][0-9\.,]+)", html, re.I)
+    if m_total:
+        out["total_amount"] = _clean_amount_to_comma(m_total.group(1))
+
+    _merge_vat_analysis(out, _extract_vat_breakdown_from_html(soup, html))
+
+    if out.get("doc_type") and re.search(r"τιμολό?γιο|τιμολογιο", out["doc_type"], re.I):
+        out["is_invoice"] = True
+    elif re.search(r"τιμολό?γιο|τιμολογιο", html, re.I):
+        out["is_invoice"] = True
+
     return out
 
 # ---------- entry point demonstration ----------
@@ -1771,31 +2536,49 @@ def detect_and_scrape(url, timeout=20, debug=False):
     """
     domain = urlparse(url).netloc.lower()
     if "www1.aade.gr" in domain:
-        return scrape_www1_aade(url, timeout=timeout, debug=debug)
+        result = scrape_www1_aade(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "mydatapi.aade.gr" in domain or "mydata.aade.gr" in domain:
-        return scrape_mydatapi(url, timeout=timeout, debug=debug)
+        result = scrape_mydatapi(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "wedoconnect" in domain:
-        return scrape_wedoconnect(url, timeout=timeout, debug=debug)
+        result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "einvoice.s1ecos.gr" in domain:
-        return scrape_s1ecos(url, timeout=timeout, debug=debug)
+        result = scrape_s1ecos(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "impact.gr" in domain or "einvoice.impact" in domain:
-        return scrape_impact(url, timeout=timeout, debug=debug)
+        result = scrape_impact(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "epsilonnet.gr" in domain or "epsilon" in domain:
-        return scrape_epsilon(url, timeout=timeout, debug=debug)
+        result = scrape_epsilon(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "parochos.gr" in domain:
-        return scrape_epsilon(url, timeout=timeout, debug=debug)  # Χρησιμοποιεί το ίδιο API
+        result = scrape_epsilon(url, timeout=timeout, debug=debug)  # Χρησιμοποιεί το ίδιο API
+        _ensure_vat_analysis(result)
+        return result
     if "pegcloud.io" in domain or "pegcloud" in domain:
-        return scrape_pegcloud(url, timeout=timeout, debug=debug)
+        result = scrape_pegcloud(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "e-invoicing.gr" in domain:
-        return scrape_einvoicing_gr(url, timeout=timeout, debug=debug)
+        result = scrape_einvoicing_gr(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     if "megasoft" in domain or "invoicelink" in domain:
-        try:
-            from scraper_receipt_analysis import scrape_megasoft as _scrape_megasoft
-            return _scrape_megasoft(url, timeout=timeout, debug=debug)
-        except Exception:
-            pass
+        result = scrape_megasoft(url, timeout=timeout, debug=debug)
+        _ensure_vat_analysis(result)
+        return result
     # fallback: attempt generic wedoconnect-like scraping then page scanning
-    return scrape_wedoconnect(url, timeout=timeout, debug=debug)
+    result = scrape_wedoconnect(url, timeout=timeout, debug=debug)
+    _ensure_vat_analysis(result)
+    return result
 
 # if run as script, quick demo input
 if __name__ == "__main__":

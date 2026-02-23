@@ -42,7 +42,7 @@ from flask import (
 import tempfile
 import zipfile
 import shutil
-from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr
+from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
 import requests
 import pandas as pd
 from shutil import move
@@ -946,7 +946,7 @@ try:
         if endpoint.startswith('auth.') or endpoint.startswith('static') or endpoint.startswith('firebase_auth.'):
             return None
         # allow public pages (terms, privacy, cookie consent)
-        if endpoint in ['terms_page', 'privacy_page']:
+        if endpoint in ['terms_page', 'privacy_page', '_debug_log']:
             return None
         # allow public API endpoints (if any) - keep a whitelist here if needed
         public = {'home', 'index', 'healthcheck', 'serve_icons'}
@@ -1521,21 +1521,58 @@ def _ensure_custom_categories_list(client: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def _custom_category_receipts_enabled(item: Optional[Dict[str, Any]]) -> bool:
+    """Return True if the custom category is to be treated as available for receipts.
+
+    The priority order is:
+    1. explicit boolean flag (applies_to_receipts / receipt_enabled / receipts_enabled).
+       **If any such flag is present and False, the category is considered
+       *not* receipt-enabled, even if accounts are filled.** This allows the
+       user to deselect the checkbox and override any existing account codes.
+    2. metadata inside the ``accounts`` dictionary (``__applies_to_receipts``
+       or ``receipt_enabled``) when the explicit flag is absent.
+    3. if no flag at all was provided, the presence of any non‑empty account
+       code is treated as an implicit signal that the category should be
+       available for receipts.  This keeps the system compatible with older
+       data.
+    """
     if not isinstance(item, dict):
         return False
+
+    # explicit boolean flags first
     raw = item.get("applies_to_receipts")
     if raw is None:
         raw = item.get("receipt_enabled")
     if raw is None:
         raw = item.get("receipts_enabled")
+
+    # fall back to metadata inside accounts if still undetermined
+    accounts = item.get("accounts") if isinstance(item.get("accounts"), dict) else {}
     if raw is None:
-        accounts = item.get("accounts") if isinstance(item.get("accounts"), dict) else {}
         raw = (
             accounts.get("__applies_to_receipts")
             if "__applies_to_receipts" in accounts
             else accounts.get("receipt_enabled")
         )
-    return bool(raw)
+
+    # if there was an explicit false, respect it and do not inspect accounts
+    if raw is False:
+        return False
+
+    if raw:
+        return True
+
+    # finally, if the category has any non-empty account codes we treat it
+    # as receipt-capable (user has effectively configured it)
+    try:
+        from . import _normalize_custom_accounts
+    except ImportError:
+        # should never happen but be safe
+        _normalize_custom_accounts = lambda x: x or {}
+    norm = _normalize_custom_accounts(accounts)
+    for code in norm.values():
+        if code and str(code).strip():
+            return True
+    return False
 
 
 def _category_labels_for_client(client: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -1578,34 +1615,36 @@ def _list_invoice_categories(client: Optional[Dict[str, Any]], include_receipts:
 def _list_receipt_categories(client: Optional[Dict[str, Any]]) -> List[str]:
     """Return categories usable for receipts.
 
-    Start with regular expense_tags (excluding the generic "αποδειξακια" tag),
-    then append any custom categories that are enabled *and* marked as
-    applies_to_receipts.  If we end up with an empty list, fall back to
-    ["αποδειξακια"] so that dropdowns are never completely blank.
+    Keep the default "αποδειξακια" tag and append only custom categories
+    that are explicitly flagged for receipts.
     """
     if not isinstance(client, dict):
         return ["αποδειξακια"]
-    out: List[str] = []
-    # include invoice expense tags except the special 'αποδειξακια'
-    for tag in client.get("expense_tags") or []:
-        if not tag:
-            continue
-        t = str(tag).strip()
-        if not t or t.lower() == "αποδειξακια":
-            continue
-        if t not in out:
-            out.append(t)
+    out: List[str] = ["αποδειξακια"]
+
+    def _explicit_receipts_enabled(item: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(item, dict):
+            return False
+        raw = item.get("applies_to_receipts")
+        if raw is None:
+            raw = item.get("receipt_enabled")
+        if raw is None:
+            raw = item.get("receipts_enabled")
+        accounts = item.get("accounts") if isinstance(item.get("accounts"), dict) else {}
+        if raw is None and isinstance(accounts, dict):
+            raw = accounts.get("__applies_to_receipts") if "__applies_to_receipts" in accounts else accounts.get("receipt_enabled")
+        return bool(raw)
     # append receipt-enabled custom categories
     for item in _ensure_custom_categories_list(client):
         if not item or not item.get("enabled"):
             continue
-        if not _custom_category_receipts_enabled(item):
+        if not _explicit_receipts_enabled(item):
             continue
         slug = str(item.get("id") or item.get("slug") or "").strip()
         if slug and slug not in out:
             out.append(slug)
-    if not out:
-        out = ["αποδειξακια"]
+    if "αποδειξακια" not in out:
+        out.insert(0, "αποδειξακια")
     return out
 
 
@@ -1714,7 +1753,9 @@ def _category_vat_constraints(client: Optional[Dict[str, Any]]) -> Dict[str, Lis
 
     expense_tags = None
     try:
-        expense_tags = _list_invoice_categories(client)
+        # include_receipts=True so constraints are also computed for the
+        # special receipts category "αποδειξακια" when accounts exist.
+        expense_tags = _list_invoice_categories(client, include_receipts=True)
     except Exception:
         expense_tags = client.get('expense_tags') or []
 
@@ -7624,6 +7665,27 @@ def api_update_epsilon_characteristic():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ---- simple debugging endpoint used by client JS ----
+@app.route('/_debug_log', methods=['GET','POST'])
+def _debug_log():
+    # write incoming message to a file in workspace root for live inspection
+    msg = request.args.get('msg') if request.method == 'GET' else request.form.get('msg')
+    if msg is None:
+        try:
+            data = request.get_json(silent=True)
+            msg = data.get('msg') if data else None
+        except Exception:
+            msg = None
+    if msg is None:
+        return ('', 204)
+    logpath = os.path.join(os.getcwd(), 'receipt_debug.log')
+    try:
+        with open(logpath, 'a', encoding='utf-8') as f:
+            f.write(f"{datetime.datetime.utcnow().isoformat()} {msg}\n")
+    except Exception:
+        pass
+    return ('', 204)
+
 # ---------------- MARK search ----------------
 @app.route("/search", methods=["GET", "POST"])
 def search():
@@ -7783,6 +7845,10 @@ def search():
     active_cred = get_active_credential_from_session() or {}
     vat = str(active_cred.get("vat") or "").strip() if active_cred else ""
 
+    # testing hook: allow forcing a receipt summary via URL parameter
+    if request.args.get('test_receipt_summary'):
+        modal_summary = {"is_receipt": True, "lines": [{"id":"r0","amount":"","vat":"","category":""}]}
+
     # IMPORTANT: session payload may be partial/stale. Resolve the full credential
     # from credentials.json so custom_categories/applies_to_receipts are always present.
     try:
@@ -7813,11 +7879,13 @@ def search():
     has_receipt_custom_categories = False
     try:
         customer_categories = _list_invoice_categories(active_cred)
+        # compute only custom categories that are enabled for receipts
         try:
-            receipt_custom_categories = [
-                t for t in (_list_receipt_categories(active_cred) or [])
-                if str(t or "").strip() and str(t).strip().lower() != "αποδειξακια"
-            ]
+            for item in _ensure_custom_categories_list(active_cred):
+                if item and item.get("enabled") and _custom_category_receipts_enabled(item):
+                    slug = str(item.get("id") or item.get("slug") or "").strip()
+                    if slug and slug.lower() != "αποδειξακια":
+                        receipt_custom_categories.append(slug)
             has_receipt_custom_categories = bool(receipt_custom_categories)
         except Exception:
             receipt_custom_categories = []
@@ -7842,6 +7910,17 @@ def search():
         receipt_custom_categories = []
         has_receipt_custom_categories = False
     customer_vat_constraints = _category_vat_constraints(active_cred)
+    # -------- additional check: if there are ANY saved receipt-mode
+    # profiles with non-empty mappings, consider this customer as having
+    # receipt-custom categories.  Profiles may encode the accounts that the
+    # user filled out even if the credential itself lacks a flag.
+    if not has_receipt_custom_categories and isinstance(active_cred, dict):
+        for p in active_cred.get("char_profiles", []):
+            if str(p.get("mode", "invoices")).lower() == "receipts":
+                mapping = p.get("mapping") or p.get("map") or {}
+                if any(str(v or "").strip() for v in mapping.values()):
+                    has_receipt_custom_categories = True
+                    break
     
     # Γ Category: Filter categories to only those with MTYPE codes
     g_category_data = None
@@ -7901,7 +7980,7 @@ def search():
         import re
         from urllib.parse import urlparse
         # existing invoice scrapers
-        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr
+        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
         # safe import of receipt scraper
         try:
             from scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
@@ -7981,6 +8060,12 @@ def search():
                             scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
                         if not scraped_afm:
                             scraped_afm = scraped_afm_vs
+                    elif "megasoft" in domain or "invoicelink" in domain:
+                        scraped_marks, scraped_afm_mg = scrape_megasoft(mark)
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_mg
                     else:
                         # fallback try receipt detector
                         if detect_and_scrape_receipt:
@@ -8896,23 +8981,62 @@ def api_char_profiles_get():
     mode = (request.args.get("mode") or request.args.get("flow") or "").strip().lower()
     if mode not in ("invoices", "receipts"):
         mode = "invoices"
+
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
+
     creds = _load_credentials()
     client = _find_client(creds, vat=vat) if vat else None
-    # Fallback: use session active credential if explicit lookup failed
+    # Fallback: resolve active credential robustly (vat OR name), then fallback
+    # to session snapshot only if full record cannot be found.
     if not client:
         try:
-            active = get_active_credential_from_session() or None
-            if active:
-                client = active
+            active = get_active_credential_from_session() or {}
         except Exception:
-            client = None
+            active = {}
+        active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
+        active_name = str((active or {}).get("name") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and active_name:
+            client = _find_client(creds, name=active_name)
+        if not client and isinstance(active, dict) and active:
+            client = active
+        if not client and (vat or active_name):
+            group_client, _, _ = _find_client_in_group_files(vat, active_name)
+            if group_client:
+                client = group_client
     client = client or {}
-    profiles = client.get("char_profiles", [])
-    # filter profiles by mode flag (default invoices)
+    raw_profiles = client.get("char_profiles", [])
+    normalized_profiles = []
+    for p in raw_profiles if isinstance(raw_profiles, list) else []:
+        if not isinstance(p, dict):
+            continue
+        p_mode = str(p.get("mode") or "").strip().lower()
+        mapping = p.get("mapping") if isinstance(p.get("mapping"), dict) else (p.get("map") if isinstance(p.get("map"), dict) else {})
+        prof = dict(p)
+        prof["mode"] = p_mode or "invoices"
+        prof["mapping"] = mapping
+        normalized_profiles.append(prof)
+
+    # filter profiles by mode flag.
+    # receipts also include legacy profiles with no explicit mode.
     if mode == "receipts":
-        profiles = [p for p in profiles if p.get("mode") == "receipts"]
+        profiles = [p for p in normalized_profiles if str(p.get("mode") or "").strip().lower() in ("receipts", "") or "mode" not in p]
     else:
-        profiles = [p for p in profiles if p.get("mode", "invoices") == "invoices"]
+        profiles = [p for p in normalized_profiles if str(p.get("mode") or "invoices").strip().lower() == "invoices"]
 
     expense_tags = _list_receipt_categories(client) if mode == "receipts" else _list_invoice_categories(client)
     receipt_expense_tags = _list_receipt_categories(client)
@@ -8943,12 +9067,15 @@ def api_char_profiles_save():
         mode = "invoices"
 
     # If vat not provided, try to use session active credential
+    active_name = ""
     if not vat:
         try:
             active = get_active_credential_from_session() or {}
             vat = (active.get("vat") or "").strip()
+            active_name = (active.get("name") or "").strip()
         except Exception:
             vat = ""
+            active_name = ""
 
     if not (
         name
@@ -8956,8 +9083,32 @@ def api_char_profiles_save():
     ):
         return jsonify(ok=False, error="Παράμετροι λείπουν"), 400
 
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
+
     creds = _load_credentials()
+    save_path = None
     client = _find_client(creds, vat=vat) if vat else None
+    if not client and active_name:
+        client = _find_client(creds, name=active_name)
+    if not client and (vat or active_name):
+        group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+        if group_client is not None and group_creds is not None and group_path is not None:
+            client = group_client
+            creds = group_creds
+            save_path = group_path
     # Fallback: if lookup by vat failed, use session active credential object
     if not client:
         try:
@@ -8989,19 +9140,33 @@ def api_char_profiles_save():
             ), 400
 
     arr = list(client.get("char_profiles", []))
-    # upsert by name+mode
+    # upsert by name+mode, but also migrate legacy same-name profiles without mode
     hit = None
     for p in arr:
-        if str(p.get("name","")).strip().lower() == name.lower() and p.get("mode","invoices") == mode:
+        if not isinstance(p, dict):
+            continue
+        p_name = str(p.get("name","")).strip().lower()
+        p_mode = str(p.get("mode") or "").strip().lower()
+        if p_name != name.lower():
+            continue
+        if p_mode == mode or (mode == "receipts" and p_mode == ""):
             hit = p
             break
     if hit:
         hit["mapping"] = mapping
+        hit.pop("map", None)
         hit["mode"] = mode
     else:
         arr.append({"name": name, "mapping": mapping, "mode": mode})
     client["char_profiles"] = arr
-    _save_credentials(creds)
+    if save_path is not None:
+        try:
+            with save_path.open('w', encoding='utf-8') as f:
+                json.dump(creds, f, ensure_ascii=False, indent=2)
+        except Exception:
+            _save_credentials(creds)
+    else:
+        _save_credentials(creds)
     return jsonify(ok=True, profile={"name": name, "mapping": mapping, "mode": mode})
 # ------- repeat entry mapping (πάντα ποσοστά) -------
 
@@ -9015,16 +9180,66 @@ def api_char_profiles_delete():
     mode = (data.get("mode") or "invoices").strip().lower()
     if mode not in ("invoices", "receipts"):
         mode = "invoices"
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
+
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat)
+    save_path = None
+    client = _find_client(creds, vat=vat) if vat else None
+    if not client:
+        try:
+            active = get_active_credential_from_session() or {}
+        except Exception:
+            active = {}
+        active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
+        active_name = str((active or {}).get("name") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and active_name:
+            client = _find_client(creds, name=active_name)
+        if not client and (vat or active_name):
+            group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+            if group_client is not None and group_creds is not None and group_path is not None:
+                client = group_client
+                creds = group_creds
+                save_path = group_path
     if not client:
         return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
     arr = list(client.get("char_profiles", []))
-    # remove only matching name+mode
-    arr = [p for p in arr if not (str(p.get("name","")).strip().lower() == name.lower()
-                                   and p.get("mode", "invoices") == mode)]
+    # remove matching name+mode; for receipts also remove legacy no-mode profile
+    def _keep_profile(p):
+        if not isinstance(p, dict):
+            return True
+        p_name = str(p.get("name","")).strip().lower()
+        p_mode = str(p.get("mode") or "").strip().lower()
+        if p_name != name.lower():
+            return True
+        if mode == "receipts":
+            return p_mode not in ("receipts", "")
+        return p_mode != "invoices"
+
+    arr = [p for p in arr if _keep_profile(p)]
     client["char_profiles"] = arr
-    _save_credentials(creds)
+    if save_path is not None:
+        try:
+            with save_path.open('w', encoding='utf-8') as f:
+                json.dump(creds, f, ensure_ascii=False, indent=2)
+        except Exception:
+            _save_credentials(creds)
+    else:
+        _save_credentials(creds)
     return jsonify(ok=True)
 
 @app.get("/profiles", endpoint="char_profiles_ui")
@@ -13547,6 +13762,6 @@ def admin_send_email():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5001"))
+    port = int(os.getenv("PORT", "5000"))
     debug_flag = True
     app.run(host="0.0.0.0", port=port, debug=debug_flag, use_reloader=True)

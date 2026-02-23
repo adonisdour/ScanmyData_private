@@ -89,6 +89,15 @@ def test_char_profiles_save_mode(monkeypatch):
     with app_module.app.test_client() as c2:
         with c2.session_transaction() as sess:
             sess['active_credential'] = cred2['name']
+        # the server should render the JS variable that indicates no custom
+        # receipt categories; after rendering the variable name itself is gone
+        # so check for the surrounding JS snippet and a false value.
+        resp = c2.get('/search')
+        assert resp.status_code == 200
+        body_str = resp.get_data(as_text=True)
+        assert 'let hasReceiptCustomCategories' in body_str
+        # should initialise to false when the flag is false
+        assert 'return !!false' in body_str
         resp = c2.get('/api/char_profiles?vat=999999999&mode=receipts')
         body = resp.get_json()
         assert "foo" in body['expense_tags'] and "bar" in body['expense_tags']
