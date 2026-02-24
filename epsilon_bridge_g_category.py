@@ -44,6 +44,7 @@ from epsilon_bridge_multiclient_strict import (
     _canon_category,
     _infer_vat_rate_for_line,
     _is_receipt,
+    _receipt_analysis_enabled,
     _parse_lines,
     _reason_for_rec_enhanced,
     _load_client_map,
@@ -53,6 +54,37 @@ from epsilon_bridge_multiclient_strict import (
     _read_active_fiscal_year,
     characts_from_lines,
 )
+
+
+def _merge_custom_accounts_g(settings: Dict[str, Any], credential: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge custom category accounts for Γ category using account_g_* keys."""
+    merged = dict(settings or {})
+    if not isinstance(credential, dict):
+        return merged
+    custom_cats = credential.get("custom_categories")
+    if not isinstance(custom_cats, list):
+        return merged
+    for item in custom_cats:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("enabled"):
+            continue
+        slug = str(item.get("id") or item.get("slug") or "").strip()
+        if not slug:
+            continue
+        accounts = item.get("accounts") or {}
+        if not isinstance(accounts, dict):
+            continue
+        for rate_key, code in accounts.items():
+            code_str = str(code).strip()
+            if not code_str:
+                continue
+            rate_norm = re.sub(r"[^0-9]", "", str(rate_key))
+            if not rate_norm:
+                continue
+            key = f"account_g_{slug}_fpa_kat_{rate_norm}%"
+            merged[key] = code_str
+    return merged
 
 
 # ============================================================================
@@ -307,7 +339,8 @@ def _account_detail_for_line_g(
     settings: Dict[str, Any],
     category: str,
     is_receipt: bool,
-    vat_rate: Optional[int]
+    vat_rate: Optional[int],
+    analysis_enabled: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Εύρεση λογαριασμού για γραμμή - Γ Κατηγορία.
@@ -318,8 +351,8 @@ def _account_detail_for_line_g(
     chosen = ""
     used_key = ""
 
-    # Forced rate για receipts/εγγυοδοσία
-    forced_rate = 0 if (is_receipt or canon == "εγγυοδοσια") else None
+    # Forced rate μόνο για receipts χωρίς ανάλυση ή για εγγυοδοσία
+    forced_rate = 0 if (canon == "εγγυοδοσια" or (is_receipt and not analysis_enabled)) else None
     target_rate = int(forced_rate) if forced_rate is not None else (int(vat_rate) if vat_rate is not None else None)
 
     if target_rate is None:
@@ -345,6 +378,7 @@ def _account_detail_for_line_g(
     dbg = {
         "category": canon,
         "vat_in": vat_rate,
+        "analysis_enabled": bool(analysis_enabled),
         "forced_zero": bool(forced_rate is not None),
         "used_key": used_key,
         "tried_keys": tried,
@@ -424,7 +458,7 @@ def build_preview_rows_for_ui_g(
 
     cred_list = credentials if isinstance(credentials, list) else [credentials]
     active = next((c for c in cred_list if str(c.get("vat")) == str(vat)), (cred_list[0] if cred_list else {}))
-    settings_all = _merge_custom_accounts(settings_all, active)
+    settings_all = _merge_custom_accounts_g(settings_all, active)
     
     apod_type = (active or {}).get("apodeixakia_type", "")
     apod_supplier_id = _safe_int((active or {}).get("apodeixakia_supplier", ""))
@@ -597,6 +631,8 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
         
+        analysis_enabled = _receipt_analysis_enabled(rec)
+
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
@@ -611,7 +647,7 @@ def build_preview_rows_for_ui_g(
                 continue
 
             # Λογαριασμός Γ Κατηγορίας (ΧΡΕΩΣΗ)
-            account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr)
+            account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr, analysis_enabled=analysis_enabled)
             if not account:
                 issues.append({
                     "code": "missing_account_g",

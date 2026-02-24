@@ -11,4 +11,4 @@ curl -v \
 
 τσεκαρισμα αποδειξεων με σειριακο ταμειακης
 reason size limit 128 (fix), χρωματα dark mode modal summary
-αναλυση αποδειξεων
+ελεγχος γραμμων εντος του modal summary αναλυσης αποδειξεων

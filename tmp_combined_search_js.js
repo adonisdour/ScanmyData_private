@@ -4351,9 +4351,9 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   const m = document.getElementById('summaryModal');
   if (!m) return;
 
-  // Αν είμαστε σε mode αποδείξεων ΚΑΙ είναι ενεργό το repeat, μην ανοίγεις modal
-  // ΕΞΑΙΡΕΣΗ: αν είναι reclassification (force_edit=1), τότε άνοιξέ το για να αλλάξουμε χαρακτηρισμούς.
-  const receiptsOn = !!(document.getElementById('useReceiptsSwitch') && document.getElementById('useReceiptsSwitch').checked);
+  // Historically the modal was suppressed when receipts mode + repeat were
+  // active.  Only perform that auto-flow when the summary actually represents a
+  // receipt; leave invoices unaffected.
   const repeatOn   = !!(document.getElementById('repeatEntrySwitch') && document.getElementById('repeatEntrySwitch').checked);
 
   // Επιπλέον έλεγχος: αν το summary είναι σαφώς Απόδειξη, αντιμετώπισέ το ως receipts flow
@@ -4369,7 +4369,7 @@ function applyMappingToSummaryAndSubmitUsingMapping(mapping){
   } catch(_){}
 
 
-  if ((receiptsOn || isReceiptSummary) && repeatOn && !FORCE_EDIT) {
+  if (isReceiptSummary && repeatOn && !FORCE_EDIT) {
     // auto-flow αποδείξεων όταν είναι ενεργό το "Επαναληψιμη εισαγωγή"
     try {
       let raw = (document.getElementById('summaryJsonInput')?.value || '').trim();
@@ -6222,10 +6222,10 @@ document.addEventListener('submit', function(ev){
   }
 
   function shouldOpenSummaryModal(obj){
-    const receiptsOn = !!(qs('useReceiptsSwitch') && qs('useReceiptsSwitch').checked);
     const repeatOn   = !!(qs('repeatEntrySwitch') && qs('repeatEntrySwitch').checked);
-    // Αν είμαστε σε αποδείξεις (ή το summary είναι απόδειξη) και repeat ON και ΔΕΝ είναι reclassification -> ΜΗΝ ανοίξεις modal
-    if ((receiptsOn || isReceiptSummary(obj)) && repeatOn && !forceEdit()) return false;
+    // skip modal only when this *looks* like a receipt and repeat is on (reclassification
+    // or manual searches bypass this)
+    if (isReceiptSummary(obj) && repeatOn && !forceEdit()) return false;
     return true;
   }
 

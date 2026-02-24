@@ -585,8 +585,10 @@ def _extract_vat_breakdown_from_html(soup, html_text=""):
         net_by_cat = {}
         vat_by_cat = {}
         cat_rate_map = {
-            "A": "24", "B": "13", "C": "6", "D": "17", "E": "0",
-            "Α": "24", "Β": "13", "Γ": "6", "Δ": "17", "Ε": "0",
+            # AADE receipt layout (Καθαρή αξία Α-Ε / ΦΠΑ Α-Δ):
+            # Α=6%, Β=13%, Γ=24%, Δ=36%, Ε=0%
+            "A": "6", "B": "13", "C": "24", "D": "36", "E": "0",
+            "Α": "6", "Β": "13", "Γ": "24", "Δ": "36", "Ε": "0",
         }
         greek_to_latin = {"Α": "A", "Β": "B", "Γ": "C", "Δ": "D", "Ε": "E"}
 
@@ -626,8 +628,9 @@ def _extract_vat_breakdown_from_html(soup, html_text=""):
                 if rate is not None:
                     inferred_used = True
             else:
-                # Category letters imply VAT class, not explicit percentage in page.
-                inferred_used = True
+                # Για το AADE table οι κατηγορίες Α-Ε είναι ρητή ανάλυση ΦΠΑ,
+                # άρα ΔΕΝ το μαρκάρουμε ως inferred.
+                pass
 
             if rate is not None:
                 gross_val = (net_val or 0.0) + (vat_val or 0.0)

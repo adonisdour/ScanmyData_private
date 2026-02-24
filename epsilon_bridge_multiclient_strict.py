@@ -4,7 +4,7 @@ epsilon_bridge_multiclient_strict.py (strict, robust client_db discovery)
 
 - Strict exact-rate account resolution:
     account_{category}_fpa_kat_{rate}%  (accept legacy account_{category}_{rate}% for SAME rate only)
-- Receipts & εγγυοδοσία -> forced 0%
+- Receipts χωρίς ανάλυση & εγγυοδοσία -> forced 0%
 - Reason rules:
     * Receipts: "Name_issuer (AFM_issuer)" when available. If only one exists, use that. Else "Απόδειξη AA".
     * Invoices: issuer name (or name from client_db by AFM) else "Τιμολόγιο AA" / provided reason.
@@ -253,6 +253,16 @@ def _is_receipt(rec: Dict[str, Any]) -> bool:
     keys = ("receipt","apodeix","apodeixi","apod","αποδειξ","αποδειξη","λιαν","λιανικη")
     return any(k in t for k in keys)
 
+
+def _receipt_analysis_enabled(rec: Dict[str, Any]) -> bool:
+    r = rec or {}
+    return bool(
+        r.get("receipt_analysis_enabled")
+        or r.get("receipts_analysis_enabled")
+        or r.get("receiptAnalysisEnabled")
+        or r.get("analysis_receipts")
+    )
+
 def _parse_lines(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
     lines = rec.get("lines") or rec.get("invoice_lines") or rec.get("details") or []
     out: List[Dict[str, Any]] = []
@@ -457,17 +467,31 @@ def resolve_paths_for_vat(
     return {"invoices": invoices_path, "client_db": client_db_path, "out": out_path}
 
 # ----------------------- per-line account resolution -----------------------
-def _account_detail_for_line(settings: Dict[str, Any], category: str, is_receipt: bool, vat_rate: Optional[int]) -> Tuple[str, Dict[str, Any]]:
+def _account_detail_for_line(
+    settings: Dict[str, Any],
+    category: str,
+    is_receipt: bool,
+    vat_rate: Optional[int],
+    analysis_enabled: bool = False,
+) -> Tuple[str, Dict[str, Any]]:
     canon = _canon_category(category)
     tried: List[str] = []
     chosen = ""
     used_key = ""
 
-    forced_rate = 0 if (is_receipt or canon == "εγγυοδοσια") else None
+    forced_rate = 0 if (canon == "εγγυοδοσια" or (is_receipt and not analysis_enabled)) else None
     target_rate = int(forced_rate) if forced_rate is not None else (int(vat_rate) if vat_rate is not None else None)
 
     if target_rate is None:
-        dbg = {"category": canon, "vat_in": vat_rate, "forced_zero": bool(forced_rate is not None), "used_key": "", "tried_keys": [], "chosen": ""}
+        dbg = {
+            "category": canon,
+            "vat_in": vat_rate,
+            "analysis_enabled": bool(analysis_enabled),
+            "forced_zero": bool(forced_rate is not None),
+            "used_key": "",
+            "tried_keys": [],
+            "chosen": "",
+        }
         return "", dbg
 
     setts = _settings_norm(settings)
@@ -482,6 +506,7 @@ def _account_detail_for_line(settings: Dict[str, Any], category: str, is_receipt
     dbg = {
         "category": canon,
         "vat_in": vat_rate,
+        "analysis_enabled": bool(analysis_enabled),
         "forced_zero": bool(forced_rate is not None),
         "used_key": used_key,
         "tried_keys": tried,
@@ -663,18 +688,21 @@ def build_preview_rows_for_ui(
         lines_out: List[Dict[str, Any]] = []
         lcodes_summary: List[str] = []
 
+        analysis_enabled = _receipt_analysis_enabled(rec)
+
         for ln in (_parse_lines(rec) or []):
             vr = ln.get("vat_rate")
             src = ln.get("vat_src")
             cat = ln.get("category") or rec.get("category") or ""
-            acc, dbg = _account_detail_for_line(settings_all, cat, is_receipt, vr)
+            acc, dbg = _account_detail_for_line(settings_all, cat, is_receipt, vr, analysis_enabled=analysis_enabled)
 
             if (not cat) and (not is_receipt):
                 issues.append({"code":"missing_category_line","modal":True,"message":f"AA={aa} — Γραμμή χωρίς κατηγορία. Συμπλήρωσε χαρακτηρισμό."})
             if (vr is None) and (not is_receipt or _canon_category(cat) != "αποδειξακια"):
                 issues.append({"code":"missing_vat_rate_line","modal":True,"message":f"AA={aa} — Δεν προέκυψε ποσοστό ΦΠΑ για γραμμή."})
             if not acc:
-                exp = f"account_{_canon_category(cat)}_fpa_kat_{(0 if (is_receipt or _canon_category(cat)=='εγγυοδοσια') else (vr if vr is not None else '?'))}%"
+                expected_rate = 0 if (_canon_category(cat) == 'εγγυοδοσια' or (is_receipt and not analysis_enabled)) else (vr if vr is not None else '?')
+                exp = f"account_{_canon_category(cat)}_fpa_kat_{expected_rate}%"
                 issues.append({"code":"unresolved_account_line","modal":True,"message":f"AA={aa} — Δεν βρέθηκε λογαριασμός για '{_canon_category(cat)}' ({vr}%). Ρύθμισε {exp} στα settings."})
 
             lcodes_summary.append(acc or "")
