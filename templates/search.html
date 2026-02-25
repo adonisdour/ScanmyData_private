@@ -2180,7 +2180,9 @@ if (typeof window !== 'undefined') {
   // analysis is active due to the user or the object, **and** repeat mode is
   // enabled (per request).
   const isRepeat = !!document.getElementById('repeatEntrySwitch')?.checked;
-  if (receiptsMode && isRepeat && isReceiptAnalysisOn() && !rcShouldSuppressModalSwitch()) {
+  const summaryModalEl = document.getElementById('summaryModal');
+  const summaryVisible = !!(summaryModalEl && window.getComputedStyle(summaryModalEl).display !== 'none');
+  if (receiptsMode && isRepeat && isReceiptAnalysisOn() && !summaryVisible && !rcShouldSuppressModalSwitch()) {
     // avoid showing the standard modal
     try { hideSummaryModal(); } catch(_) {}
     if (typeof openReceiptClassModal === 'function') {
@@ -2527,11 +2529,26 @@ if (typeof window !== 'undefined') {
 
   // read categories from server-provided global or from a safe default
   function getCategories(){
-    const receiptsAnalysis = isReceiptAnalysisActive();
+    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
     if (receiptsAnalysis) {
       if (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length) {
         return window.RECEIPT_CUSTOMER_CATEGORIES;
       }
+      try {
+        const serverReceipt = {{ (receipt_custom_categories or []) | tojson | safe }} || [];
+        const cleanedReceipt = [];
+        (Array.isArray(serverReceipt) ? serverReceipt : []).forEach(item => {
+          const key = String(item || '').trim();
+          if (!key) return;
+          if (!cleanedReceipt.includes(key)) cleanedReceipt.push(key);
+        });
+        if (!cleanedReceipt.includes('αποδειξακια')) cleanedReceipt.unshift('αποδειξακια');
+        if (cleanedReceipt.length > 1) {
+          window.RECEIPT_CUSTOMER_CATEGORIES = cleanedReceipt.slice();
+          window.__RC_RECEIPT_CATEGORIES_CACHE = cleanedReceipt.slice();
+          return cleanedReceipt;
+        }
+      } catch(_) {}
       return ['αποδειξακια'];
     }
     try {
@@ -2543,7 +2560,7 @@ if (typeof window !== 'undefined') {
 
   function normalizeCategoryListSafe(list){
     const out = [];
-    const receiptsAnalysis = isReceiptAnalysisActive();
+    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
     (list || []).forEach(item => {
       if(!item) return;
       const key = String(item).trim();
@@ -2586,18 +2603,22 @@ if (typeof window !== 'undefined') {
         : {};
       const allowed = constraints[key];
       const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(vatKey) : String(vatKey || '').trim();
-      if (!normVat) return false;
-      if (!Array.isArray(allowed) || !allowed.length) return false;
+      if (!normVat) return true;
+      if (!Array.isArray(allowed) || !allowed.length) return true;
       return allowed.includes(normVat);
     } catch(_) {
-      return false;
+      return true;
     }
   }
 
   function getCategoriesForVatInReceiptAnalysis(vatKey, baseCategories){
-    const receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
+    let receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
       ? window.RECEIPT_CUSTOMER_CATEGORIES.slice()
       : (Array.isArray(window.__RC_RECEIPT_CATEGORIES_CACHE) ? window.__RC_RECEIPT_CATEGORIES_CACHE.slice() : []);
+
+    if ((!receiptOnly || !receiptOnly.length) && Array.isArray(baseCategories) && baseCategories.length) {
+      receiptOnly = baseCategories.slice();
+    }
 
     if (!receiptOnly.includes('αποδειξακια')) receiptOnly.unshift('αποδειξακια');
 
@@ -2606,7 +2627,12 @@ if (typeof window !== 'undefined') {
 
   function ensureSummaryCategories(){
     const existing = getCategories();
-    if (Array.isArray(existing) && existing.length) {
+    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
+    const existingNormalized = normalizeCategoryListSafe(existing || []);
+    const existingOnlyReceiptPlaceholder = existingNormalized.length === 1
+      && String(existingNormalized[0] || '').trim().toLowerCase() === 'αποδειξακια';
+
+    if (Array.isArray(existing) && existing.length && !(receiptsAnalysis && existingOnlyReceiptPlaceholder)) {
       window.__SUMMARY_CATEGORIES_FETCHED = true;
       return Promise.resolve(existing);
     }
@@ -2619,10 +2645,20 @@ if (typeof window !== 'undefined') {
     })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
-        const receiptsAnalysis = isReceiptAnalysisActive();
-        const receiptTags = (j && Array.isArray(j.receipt_expense_tags))
-          ? j.receipt_expense_tags.slice()
-          : ((mode === 'receipts' && j && Array.isArray(j.expense_tags)) ? j.expense_tags.slice() : []);
+        const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
+        const serverReceiptFallback = (function(){
+          try { return {{ (receipt_custom_categories or []) | tojson | safe }} || []; }
+          catch(_){ return []; }
+        })();
+        const receiptTags = (function(){
+          try {
+            if (j && Array.isArray(j.receipt_expense_tags) && j.receipt_expense_tags.length) return j.receipt_expense_tags.slice();
+            if (mode === 'receipts' && j && Array.isArray(j.expense_tags) && j.expense_tags.length) return j.expense_tags.slice();
+            if (mode === 'receipts' && j && Array.isArray(j.options) && j.options.length) return j.options.slice();
+            if (Array.isArray(serverReceiptFallback) && serverReceiptFallback.length) return serverReceiptFallback.slice();
+          } catch(_) {}
+          return [];
+        })();
         const tags = (j && Array.isArray(j.expense_tags)) ? j.expense_tags.slice() : [];
 
         const normalizedReceipt = normalizeCategoryListSafe(receiptTags);
@@ -2795,7 +2831,8 @@ if (typeof window !== 'undefined') {
   function renderSummaryLines(){
     if(!container) return;
     const summary = normalizeSummary(getSummaryObj());
-    const receiptsAnalysis = isReceiptAnalysisActive();
+    const receiptsAnalysis = isReceiptAnalysisActive() || summary.receipt_analysis_enabled === true;
+    window.__RC_FORCE_RECEIPT_ANALYSIS = receiptsAnalysis;
     const isReceiptSummary = !!(summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || ''))));
     const hideLinesForReceiptsMixed = isReceiptsOn() && isReceiptSummary && !receiptsAnalysis;
     const headerEl = document.getElementById('summaryLinesHeader');
@@ -5411,7 +5448,12 @@ function prefillSummaryModal(){
         data.invoice_mtype = receiptMtypeSelect.value; // also set invoice_mtype for consistency
       }
 
-      if (isReceiptAnalysisOn()) {
+      const analysisUiActive = !!document.querySelector(
+        '#summaryLinesContainer .receipt-analysis-amount, '
+        + '#summaryLinesContainer .receipt-analysis-vat, '
+        + '#summaryLinesContainer .receipt-analysis-vat-category'
+      );
+      if (analysisUiActive || isReceiptAnalysisOn() || data.receipt_analysis_enabled === true) {
         data.receipt_analysis_enabled = true;
       }
 
