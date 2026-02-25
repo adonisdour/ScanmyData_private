@@ -533,14 +533,20 @@ function isReceiptAnalysisActive(){
   try {
     if (isReceiptAnalysisOn()) return true;
   } catch(_) { /* fall through */ }
+  // If chooser exists on page, treat it as authoritative.
+  // This prevents mixed mode from being misread as analysis just because
+  // a summary object is a receipt.
+  try {
+    const chooser = document.getElementById('useReceiptsSwitch');
+    if (chooser) return false;
+  } catch(_) { /* ignore */ }
   try {
     const summaryEl = document.getElementById('summaryJsonInput');
     if (summaryEl && summaryEl.value) {
       const obj = JSON.parse(summaryEl.value || '{}') || {};
       if (obj.receipt_analysis_enabled === true) return true;
-      if (obj.is_receipt === true) return true;
-      const t = (obj.type_name || obj.type || obj.category || '').toString().toLowerCase();
-      if (/αποδει|receipt|λιαν/.test(t)) return true;
+      if (obj.receipts_analysis_enabled === true) return true;
+      if (obj.receiptAnalysisEnabled === true) return true;
     }
   } catch(_) { /* ignore */ }
   return false;
@@ -2552,7 +2558,7 @@ if (typeof window !== 'undefined') {
     }
     if (window.__SUMMARY_CATEGORIES_PROMISE) return window.__SUMMARY_CATEGORIES_PROMISE;
     const vat = window._repeatModalVAT || "{{ vat or '' }}";
-    const mode = isReceiptAnalysisActive() ? 'receipts' : 'invoices';
+    const mode = isReceiptsOn() ? 'receipts' : 'invoices';
     const q = vat ? ('?vat=' + encodeURIComponent(vat) + '&mode=' + encodeURIComponent(mode)) : ('?mode=' + encodeURIComponent(mode));
     window.__SUMMARY_CATEGORIES_PROMISE = fetch('/api/char_profiles' + q, {
       credentials: 'same-origin'

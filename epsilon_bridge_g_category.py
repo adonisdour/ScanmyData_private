@@ -291,6 +291,19 @@ def _account_key_candidates_g(canon: str, rate: int) -> List[str]:
     ]
 
 
+def _fallback_category_candidates_g(canon: str, is_receipt: bool) -> List[str]:
+    """Fallback category order for resolving missing custom Γ accounts."""
+    raw = str(canon or "").strip().lower()
+    out: List[str] = []
+    if raw:
+        out.append(raw)
+    if "γενικες_δαπανες_με_φπα" not in out:
+        out.append("γενικες_δαπανες_με_φπα")
+    if is_receipt and "αποδειξακια" not in out:
+        out.append("αποδειξακια")
+    return out
+
+
 def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int, is_receipt: bool = False) -> str:
     """Βρίσκει λογαριασμό Γ Κατηγορίας"""
     setts = _settings_norm(settings)
@@ -367,6 +380,22 @@ def _account_detail_for_line_g(
             if account and _validate_g_account_format(account):
                 chosen = account
                 used_key = key
+                break
+
+    if not chosen:
+        for fallback_canon in _fallback_category_candidates_g(canon, is_receipt):
+            if fallback_canon == canon:
+                continue
+            for key in _account_key_candidates_g(fallback_canon, target_rate):
+                tried.append(key)
+                val = setts.get(key)
+                if val and isinstance(val, str):
+                    account = val.strip()
+                    if account and _validate_g_account_format(account):
+                        chosen = account
+                        used_key = f"{key} (fallback:{fallback_canon})"
+                        break
+            if chosen:
                 break
 
     if not chosen:
