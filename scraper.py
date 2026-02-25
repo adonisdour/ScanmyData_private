@@ -391,7 +391,7 @@ def scrape_wedoconnect(url, timeout=20, debug=False):
 
 
 # -------------------- MYDATAPI --------------------
-def scrape_mydatapi(url):
+def scrape_mydatapi(url, debug=False):
     """
     Επιστρέφει dict όπως προηγουμένως: MARK, Είδος Παραστατικού, ΑΦΜ Πελάτη
     Τα δεδομένα είναι σε JavaScript variables, όχι σε HTML inputs.
@@ -401,7 +401,8 @@ def scrape_mydatapi(url):
         r.encoding = 'utf-8'
         r.raise_for_status()
     except Exception as e:
-        print(f"[RequestError] {e}")
+        if debug:
+            print(f"[RequestError] {e}")
         return {}
 
     html = r.text
@@ -801,17 +802,51 @@ def scrape_einvoicing_gr(url):
     """
     sess = requests.Session()
     sess.headers.update(HEADERS)
+
+    def _try_mydatapi_extract(myd_url):
+        if not myd_url:
+            return None, None
+        try:
+            rr = sess.get(myd_url, timeout=15, allow_redirects=True)
+            rr.raise_for_status()
+            rr.encoding = rr.apparent_encoding or 'utf-8'
+            resolved = _extract_mydatapi_url_from_text(rr.url, rr.url) or _extract_mydatapi_url_from_text(rr.text, rr.url) or rr.url
+            data = scrape_mydatapi(resolved, debug=False)
+        except Exception:
+            return None, None
+
+        if not data:
+            return None, None
+        mark = (data.get("MARK") or "").strip()
+        afm = (data.get("ΑΦΜ Πελάτη") or "").strip()
+        afm = re.sub(r"\D", "", afm) if afm else None
+        mark_str = mark if mark and mark != "N/A" else None
+        if afm == "N/A":
+            afm = None
+        return mark_str, afm
+
+    def _looks_like_retail_receipt(text):
+        if not text:
+            return False
+        return bool(re.search(r"απόδειξ|αποδειξ|λιανικ|receipt", text, re.I))
     
-    # Πρώτα, φόρτωσε τη σελίδα για να ψάξεις το κουμπί
+    # Πρώτα, φόρτωσε τη σελίδα για να ψάξεις myDATA URL / κουμπί
     try:
         r_initial = sess.get(url, timeout=15)
         r_initial.raise_for_status()
-        r_initial.encoding = 'utf-8'
+        r_initial.encoding = r_initial.apparent_encoding or 'utf-8'
     except Exception as e:
         print(f"[RequestError] {e}")
         return None, None
     
     soup_initial = BeautifulSoup(r_initial.text, "html.parser")
+
+    # 0) Άμεση εξαγωγή embedded mydatapi URL από HTML/scripts
+    embedded_myd = _extract_mydatapi_url_from_text(r_initial.text, r_initial.url)
+    if embedded_myd:
+        mark_str, afm = _try_mydatapi_extract(embedded_myd)
+        if mark_str or afm:
+            return mark_str, afm
     
     # Ψάξε για κουμπί "Παραστατικό (ΑΑΔΕ)" που οδηγεί σε mydatapi
     mydatapi_button = soup_initial.find("span", class_=lambda c: c and "btn" in c, string=lambda s: s and "Παραστατικό" in s)
@@ -820,25 +855,17 @@ def scrape_einvoicing_gr(url):
         # Βρες το parent link που έχει το href
         parent_link = mydatapi_button.find_parent("a")
         if parent_link and parent_link.get("href"):
-            mydatapi_url = parent_link.get("href")
-            try:
-                # κάνε GET request στο mydatapi URL
-                r_mydata = sess.get(mydatapi_url, timeout=15)
-                r_mydata.raise_for_status()
-                r_mydata.encoding = 'utf-8'
-                
-                # Χρησιμοποίησε τη συνάρτηση scrape_mydatapi για να εξάγεις τα δεδομένα
-                data = scrape_mydatapi(mydatapi_url)
-                if data:
-                    mark = (data.get("MARK") or "").strip()
-                    afm = (data.get("ΑΦΜ Πελάτη") or "").strip()
-                    afm = re.sub(r"\D", "", afm) if afm else None
-                    mark_str = mark if mark and mark != "N/A" else None
-                    if mark_str or afm:
-                        return mark_str, afm
-            except Exception as e:
-                print(f"[RequestError mydatapi] {e}")
-                pass  # fallback στην κανονική λογική
+            mydatapi_url = urljoin(r_initial.url, parent_link.get("href"))
+            mark_str, afm = _try_mydatapi_extract(mydatapi_url)
+            if mark_str or afm:
+                return mark_str, afm
+
+    # 1.5) Headless fallback: πάτημα κουμπιού MyData για δυναμικές σελίδες
+    browser_myd = _resolve_mydatapi_via_browser(url, timeout=20, debug=False)
+    if browser_myd:
+        mark_str, afm = _try_mydatapi_extract(browser_myd)
+        if mark_str or afm:
+            return mark_str, afm
     
     # Fallback: χρησιμοποίησε την παλιά λογική (API endpoint ή HTML parsing)
     parsed = urlparse(url)
@@ -863,13 +890,45 @@ def scrape_einvoicing_gr(url):
     try:
         r = sess.get(api_url, timeout=15)
         r.raise_for_status()
-        r.encoding = 'utf-8'
+        r.encoding = r.apparent_encoding or 'utf-8'
     except Exception as e:
         print(f"[RequestError] {e}")
         return None, None
     
     html = r.text
     soup = BeautifulSoup(html, "html.parser")
+    page_text = soup.get_text("\n", strip=True)
+    is_retail_receipt = _looks_like_retail_receipt(page_text)
+
+    # 0.1) Δεύτερη ευκαιρία embedded mydatapi μέσα στο API payload
+    embedded_myd_api = _extract_mydatapi_url_from_text(html, r.url)
+    if embedded_myd_api:
+        mark_str, afm = _try_mydatapi_extract(embedded_myd_api)
+        if mark_str or afm:
+            return mark_str, afm
+
+    # 0.2) Αν το API payload είναι «άδειο» από labels, δοκίμασε rendered περιεχόμενο
+    if not re.search(r"ΑΦΜ|Α\.Φ\.Μ|ΣΤΟΙΧΕΙΑ\s*ΠΕΛΑΤ|M\.AR\.K|MARK|ΑΝΑΛΥΣΗ\s*ΦΠΑ|ΤΙΜΟΛ|ΑΠΟΔΕΙΞ", page_text, re.I):
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(api_url, wait_until="domcontentloaded", timeout=30000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
+                rendered_html = page.content()
+                browser.close()
+            if rendered_html:
+                soup = BeautifulSoup(rendered_html, "html.parser")
+                html = rendered_html
+                page_text = soup.get_text("\n", strip=True)
+                is_retail_receipt = _looks_like_retail_receipt(page_text)
+        except Exception:
+            pass
     
     # 1) MARK - Αναζήτηση στο HTML
     mark = None
@@ -910,8 +969,8 @@ def scrape_einvoicing_gr(url):
                             counterpart_vat = m.group(1)
                             break
     
-    # Pattern 2: Fallback - βρες όλα τα 9ψήφια και πάρε το πρώτο που ΔΕΝ είναι το ΑΦΜ εκδότη
-    if not counterpart_vat:
+    # Pattern 2: Fallback - μόνο για τιμολόγια (όχι λιανική απόδειξη)
+    if not counterpart_vat and not is_retail_receipt:
         all_vats = re.findall(r'\b([0-9]{9})\b', html)
         # Το πρώτο ΑΦΜ είναι συνήθως του εκδότη
         if len(all_vats) >= 2:
@@ -919,6 +978,10 @@ def scrape_einvoicing_gr(url):
             counterpart_vat = all_vats[1]
         elif all_vats:
             counterpart_vat = all_vats[0]
+
+    # Για λιανική απόδειξη το counterpart VAT πρέπει να είναι κενό
+    if is_retail_receipt:
+        counterpart_vat = None
     
     return mark, counterpart_vat
 
@@ -1336,7 +1399,7 @@ def main():
         if counterpart_vat:
             print("ΑΦΜ Πελάτη:", counterpart_vat)
         else:
-            print("Δεν βρέθηκε ΑΦΜ πελάτη.")
+            print("Δεν βρέθηκε ΑΦΜ πελάτη (πιθανή απόδειξη λιανικής).")
 
     if source == "VS.gr":
         if counterpart_vat:

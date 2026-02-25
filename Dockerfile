@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libxshmfence1 \
     libxtst6 \
+    xdg-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Πρώτα τα requirements για caching
