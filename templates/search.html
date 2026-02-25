@@ -2379,8 +2379,10 @@ if (typeof window !== 'undefined') {
       select.name = `category[${select.dataset.lineId}]`;
       const emptyOpt = document.createElement('option'); emptyOpt.value=''; emptyOpt.innerText='-- επίλεξε --';
       select.appendChild(emptyOpt);
-      (categories || []).forEach(c => {
-        if (!categoryAllowedForVat(c, ln.vatCategory)) return;
+      const categoriesForVat = receiptsAnalysis
+        ? getCategoriesForVatInReceiptAnalysis(ln.vatCategory || ln.vat || '', categories || [])
+        : (categories || []).filter(c => categoryAllowedForVat(c, ln.vatCategory || ln.vat || ''));
+      categoriesForVat.forEach(c => {
         const o = document.createElement('option'); o.value = c; o.textContent = labelForCategory(c);
 
         if(c === ln.category) o.selected = true;
@@ -2479,8 +2481,10 @@ if (typeof window !== 'undefined') {
     const btnwrap = document.createElement('div');
     btnwrap.id = 'renderedCategoryButtons';
     btnwrap.className = 'mt-2 flex flex-wrap gap-2';
-    (categories || []).forEach(c => {
-      if (!categoryAllowedForVat(c, line.vatCategory)) return;
+    const singleLineCats = isReceiptAnalysisActive()
+      ? getCategoriesForVatInReceiptAnalysis(line.vatCategory || line.vat || '', categories || [])
+      : (categories || []).filter(c => categoryAllowedForVat(c, line.vatCategory || line.vat || ''));
+    singleLineCats.forEach(c => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'category-btn px-3 py-2 border rounded hover:bg-sky-50';
@@ -2524,11 +2528,7 @@ if (typeof window !== 'undefined') {
       if (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length) {
         return window.RECEIPT_CUSTOMER_CATEGORIES;
       }
-      // Fallback: use any known labels (may include custom categories) and finally the global list
-      if (window.CATEGORY_LABELS && Object.keys(window.CATEGORY_LABELS).length) {
-        return Object.keys(window.CATEGORY_LABELS);
-      }
-      return window.CUSTOMER_CATEGORIES || [];
+      return ['αποδειξακια'];
     }
     try {
       const js = (function(){ try { return {{ customer_categories | tojson | safe }}; } catch(e){ return null; } })();
@@ -2550,6 +2550,56 @@ if (typeof window !== 'undefined') {
     return out;
   }
 
+  function getRepeatMappingCategoriesForVat(vatKey){
+    try {
+      const rawVat = String(vatKey || '').trim();
+      const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(rawVat) : rawVat;
+      if (!normVat) return [];
+      const root = document.getElementById('repeatMappingList');
+      if (!root) return [];
+      const selectEls = Array.from(root.querySelectorAll('select[data-vat]'));
+      const sel = selectEls.find(s => String(s.dataset.vat || '').trim() === normVat);
+      if (!sel) return [];
+
+      const out = [];
+      sel.querySelectorAll('option').forEach(opt => {
+        const v = String(opt.value || '').trim();
+        if (!v) return;
+        if (!out.includes(v)) out.push(v);
+      });
+      return out;
+    } catch(_) {
+      return [];
+    }
+  }
+
+  function receiptCategoryAllowedForVatStrict(cat, vatKey){
+    try {
+      const key = String(cat || '').trim();
+      if (!key) return false;
+      const constraints = (window && window.CATEGORY_VAT_CONSTRAINTS && typeof window.CATEGORY_VAT_CONSTRAINTS === 'object')
+        ? window.CATEGORY_VAT_CONSTRAINTS
+        : {};
+      const allowed = constraints[key];
+      const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(vatKey) : String(vatKey || '').trim();
+      if (!normVat) return false;
+      if (!Array.isArray(allowed) || !allowed.length) return false;
+      return allowed.includes(normVat);
+    } catch(_) {
+      return false;
+    }
+  }
+
+  function getCategoriesForVatInReceiptAnalysis(vatKey, baseCategories){
+    const receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
+      ? window.RECEIPT_CUSTOMER_CATEGORIES.slice()
+      : (Array.isArray(window.__RC_RECEIPT_CATEGORIES_CACHE) ? window.__RC_RECEIPT_CATEGORIES_CACHE.slice() : []);
+
+    if (!receiptOnly.includes('αποδειξακια')) receiptOnly.unshift('αποδειξακια');
+
+    return normalizeCategoryListSafe(receiptOnly).filter(c => receiptCategoryAllowedForVatStrict(c, vatKey));
+  }
+
   function ensureSummaryCategories(){
     const existing = getCategories();
     if (Array.isArray(existing) && existing.length) {
@@ -2558,36 +2608,39 @@ if (typeof window !== 'undefined') {
     }
     if (window.__SUMMARY_CATEGORIES_PROMISE) return window.__SUMMARY_CATEGORIES_PROMISE;
     const vat = window._repeatModalVAT || "{{ vat or '' }}";
-    const mode = isReceiptsOn() ? 'receipts' : 'invoices';
+    const mode = (isReceiptAnalysisActive() || isReceiptsOn()) ? 'receipts' : 'invoices';
     const q = vat ? ('?vat=' + encodeURIComponent(vat) + '&mode=' + encodeURIComponent(mode)) : ('?mode=' + encodeURIComponent(mode));
     window.__SUMMARY_CATEGORIES_PROMISE = fetch('/api/char_profiles' + q, {
       credentials: 'same-origin'
     })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
+        const receiptsAnalysis = isReceiptAnalysisActive();
+        const receiptTags = (j && Array.isArray(j.receipt_expense_tags))
+          ? j.receipt_expense_tags.slice()
+          : ((mode === 'receipts' && j && Array.isArray(j.expense_tags)) ? j.expense_tags.slice() : []);
         const tags = (j && Array.isArray(j.expense_tags)) ? j.expense_tags.slice() : [];
-        // merge any category labels keys (often where custom categories live)
-        const labelsKeys = (j && j.category_labels && typeof j.category_labels === 'object') ? Object.keys(j.category_labels) : [];
-        labelsKeys.forEach(k => { if (k && !tags.includes(k)) tags.push(k); });
 
-        if (tags.length) {
+        const normalizedReceipt = normalizeCategoryListSafe(receiptTags);
+        if (!normalizedReceipt.includes('αποδειξακια')) normalizedReceipt.unshift('αποδειξακια');
+        window.RECEIPT_CUSTOMER_CATEGORIES = normalizedReceipt;
+        window.__RC_RECEIPT_CATEGORIES_CACHE = normalizedReceipt.slice();
+
+        if (!receiptsAnalysis && tags.length) {
           const normalized = normalizeCategoryListSafe(tags);
-          if (isReceiptAnalysisActive()) {
-            window.RECEIPT_CUSTOMER_CATEGORIES = normalized.slice();
-          } else {
-            CUSTOMER_CATEGORIES = normalized;
-            window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-          }
-        } else if (isReceiptAnalysisActive()) {
-          // fallback: use any known labels or at least αποδειξακια
-          const labelKeys = (j && j.category_labels) ? Object.keys(j.category_labels || {}) : [];
-          const fallback = labelKeys.length ? normalizeCategoryListSafe(labelKeys) : ['αποδειξακια'];
-          window.RECEIPT_CUSTOMER_CATEGORIES = fallback;
+          CUSTOMER_CATEGORIES = normalized;
+          window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
         }
 
         if (j && j.category_labels) {
           window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
           Object.assign(window.CATEGORY_LABELS, j.category_labels);
+        }
+        if (j && j.vat_constraints && typeof j.vat_constraints === 'object') {
+          try {
+            if (typeof setCategoryConstraints === 'function') setCategoryConstraints(j.vat_constraints);
+            window.CATEGORY_VAT_CONSTRAINTS = j.vat_constraints;
+          } catch(_) {}
         }
         window.__SUMMARY_CATEGORIES_FETCHED = true;
         return getCategories();
@@ -2780,7 +2833,13 @@ if (typeof window !== 'undefined') {
     // clear container
     container.innerHTML = '';
 
-    if ((!categories || !categories.length) && !window.__SUMMARY_CATEGORIES_FETCHED) {
+    const hasOnlyReceiptPlaceholder = Array.isArray(categories)
+      && categories.length === 1
+      && String(categories[0] || '').trim().toLowerCase() === 'αποδειξακια';
+    const mustAwaitCategoryFetch = !window.__SUMMARY_CATEGORIES_FETCHED
+      && ((!categories || !categories.length) || (receiptsAnalysis && hasOnlyReceiptPlaceholder));
+
+    if (mustAwaitCategoryFetch) {
       const loading = document.createElement('div');
       loading.className = 'mt-2 text-sm text-gray-600';
       loading.innerText = 'Φόρτωση κατηγοριών...';
@@ -2948,6 +3007,26 @@ if (typeof window !== 'undefined') {
       sel.addEventListener('change', function(){
         try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
         const lineId = this.dataset.lineId || '';
+        try {
+          const catSel = document.querySelector('select.expense-category[data-line-id="' + lineId + '"]');
+          if (catSel) {
+            const previous = catSel.value || '';
+            const allowedCategories = getCategoriesForVatInReceiptAnalysis(this.value || '', getCategories() || []);
+            catSel.innerHTML = '';
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.innerText = '-- επίλεξε --';
+            catSel.appendChild(empty);
+            allowedCategories.forEach(c => {
+              const opt = document.createElement('option');
+              opt.value = c;
+              opt.textContent = (typeof labelForCategory === 'function' ? labelForCategory(c) : c);
+              if (previous && previous === c) opt.selected = true;
+              catSel.appendChild(opt);
+            });
+            if (previous && !allowedCategories.includes(previous)) catSel.value = '';
+          }
+        } catch(_) {}
         autoFillVatForLine(lineId);
         updateSummaryFromDom();
       });
@@ -3191,9 +3270,10 @@ if (typeof window !== 'undefined') {
       sel.className = 'expense-category p-1 border rounded w-full';
       sel.dataset.lineId = lid;
       const opt0 = document.createElement('option'); opt0.value = ''; opt0.innerText = '-- επίλεξε --'; sel.appendChild(opt0);
-      // ΝΕΟ
-      (window.CUSTOMER_CATEGORIES || []).forEach(c => {
-        if (!categoryAllowedForVat(c, vat_cat)) return;
+      const fallbackCategories = (typeof getCategoriesForVatInReceiptAnalysis === 'function')
+        ? getCategoriesForVatInReceiptAnalysis(vat_cat, window.CUSTOMER_CATEGORIES || [])
+        : (window.CUSTOMER_CATEGORIES || []).filter(c => categoryAllowedForVat(c, vat_cat));
+      fallbackCategories.forEach(c => {
         const o = document.createElement('option'); o.value = c;
         o.textContent = (typeof labelForCategory === 'function' ? labelForCategory(c) : c);
         if ((ln.category || '') === c) o.selected = true;
@@ -3250,7 +3330,11 @@ if (typeof window !== 'undefined') {
   btnRow.id = 'categoryButtons';
   btnRow.className = 'mt-2 flex flex-wrap gap-2';
 
-  (window.CUSTOMER_CATEGORIES || []).forEach(c => {
+  const singleLineFallbackCats = (typeof getCategoriesForVatInReceiptAnalysis === 'function')
+    ? getCategoriesForVatInReceiptAnalysis(vat_cat, getCategories())
+    : (window.CUSTOMER_CATEGORIES || []).filter(c => categoryAllowedForVat(c, vat_cat));
+
+  singleLineFallbackCats.forEach(c => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'category-btn px-3 py-2 border rounded hover:bg-sky-50';
@@ -9288,6 +9372,14 @@ document.addEventListener('submit', function(ev){
       const j = await res.json().catch(() => null);
       const tags = (j && Array.isArray(j.receipt_expense_tags) ? j.receipt_expense_tags
                   : (j && Array.isArray(j.expense_tags) ? j.expense_tags : []));
+      try {
+        const normalized = (Array.isArray(tags) ? tags : [])
+          .map(t => String(t || '').trim())
+          .filter(Boolean);
+        if (!normalized.includes('αποδειξακια')) normalized.unshift('αποδειξακια');
+        window.RECEIPT_CUSTOMER_CATEGORIES = normalized.slice();
+        window.__RC_RECEIPT_CATEGORIES_CACHE = normalized.slice();
+      } catch(_) {}
       const newVal = tags.some(t => String(t || '').trim().toLowerCase() !== 'αποδειξακια');
       console.log('refreshReceiptCustomAvailability: api tags', tags, 'newVal', newVal);
       // keep true if server already said true
@@ -9760,7 +9852,9 @@ function openReceiptClassModal(summaryObj){
             const j = await r.json();
             const profs = Array.isArray(j.profiles)? j.profiles : [];
             receiptConstraints = (j && j.vat_constraints && typeof j.vat_constraints === 'object') ? j.vat_constraints : {};
-            receiptCategories = Array.isArray(j.expense_tags) ? j.expense_tags.slice() : [];
+            receiptCategories = Array.isArray(j.receipt_expense_tags)
+              ? j.receipt_expense_tags.slice()
+              : (Array.isArray(j.expense_tags) ? j.expense_tags.slice() : []);
             const defMap = (summaryObj && summaryObj.mapping)? normalizeMapping(summaryObj.mapping):{};
             if(selProf){
                 selProf.innerHTML='';
