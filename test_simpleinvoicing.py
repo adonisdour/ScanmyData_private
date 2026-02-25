@@ -33,6 +33,8 @@ def test_simpleinvoicing_receipt_classification():
     # ensure we still capture reasonable numeric fields
     assert res.get("total_amount") == "36,50"
     assert res.get("vat_analysis", {}).get("13")
+    # the example document belongs to series ΑΛΠ (receipt of services)
+    assert res.get("series") == "ΑΛΠ"
 
 
 def test_simpleinvoicing_invoice_keyword_boundary():
@@ -47,6 +49,33 @@ def test_simpleinvoicing_invoice_keyword_boundary():
     page = "SimpleinvoiceproviderClient ΑΛΠ Σειρά: ΑΛΠ"
     assert not re.search(r"\b(?:τιμολό?γιο|τιμολογιο|invoice)\b", page, re.I)
     assert re.search(r"\bαλπ\b", page, re.I)
+
+
+def test_series_and_customer_heuristics():
+    """Verify that series codes and customer clues influence classification."""
+    from scraper_receipt_analysis import _refine_doc_type
+
+    # simulate an output dict for series ΑΛΠ (receipt)
+    o = {"is_invoice": True, "series": "ΑΛΠ", "doc_type": None}
+    _refine_doc_type(o, "Σειρά: ΑΛΠ")
+    assert o["is_invoice"] is False
+    assert o["doc_type"] == "Απόδειξη παροχής υπηρεσιών"
+
+    # series ΤΔΠ (invoice/delivery note) should force invoice
+    o = {"is_invoice": False, "series": "ΤΔΠ", "doc_type": None}
+    _refine_doc_type(o, "")
+    assert o["is_invoice"] is True
+    assert o["doc_type"] == "Τιμολόγιο/Δελτίο αποστολής"
+
+    # customer retail phrase -> receipt regardless of prior state
+    o = {"is_invoice": True, "series": None, "doc_type": "whatever"}
+    _refine_doc_type(o, "πελάτης λιανικής")
+    assert o["is_invoice"] is False
+
+    # vat with nine 9s triggers receipt
+    o = {"is_invoice": True, "series": None}
+    _refine_doc_type(o, "ΑΦΜ: 999999999")
+    assert o["is_invoice"] is False
 
 
 if __name__ == "__main__":

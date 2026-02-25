@@ -2854,7 +2854,7 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "SimpleInvoicing",
+        "is_invoice": False, "MARK": None, "series": None, "source": "SimpleInvoicing",
         "vat_analysis": None, "vat_analysis_inferred": False
     }
 
@@ -2875,6 +2875,15 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
 
     def _apply_common_parse(target, html_text, soup_obj):
         page_text = soup_obj.get_text(" ", strip=True)
+
+        # capture 'Σειρά' code which often hints at type (ΑΛΠ, ΤΔΠ, ΤΠΥ, ΤΠΠ, ΠΤ, κτλ.)
+        if not target.get("series"):
+            m_series = re.search(r"Σειρά\s*[:\-]?\s*([Α-ΩA-Z0-9]+)", page_text, re.I)
+            if m_series:
+                target["series"] = m_series.group(1).strip()
+
+        # apply keyword-based refinements/heuristics
+        _refine_doc_type(target, page_text)
 
         def _extract_amount_by_label(text, label_pattern):
             if not text:
@@ -3230,6 +3239,8 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
     _fix_vat_analysis_consistency(out)
 
     summary_text = f"{html}\n{rendered_html or ''}"
+    # final keyword/series based adjustment using the accumulated text
+    _refine_doc_type(out, summary_text)
     if re.search(r"ΑΝΑΛΥΣΗ\s*ΦΠΑ", summary_text, re.I) and re.search(r"Τελικ[ήη]\s*Αξ[ίι]α", summary_text, re.I):
         va = out.get("vat_analysis")
         if isinstance(va, dict) and len([k for k in va.keys() if k != "__inferred__"]) >= 1:
@@ -3250,6 +3261,70 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
 
     _ensure_vat_analysis(out)
     return out
+
+# ---------- classification helpers ----------
+
+def _refine_doc_type(target, page_text):
+    """Apply additional heuristics based on keywords, series codes and
+    customer clues.
+
+    This function is called repeatedly during parsing so it should be
+    idempotent (not undo earlier conclusions).  It is used by the
+    SimpleInvoicing scraper today but is written generically so other
+    scrapers can call it in future.
+
+    * `page_text`* is a flat text blob from the page (original or
+      rendered).  `target` references the output dict being built.
+    """
+
+    # page_text may be None or empty; continue anyway since series
+    # information can still drive classification
+    text = page_text or ""
+
+    # customer hints: if the text mentions "πελάτης λιανικής" or the
+    # only VAT-like number is 999999999 / 000000000 treat as receipt
+    if re.search(r"πελάτ[ηi]ς?\s+λιανικ[ήη]ς", text, re.I) or re.search(r"\b(?:9{9}|0{9})\b", text):
+        target["is_invoice"] = False
+        # we still keep doc_type/series for later reference
+
+    # map common series codes to human-readable hints
+    series = target.get("series")
+    if series:
+        canon = series.upper()
+        mapping = {
+            "ΑΛΠ": "Απόδειξη παροχής υπηρεσιών",
+            "ΤΔΠ": "Τιμολόγιο/Δελτίο αποστολής",
+            "ΤΠΥ": "Τιμολόγιο παροχής υπηρεσιών",
+            "ΤΠΠ": "Τιμολόγιο πωλήσεων",
+            "ΠΤ": "Πιστωτικό τιμολόγιο",
+        }
+        if canon in mapping and not target.get("doc_type"):
+            target["doc_type"] = mapping[canon]
+        # series starting with 'Α' often indicate receipt
+        if canon.startswith("Α"):
+            target["is_invoice"] = False
+        elif canon.startswith("Τ") or canon.startswith("Π"):
+            target["is_invoice"] = True
+
+    # look for explicit document keywords after series logic so we can
+    # override the simple series->invoice mapping
+    # receipt keywords (beyond the generic "απόδειξη" we already use)
+    receipt_terms = [r"απόδειξη παροχής υπηρεσιών", r"αλπ"]
+    invoice_terms = [
+        r"τιμολόγιο\s*δελτίο\s*αποστολής",
+        r"τιμολόγιο\s*παροχής\s*υπηρεσιών",
+        r"τιμολόγιο\s*πωλήσεων",
+        r"πιστωτικό\s*τιμολόγιο",
+    ]
+    for pat in receipt_terms:
+        if re.search(pat, text, re.I):
+            target["is_invoice"] = False
+            break
+    else:
+        for pat in invoice_terms:
+            if re.search(pat, text, re.I):
+                target["is_invoice"] = True
+                break
 
 # ---------- entry point demonstration ----------
 def detect_and_scrape(url, timeout=20, debug=False):

@@ -9,6 +9,13 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
+# try to reuse classification helper defined in analysis variant
+try:
+    from scraper_receipt_analysis import _refine_doc_type
+except ImportError:
+    def _refine_doc_type(target, page_text):
+        return
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -2040,6 +2047,9 @@ def scrape_eskap(url, timeout=20, debug=False):
         secondary_soup = BeautifulSoup(secondary_html, "html.parser")
         _parse_html(out, secondary_html, secondary_soup)
 
+    # run keyword/series heuristics using accumulated text
+    _refine_doc_type(out, html + (secondary_html or ""))
+
     return out
 
 
@@ -2052,7 +2062,7 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
         "progressive_aa": None, "doc_type": None, "total_amount": None,
-        "is_invoice": False, "MARK": None, "source": "SimpleInvoicing"
+        "is_invoice": False, "MARK": None, "series": None, "source": "SimpleInvoicing"
     }
 
     sess = requests.Session()
@@ -2091,6 +2101,13 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
 
     def _parse_html(target, html_text, soup_obj):
         page_text = soup_obj.get_text(" ", strip=True)
+
+        # extract series code
+        if not target.get("series"):
+            m_series = re.search(r"Σειρά\s*[:\-]?\s*([Α-ΩA-Z0-9]+)", page_text, re.I)
+            if m_series:
+                target["series"] = m_series.group(1).strip()
+        _refine_doc_type(target, page_text)
 
         def _extract_amount_by_label(text, label_pattern):
             if not text:
