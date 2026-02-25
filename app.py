@@ -7953,6 +7953,7 @@ def search():
     css_numcols = ""
     modal_warning = None
     fiscal_mismatch_block = False
+    scrape_url_is_receipt = False
 
     # active year for template (used by receipts fiscal check)
     try:
@@ -8301,10 +8302,29 @@ def search():
                         if not scraped_afm:
                             scraped_afm = scraped_afm_peg
                     elif "e-invoicing.gr" in domain:
-                        mark_val, scraped_afm_eg = scrape_einvoicing_gr(mark)
+                        eg_res = scrape_einvoicing_gr(mark, return_meta=True)
+                        eg_meta = {}
+                        if isinstance(eg_res, (tuple, list)) and len(eg_res) >= 3 and isinstance(eg_res[2], dict):
+                            mark_val, scraped_afm_eg, eg_meta = eg_res[0], eg_res[1], eg_res[2]
+                        elif isinstance(eg_res, (tuple, list)) and len(eg_res) >= 2:
+                            mark_val, scraped_afm_eg = eg_res[0], eg_res[1]
+                        else:
+                            mark_val, scraped_afm_eg = None, None
+
+                        scrape_url_is_receipt = bool((eg_meta or {}).get("is_receipt"))
                         scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                         if not scraped_afm:
                             scraped_afm = scraped_afm_eg
+
+                        # Invoice flow guard: e-invoicing URL αντιστοιχεί σε απόδειξη λιανικής
+                        if scrape_url_is_receipt and not expect_receipt:
+                            modal_warning = (
+                                "Το URL αντιστοιχεί σε Απόδειξη Λιανικής, όχι σε Τιμολόγιο. "
+                                "Η εισαγωγή στο flow Τιμολογίων μπλοκάρεται — άλλαξε σε «Αποδείξεις»."
+                            )
+                            flash("Εντοπίστηκε απόδειξη λιανικής. Χρησιμοποίησε flow «Αποδείξεις».", "warning")
+                            scraped_afm = None
+                            scraped_marks = []
                     elif "vs.gr" in domain:
                         scraped_marks, scraped_afm_vs = scrape_vsgr(mark)
                         # Cleanup: ensure marks are valid 15-digit strings
@@ -8972,6 +8992,7 @@ def search():
         file_exists=file_exists,
         css_numcols=css_numcols,
         modal_warning=modal_warning,
+        scrape_url_is_receipt=scrape_url_is_receipt,
         fiscal_mismatch_block=fiscal_mismatch_block,
         repeat_entry_conf=repeat_entry_conf,
         active_year=active_year_val,
