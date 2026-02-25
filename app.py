@@ -852,11 +852,25 @@ app.config["UPLOAD_FOLDER"] = UPLOADS_DIR
 
 # --- Initialize Logger ---
 logger = logging.getLogger(__name__)
+# configure both module-specific logger and the root logger so that
+# unrelated modules (admin_panel, firebase_config, etc.) propagate to the
+# same file.  previously only the logger for this module was wired,
+# which is why admin_panel messages were never written.
 logger.setLevel(logging.INFO)
+
 # Create a rotating file handler
 handler = RotatingFileHandler('firebed.log', maxBytes=10485760, backupCount=10)
 handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# attach to this module's logger
 logger.addHandler(handler)
+
+# also attach to root logger so all loggers propagate by default
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# avoid adding duplicate handlers if this code executed more than once
+if handler not in root_logger.handlers:
+    root_logger.addHandler(handler)
 # --- end logger init ---
 
 # --- Initialize DB and authentication ---
@@ -13876,19 +13890,60 @@ def admin_backup_download(backup_name):
         return redirect(url_for('admin_backups'))
 
 
-@app.route("/admin/backups/restore/<backup_name>", methods=['POST'])
+@app.route("/admin/backups/restore/<path:backup_name>", methods=['POST'])
 @login_required
 @_require_admin
 def admin_backup_restore(backup_name):
+    # the legacy endpoint accepted bare filenames; we now also allow full
+    # paths with leading slash (e.g. "/backups/tony/…") coming from the
+    # remote-backup list.  strip any leading slash to avoid routing issues.
+    backup_name = backup_name.lstrip('/')
     """Restore group from backup (supports AJAX)"""
-    group_id = request.form.get('group_id', type=int) or request.json.get('group_id', type=int) if request.is_json else None
+
+    # parse group_id from either form-encoded or JSON payload; the
+    # earlier implementation used ``request.json.get(..., type=int)`` which
+    # failed because ``request.json`` returns a plain dict.
+    group_id = None
+    if request.is_json:
+        try:
+            payload = request.get_json(force=True, silent=True) or {}
+        except Exception:
+            payload = {}
+        group_id = payload.get('group_id')
+    else:
+        group_id = request.form.get('group_id', type=int)
+
+    try:
+        if group_id is not None:
+            group_id = int(group_id)
+    except Exception:
+        group_id = None
+
+    # if this looks like a remote backup and we still lack a group,
+    # attempt to guess from the path (second segment is usually folder name)
+    if not group_id:
+        if backup_name.startswith('backups/') or '/backups/' in backup_name:
+            parts = backup_name.strip('/').split('/')
+            if len(parts) >= 2:
+                candidate = parts[1]
+                from models import Group
+                grp = Group.query.filter_by(data_folder=candidate).first()
+                if grp:
+                    group_id = grp.id
+    # fallback: pick first group if available
+    if not group_id:
+        from models import Group
+        first = Group.query.first()
+        if first:
+            group_id = first.id
+
     if not group_id:
         result = {'ok': False, 'error': 'Group ID required'}
         if request.is_json or request.headers.get('Accept') == 'application/json':
             return jsonify(result)
         flash('Group ID required', 'danger')
         return redirect(url_for('admin_backups'))
-    
+
     result = admin_panel.admin_restore_backup(backup_name, group_id, current_user)
     if request.is_json or request.headers.get('Accept') == 'application/json':
         return jsonify(result)
@@ -13896,7 +13951,7 @@ def admin_backup_restore(backup_name):
         flash(result['message'], 'success')
     else:
         flash(result['error'], 'danger')
-    
+
     return redirect(url_for('admin_backups'))
 
 

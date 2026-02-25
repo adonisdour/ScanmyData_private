@@ -7,8 +7,18 @@
 async function restoreLocalBackupAjax(backupName) {
     const groupId = document.getElementById(`groupSelect_${backupName}`).value;
     if (!groupId) {
-        try{ await showModalAlert('Ενημέρωση', 'Please select a group'); }catch(_){ }
-        return;
+        // if user forgot to pick, try defaulting to first available group
+        const sel = document.getElementById(`groupSelect_${backupName}`);
+        if (sel && sel.options.length > 1) {
+            groupId = sel.options[1].value; // first non-placeholder
+            if (groupId) {
+                sel.value = groupId;
+            }
+        }
+        if (!groupId) {
+            try{ await showModalAlert('Ενημέρωση', 'Please select a group'); }catch(_){ }
+            return;
+        }
     }
     
     try{
@@ -19,7 +29,9 @@ async function restoreLocalBackupAjax(backupName) {
     try{
       const formData = new FormData();
       formData.append('group_id', groupId);
-      const resp = await fetch(`/admin/backups/restore/${encodeURIComponent(backupName)}`, { method: 'POST', body: formData });
+      // strip leading slash if present (remote backups come prefixed with '/backups/...')
+      let name = backupName.replace(/^\/+/, '');
+      const resp = await fetch(`/admin/backups/restore/${encodeURIComponent(name)}`, { method: 'POST', credentials: 'same-origin', body: formData });
       const data = await resp.json().catch(()=>({}));
       if (data.ok || data.success) {
           try{ await showModalAlert('Επιτυχία', 'Restore successful'); }catch(_){ }
@@ -139,7 +151,15 @@ async function doRemoteRestore() {
     };
 
     try{
-      const resp = await fetch('/admin/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const resp = await fetch('/admin/api/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!resp.ok) {
+          let errMsg = `HTTP ${resp.status}`;
+          try {
+              const errData = await resp.json();
+              errMsg = errData.error || JSON.stringify(errData);
+          } catch (_) {}
+          throw new Error(errMsg);
+      }
       const data = await resp.json().catch(()=>({}));
       if (data.success) {
           try{ await showModalAlert('Επιτυχία', `Restore successful. Restored groups: ${(data.restored || []).join(', ')}`); }catch(_){ }

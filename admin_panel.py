@@ -419,7 +419,10 @@ def admin_backup_group(group_id: int, active_client_name: str = None, auto: bool
         if not group:
             return None
         
-        # Attempt lazy-pull if data missing locally
+        # Ensure group data exists locally.  ``ensure_group_data_local``
+        # may spawn a background thread; if we return immediately the
+        # directory could still be empty when we copy it, so we attempt a
+        # synchronous pull if the folder is too small.
         try:
             firebase_config.ensure_group_data_local(group.data_folder)
         except Exception as e:
@@ -429,6 +432,13 @@ def admin_backup_group(group_id: int, active_client_name: str = None, auto: bool
         if not os.path.exists(data_path):
             logger.warning(f"Group data folder not found after lazy-pull attempt: {data_path}")
             return None
+        # if folder only contains few files, try to pull synchronously as well
+        try:
+            if len(list(os.scandir(data_path))) < 3:
+                logger.info("Performing synchronous pull for group %s before backup", group.name)
+                firebase_config.firebase_pull_group_to_local(group.data_folder, os.path.join(os.getcwd(), 'data'))
+        except Exception as e:
+            logger.debug("Synchronous pull attempt failed: %s", e)
         
         # Create backups folder
         backups_dir = os.path.join(os.getcwd(), 'data', '_backups')
@@ -469,10 +479,18 @@ def admin_list_backups(group_id: Optional[int] = None) -> List[Dict[str, Any]]:
                 size = _get_folder_size(item_path)
                 stat = os.stat(item_path)
                 
+                # format size: round to two decimals, but never show 0 for non-empty
+                size_mb = size / (1024 * 1024)
+                if size_mb < 0.01 and size > 0:
+                    size_human = '<0.01'
+                else:
+                    size_human = f"{round(size_mb,2)}"
+
                 backups.append({
                     'name': item,
                     'path': item_path,
-                    'size_mb': round(size / (1024 * 1024), 2),
+                    'size_mb': size_mb,
+                    'size_human': size_human,
                     'created_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
         
@@ -545,7 +563,11 @@ def admin_delete_remote_backup(backup_path: str, current_admin: User) -> Dict[st
 
         ok = firebase_config.firebase_delete_data(backup_path)
         if ok:
-            firebase_log_activity(current_admin.id, 'admin', 'backup_deleted', {'backup_path': backup_path})
+            # include human-readable message so activity log isn't vague
+            firebase_log_activity(current_admin.id, '__admin__', 'backup_deleted', {
+                'backup_path': backup_path,
+                'message': f'Διαγραφή backup {backup_path}'
+            })
             return {'ok': True, 'message': f'Deleted backup {backup_path}'}
         return {'ok': False, 'error': 'Failed to delete backup in Firebase'}
     except Exception as e:
@@ -569,25 +591,23 @@ def admin_restore_remote_backup(backup_path: str, target_group_id: int, groups_t
         if not data:
             return {'ok': False, 'error': 'Backup not found or empty'}
 
-        # If groups_to_restore not provided, infer from target_group_id
+        # If groups_to_restore not provided, infer from either target_group_id or backup_path
         restore_groups = []
         if groups_to_restore:
             restore_groups = groups_to_restore
         else:
-            group = Group.query.get(target_group_id)
-            if not group:
-                return {'ok': False, 'error': 'Target group not found and no groups_to_restore provided'}
-            # try to find matching entry in backup by folder name
-            gf = group.data_folder
-            if isinstance(data.get('groups'), dict) and gf in data.get('groups'):
-                restore_groups = [gf]
-            else:
-                # if backup is a direct group backup (not full backup), backup might contain group's keys at top-level
-                # try using last path segment of backup_path
+            # if caller supplied a target_group_id, try to map it
+            if target_group_id:
+                group = Group.query.get(target_group_id)
+                if group:
+                    gf = group.data_folder
+                    if isinstance(data.get('groups'), dict) and gf in data.get('groups'):
+                        restore_groups = [gf]
+            # if still nothing, attempt to infer from the path itself
+            if not restore_groups:
                 parts = backup_path.strip('/').split('/')
                 if len(parts) >= 2:
-                    candidate = parts[1]
-                    restore_groups = [candidate]
+                    restore_groups = [parts[1]]
 
         if not restore_groups:
             return {'ok': False, 'error': 'No groups determined to restore'}
@@ -633,10 +653,19 @@ def admin_restore_remote_backup(backup_path: str, target_group_id: int, groups_t
             restored.append(gname)
 
         if current_admin:
-            firebase_log_activity(current_admin.id, 'admin', 'remote_backup_restored', {
+            # provide a Greek message and list of restored groups for clarity
+            msg = f"Επαναφορά από απομακρυσμένο backup {backup_path} → ομάδες {', '.join(restored)}"
+            firebase_log_activity(current_admin.id, '__admin__', 'remote_backup_restored', {
                 'backup_path': backup_path,
-                'restored_groups': restored
+                'restored_groups': restored,
+                'message': msg
             })
+            # also log to server log in Greek for easier grep
+            try:
+                from flask import current_app
+                current_app.logger.info(msg)
+            except Exception:
+                logger.info(msg)
 
         if not restored:
             return {'ok': False, 'error': 'No groups restored'}
@@ -679,14 +708,38 @@ def admin_get_backup_zip(backup_name: str) -> Optional[str]:
 
 
 def admin_restore_backup(backup_name: str, target_group_id: int, current_admin: User) -> Dict[str, Any]:
-    """Restore a group from backup"""
+    """Restore a group from backup
+
+    This function is called from both the admin API (AJAX endpoint) and
+    various internal scripts.  Historically it used the module logger,
+    which was never configured and therefore messages did not appear in
+    ``firebed.log``.  We now log via ``current_app.logger`` when running
+    inside a Flask context, and we emit extra debug details so failures
+    are easier to diagnose.
+    """
+    # normalize backup_name by removing any leading slash; callers may pass
+    # "/backups/…" when they inadvertently include the firebase path.
+    if isinstance(backup_name, str):
+        backup_name = backup_name.lstrip('/')
+
+    # prefer the flask logger if available so we end up in the same log
+    try:
+        from flask import current_app
+        log = current_app.logger
+    except Exception:
+        log = logger  # fallback to module-level logger
+
+    log.debug("admin_restore_backup called: backup_name=%s, target_group_id=%s", backup_name, target_group_id)
+
     try:
         group = Group.query.get(target_group_id)
         if not group:
+            log.warning("restore target group not found: %s", target_group_id)
             return {'ok': False, 'error': 'Target group not found'}
         
         backup_path = os.path.join(os.getcwd(), 'data', '_backups', backup_name)
         if not os.path.exists(backup_path):
+            log.warning("backup path does not exist: %s", backup_path)
             return {'ok': False, 'error': 'Backup not found'}
         
         data_path = os.path.join(os.getcwd(), 'data', group.data_folder)
@@ -696,7 +749,7 @@ def admin_restore_backup(backup_name: str, target_group_id: int, current_admin: 
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             safety_backup = os.path.join(os.getcwd(), 'data', '_backups', f"{group.data_folder}_pre_restore_{timestamp}")
             shutil.copytree(data_path, safety_backup)
-            logger.info(f"Safety backup created: {safety_backup}")
+            log.info(f"Safety backup created: {safety_backup}")
         
         # Remove current data
         if os.path.exists(data_path):
@@ -711,11 +764,11 @@ def admin_restore_backup(backup_name: str, target_group_id: int, current_admin: 
             'backup_name': backup_name
         })
         
-        logger.info(f"Group restored from backup: {group.name}")
+        log.info(f"Group restored from backup: {group.name}")
         return {'ok': True, 'message': f'Group {group.name} restored from {backup_name}'}
     
     except Exception as e:
-        logger.error(f"Failed to restore backup: {e}")
+        log.exception("Failed to restore backup")
         return {'ok': False, 'error': str(e)}
 
 
@@ -937,6 +990,10 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
             return f"Διαγραφή χρήστη: {target_user}{admin_text}"
 
         elif action in ['delete_backup', 'admin_delete_backup', 'backup_deleted']:
+            # message field is sometimes included for clarity
+            if isinstance(details, dict) and details.get('message'):
+                return details.get('message')
+
             # Use get_field helper so we check both details and entry-level keys
             backup_name = get_field('backup_name') or get_field('backup') or get_field('name')
             if not backup_name:
@@ -972,6 +1029,17 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
                 backup_name = 'Άγνωστο'
             admin_text = " (από admin)" if action.startswith('admin_') else ""
             return f"Διαγραφή backup: {backup_name}{admin_text}"
+
+        elif action == 'remote_backup_restored':
+            # details may contain backup_path and restored_groups list
+            if isinstance(details, dict):
+                bp = details.get('backup_path') or details.get('path')
+                groups = details.get('restored_groups') or []
+                if bp:
+                    if groups:
+                        return f"Επαναφορά από απομακρυσμένο backup {bp} σε ομάδες {', '.join(groups)}"
+                    return f"Επαναφορά από απομακρυσμένο backup {bp}"
+            return "Επαναφορά απομακρυσμένου backup"
 
         elif action in ['backup_created', 'backup_upload', 'backup_saved']:
             # Creation/upload of a backup
@@ -1074,7 +1142,9 @@ def _create_detailed_description(action: str, details: Dict[str, Any], entry: Op
             return f"Επαναφορά ομάδας: {group_name}"
         
         elif action == 'backup_deleted':
-            # Use get_field helper to check details first then entry-level fields
+            # duplicate of previous case kept for compatibility; fall through above
+            if isinstance(details, dict) and details.get('message'):
+                return details.get('message')
             backup_name = get_field('backup_name') or get_field('backup') or get_field('name')
             if not backup_name:
                 bp = get_field('backup_path') or get_field('path')
@@ -1672,8 +1742,16 @@ def admin_compare_backup_with_current(backup_path: str, backup_type: str = 'remo
             backup_full_path = os.path.join(backups_dir, backup_path)
             if os.path.exists(backup_full_path):
                 backup_data = {'groups': {}}
-                # Read backup folder as a single group
-                group_name = os.path.basename(backup_path).replace('_backup_', '').split('_')[0]
+                # Read backup folder as a single group.  we used to strip the
+                # "_backup_" prefix by simple replace, which would leave the
+                # timestamp attached (e.g. "tony20260225"), causing the
+                # comparison logic to think a new group should be added.  instead
+                # split at the first "_backup_" occurrence.
+                bn = os.path.basename(backup_path)
+                if '_backup_' in bn:
+                    group_name = bn.split('_backup_')[0]
+                else:
+                    group_name = bn
                 backup_data['groups'][group_name] = {'folder_exists': True}
         
         if not backup_data:
