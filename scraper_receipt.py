@@ -2175,9 +2175,13 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
             if paa:
                 target["progressive_aa"] = str(paa).strip()
 
-        if target.get("doc_type") and re.search(r"τιμολό?γιο|τιμολογιο|invoice", target["doc_type"], re.I):
+        # reject obvious receipt keywords first
+        if re.search(r"\b(?:απόδειξη|αποδειξη|αλπ)\b", page_text, re.I) or \
+           (target.get("doc_type") and re.search(r"\b(?:απόδειξη|αποδειξη|αλπ)\b", str(target.get("doc_type")), re.I)):
+            target["is_invoice"] = False
+        elif target.get("doc_type") and re.search(r"\b(?:τιμολό?γιο|τιμολογιο|invoice)\b", str(target.get("doc_type")), re.I):
             target["is_invoice"] = True
-        elif re.search(r"τιμολό?γιο|τιμολογιο|invoice", page_text, re.I):
+        elif re.search(r"\b(?:τιμολό?γιο|τιμολογιο|invoice)\b", page_text, re.I):
             target["is_invoice"] = True
 
     def _render_with_browser(target_url):

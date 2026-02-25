@@ -3023,9 +3023,17 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
                 target["vat_analysis"] = cleaned
                 target["vat_analysis_inferred"] = bool(explicit_vat.get("__inferred__", False))
 
-        if target.get("doc_type") and re.search(r"τιμολό?γιο|τιμολογιο|invoice", target["doc_type"], re.I):
+        # if the page explicitly says it's a retail receipt/alp we should
+        # never mark it as an invoice even if the word "invoice" appears
+        # inside the branding string (e.g. "SimpleinvoiceproviderClient").
+        if re.search(r"\b(?:απόδειξη|αποδειξη|αλπ)\b", page_text, re.I) or \
+           (target.get("doc_type") and re.search(r"\b(?:απόδειξη|αποδειξη|αλπ)\b", str(target.get("doc_type")), re.I)):
+            target["is_invoice"] = False
+        # invoice detection: require word boundaries so that generic words like
+        # "SimpleinvoiceproviderClient" do not trigger it.
+        elif target.get("doc_type") and re.search(r"\b(?:τιμολό?γιο|τιμολογιο|invoice)\b", str(target.get("doc_type")), re.I):
             target["is_invoice"] = True
-        elif re.search(r"τιμολό?γιο|τιμολογιο|invoice", page_text, re.I):
+        elif re.search(r"\b(?:τιμολό?γιο|τιμολογιο|invoice)\b", page_text, re.I):
             target["is_invoice"] = True
 
     def _render_with_browser(target_url):
