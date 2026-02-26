@@ -104,6 +104,40 @@ def test_char_profiles_save_mode(monkeypatch):
         # the list should exist; exact contents can vary depending on heuristics
 
 
+def test_char_profiles_mtype_persistence(monkeypatch):
+    cred = setup_client(monkeypatch, expense_tags=["cat1"])
+    with app_module.app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['active_credential'] = cred['name']
+        payload = {
+            "vat": "999999999",
+            "name": "MTYPE",
+            "mapping": {
+                "kat_fpa_a": "cat1",
+                "kat_fpa_b": "cat1",
+                "kat_fpa_g": "cat1",
+                "kat_fpa_d": "cat1",
+                "kat_fpa_e": "cat1",
+            },
+            "mode": "invoices",
+            "invoice_mtype": "3.2",
+            "receipt_mtype": "11.1",
+        }
+        resp = c.post('/api/char_profiles/save', json=payload)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['profile']['invoice_mtype'] == '3.2'
+        assert data['profile']['receipt_mtype'] == '11.1'
+
+        resp = c.get('/api/char_profiles?vat=999999999')
+        assert resp.status_code == 200
+        profiles = resp.get_json()['profiles']
+        match = next((p for p in profiles if p['name'] == 'MTYPE'), None)
+        assert match is not None
+        assert match['invoice_mtype'] == '3.2'
+        assert match['receipt_mtype'] == '11.1'
+
+
 if __name__ == '__main__':
     test_char_profiles_mode_filter(None)
     test_char_profiles_save_mode(None)

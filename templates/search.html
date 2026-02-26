@@ -446,6 +446,23 @@ function isReceiptsOn(){
   return !!(r && r.checked);
 }
 
+function rcRepeatModalShouldUseReceiptsMode(){
+  try {
+    if (window.__RC_REPEAT_MODAL_FORCE_RECEIPTS) return true;
+  } catch(_) {}
+  try {
+    if (isReceiptsOn()) return true;
+  } catch(_) {}
+  try {
+    if (isReceiptAnalysisOn()) return true;
+  } catch(_) {}
+  try {
+    const saved = String(localStorage.getItem('UI:useReceipts') || '').trim();
+    if (saved === '1' || saved.toLowerCase() === 'true') return true;
+  } catch(_) {}
+  return false;
+}
+
 function isReceiptAnalysisOn(){
   // analysis state is driven only by the receipts mode chooser.
   // Do not infer from summary payload flags because that can force the
@@ -911,21 +928,49 @@ function katToPercent(k){
     o0.value = '';
     o0.textContent = 'Γενικό';
     o0.dataset.mapping = JSON.stringify(normalizeMapping(defaultMapping || {}));
+    o0.dataset.profileName = '';
+    o0.dataset.profileId = '';
+    o0.dataset.invoiceMtype = '';
+    o0.dataset.receiptMtype = '';
     selProfile.appendChild(o0);
 
     profiles.forEach(p => {
       const o = document.createElement('option');
-      o.value = p.id || p.name || '';
-      o.textContent = p.name || '(χωρίς όνομα)';
+      const profileName = String((p && p.name) || '').trim();
+      const profileId = String((p && p.id) || '').trim();
+      o.value = profileName || profileId || '';
+      o.textContent = profileName || '(χωρίς όνομα)';
       o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || {}));
+      o.dataset.profileName = profileName;
+      o.dataset.profileId = profileId;
+      o.dataset.invoiceMtype = String((p && (p.invoice_mtype || p.invoiceMtype)) || '').trim();
+      o.dataset.receiptMtype = String((p && (p.receipt_mtype || p.receiptMtype)) || '').trim();
       selProfile.appendChild(o);
     });
   }
 
   selProfile.addEventListener('change', () => {
     const opt = selProfile.selectedOptions[0];
-    const mapping = (opt && opt.dataset.mapping) ? JSON.parse(opt.dataset.mapping) : {};
-    renderMapping(mapping);     // ← προ-συμπλήρωση ανά προφίλ ή «καμία»
+    let mapping = {};
+    try { mapping = (opt && opt.dataset && opt.dataset.mapping) ? JSON.parse(opt.dataset.mapping) : {}; } catch(_) { mapping = {}; }
+    renderMapping(normalizeMapping(mapping));
+
+    const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
+    const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+    const repeatReceiptMtypeContainer = document.getElementById('repeatReceiptMtypeContainer');
+    const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
+    const invoiceVal = String((opt && opt.dataset && opt.dataset.invoiceMtype) || '').trim();
+    const receiptVal = String((opt && opt.dataset && opt.dataset.receiptMtype) || '').trim();
+    if (repeatMtypeSelect && repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none') {
+      repeatMtypeSelect.value = invoiceVal;
+    }
+    if (repeatReceiptMtypeSelect && repeatReceiptMtypeContainer && repeatReceiptMtypeContainer.style.display !== 'none') {
+      repeatReceiptMtypeSelect.value = receiptVal;
+    }
+    try {
+      window.__repeat_invoice_mtype = invoiceVal;
+      window.__repeat_receipt_mtype = receiptVal;
+    } catch(_) {}
     setHint('');
   });
 
@@ -934,7 +979,10 @@ function katToPercent(k){
   if (missing.length) { setHint('Συμπλήρωσε κατηγορία για: ' + missing.join(', ')); return; }
   setHint('');
 
-  const profileName = selProfile?.value || "";   // "" = Γενικό
+  const selectedProfileOpt = selProfile?.selectedOptions ? selProfile.selectedOptions[0] : null;
+  const profileName = (selectedProfileOpt && selectedProfileOpt.dataset && selectedProfileOpt.dataset.profileName)
+    ? String(selectedProfileOpt.dataset.profileName || '').trim()
+    : String(selProfile?.value || '');   // "" = Γενικό
   const vatToUse = window._repeatModalVAT || "{{ vat or '' }}";  // χρησιμοποίησε το ανιχνευθέν VAT
 
   // Για Γ Κατηγορία: έλεγχος ΑΠΑΡΑΙΤΗΤΟΥ invoice MTYPE
@@ -1047,10 +1095,7 @@ function katToPercent(k){
 }
   // Άνοιγμα modal: ΠΑΝΤΑ καθαρό render, χωρίς διπλο-append
   async function openModal(){
-  // Προσπάθησε να πάρεις το VAT από διάφορες πηγές
   let VAT = "{{ vat or '' }}";
-  
-  // Αν δεν υπάρχει VAT, προσπάθησε να το πάρεις από την ενεργή session
   if (!VAT || !VAT.trim()) {
     try {
       const r = await fetch('/api/repeat_entry/get', {credentials:'same-origin'});
@@ -1059,32 +1104,43 @@ function katToPercent(k){
       if (j && j.afm) VAT = j.afm;
     } catch(_) {}
   }
-  
-  // Αποθήκευσε το VAT στη μεταβλητή ώστε να το χρησιμοποιήσει το save
+
   window._repeatModalVAT = VAT;
-  
+
   const hint = document.getElementById('charMissingHint');
   if(hint){ hint.style.display='none'; hint.textContent=''; }
 
-  // 1) φέρνουμε προφίλ + tags + repeat state (mapping + ενεργό όνομα προφίλ)
+  const useReceiptsMode = rcRepeatModalShouldUseReceiptsMode();
+  const charProfilesModeParam = useReceiptsMode ? '&mode=receipts' : '&mode=invoices';
+
+  const addProfileLink = document.getElementById('addProfileLink');
+  if (addProfileLink) {
+    try {
+      const u = new URL(addProfileLink.getAttribute('href') || addProfileLink.href || '/profiles', window.location.origin);
+      if (VAT) u.searchParams.set('vat', VAT);
+      u.searchParams.set('mode', useReceiptsMode ? 'receipts' : 'invoices');
+      u.searchParams.set('open_repeat', '1');
+      u.searchParams.set('repeat_mode', useReceiptsMode ? 'receipts' : 'invoices');
+      if (useReceiptsMode) u.searchParams.set('use_receipts', '1');
+      else u.searchParams.delete('use_receipts');
+      addProfileLink.href = u.toString();
+    } catch(_) {}
+  }
+
   const [profiles, defaultFromGet, state] = await Promise.all([
     (async () => {
       try {
         let j = null;
         try {
-          const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || '') + (isReceiptsOn() ? '&mode=receipts' : ''), {credentials:'same-origin'});
+          const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || '') + charProfilesModeParam, {credentials:'same-origin'});
           j = await r.json();
-        } catch (_) {
-          j = null;
-        }
+        } catch (_) { j = null; }
 
         if (!j || !j.ok || (!Array.isArray(j.profiles) && !Array.isArray(j.expense_tags))) {
           try {
-            const r2 = await fetch('/api/char_profiles' + (isReceiptsOn() ? '?mode=receipts' : ''), {credentials:'same-origin'});
+            const r2 = await fetch('/api/char_profiles?mode=' + (useReceiptsMode ? 'receipts' : 'invoices'), {credentials:'same-origin'});
             j = await r2.json();
-          } catch (_) {
-            j = null;
-          }
+          } catch (_) { j = null; }
         }
 
         if (!j || !j.ok) return [];
@@ -1096,34 +1152,13 @@ function katToPercent(k){
             Object.assign(window.CATEGORY_LABELS, j.category_labels);
           }
         }
-        if (j && j.vat_constraints) {
-          setCategoryConstraints(j.vat_constraints);
-        }
+        if (j && j.vat_constraints) setCategoryConstraints(j.vat_constraints);
+
         if (Array.isArray(j.expense_tags)) {
           CUSTOMER_CATEGORIES = normalizeCategoryList(j.expense_tags);
-          if (typeof window !== 'undefined') {
-            window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-          }
+          if (typeof window !== 'undefined') window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
         }
-        if ((!Array.isArray(j.expense_tags) || !j.expense_tags.length) && VAT) {
-          try {
-            const rv2 = await fetch('/api/repeat_entry/get_v2?vat=' + encodeURIComponent(VAT), {credentials:'same-origin'});
-            const jv2 = await rv2.json();
-            if (jv2 && Array.isArray(jv2.expense_tags) && jv2.expense_tags.length) {
-              CUSTOMER_CATEGORIES = normalizeCategoryList(jv2.expense_tags);
-              if (typeof window !== 'undefined') {
-                window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-              }
-            }
-            if (jv2 && jv2.category_labels) {
-              Object.assign(CATEGORY_LABELS, jv2.category_labels);
-              if (typeof window !== 'undefined') {
-                window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
-                Object.assign(window.CATEGORY_LABELS, jv2.category_labels);
-              }
-            }
-          } catch (_) {}
-        }
+
         let profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
         if (!profilesOut.length) {
           try {
@@ -1131,12 +1166,6 @@ function katToPercent(k){
             const jp = await rp.json();
             if (jp && Array.isArray(jp.profiles) && jp.profiles.length) {
               profilesOut = jp.profiles.map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-            }
-            if ((!Array.isArray(j.expense_tags) || !j.expense_tags.length) && jp && Array.isArray(jp.options) && jp.options.length) {
-              CUSTOMER_CATEGORIES = normalizeCategoryList(jp.options);
-              if (typeof window !== 'undefined') {
-                window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-              }
             }
           } catch (_) {}
         }
@@ -1150,13 +1179,26 @@ function katToPercent(k){
         return (j && j.repeat_entry && j.repeat_entry.mapping) || {};
       } catch (_e) { return {}; }
     })(),
-    fetchRepeatState(VAT) // <-- φέρνει defaultMap + savedName
+    fetchRepeatState(VAT)
   ]);
 
-  const defaultMap = Object.keys(state.defaultMap || {}).length ? state.defaultMap : defaultFromGet;
-  const savedName  = state.savedName || "";
-  const invoiceMtype = state.invoiceMtype || "";
-  const receiptMtype = state.receiptMtype || "";
+  const cachedRepeat = (typeof window !== 'undefined' && window.__RC_REPEAT_ENTRY_LAST && typeof window.__RC_REPEAT_ENTRY_LAST === 'object')
+    ? window.__RC_REPEAT_ENTRY_LAST
+    : {};
+  const overrideMap = (window._repeatMappingOverride && typeof window._repeatMappingOverride === 'object')
+    ? normalizeMapping(window._repeatMappingOverride)
+    : {};
+  const hasOverrideMap = Object.keys(overrideMap).some(k => !!String(overrideMap[k] || '').trim());
+
+  const defaultMap = hasOverrideMap
+    ? overrideMap
+    : (Object.keys(state.defaultMap || {}).length
+      ? state.defaultMap
+      : (Object.keys((cachedRepeat.mapping || {})).length ? (cachedRepeat.mapping || {}) : defaultFromGet));
+
+  const savedName  = state.savedName || cachedRepeat.profile_name || "";
+  const invoiceMtype = state.invoiceMtype || cachedRepeat.invoice_mtype || window.__repeat_invoice_mtype || "";
+  const receiptMtype = state.receiptMtype || cachedRepeat.receipt_mtype || window.__repeat_receipt_mtype || "";
 
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
@@ -1166,14 +1208,35 @@ function katToPercent(k){
     o0.value = "";
     o0.textContent = "Γενικό";
     o0.dataset.mapping = JSON.stringify(normalizeMapping(defaultMap || {}));
+    o0.dataset.invoiceMtype = String(invoiceMtype || '');
+    o0.dataset.receiptMtype = String(receiptMtype || '');
+    o0.dataset.profileName = '';
+    o0.dataset.profileId = '';
     sel.appendChild(o0);
 
-    profiles.forEach(p=>{
+    const filteredProfiles = (Array.isArray(profiles) ? profiles : []).filter(p => {
+      const rawName = String((p && p.name) || '').trim();
+      if (!rawName) return false;
+      if ((p && p.is_general === true) || rawName.toLowerCase() === 'γενικό' || rawName.toLowerCase() === 'general') return false;
+      return true;
+    });
+
+    filteredProfiles.forEach(p=>{
       const o = document.createElement('option');
-      o.value = p.name || p.id || "";
-      o.textContent = p.name || "(χωρίς όνομα)";
-      o.dataset.id = p.id || "";
-      o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || p.map || {}));
+      const profileName = String(p.name || '').trim();
+      const profileId = String(p.id || '').trim();
+      const profileMap = normalizeMapping(p.mapping || p.map || {});
+      const profileInvoiceMtype = String(p.invoice_mtype || p.invoiceMtype || '').trim();
+      const profileReceiptMtype = String(p.receipt_mtype || p.receiptMtype || '').trim();
+
+      o.value = profileName || profileId || "";
+      o.textContent = profileName || "(χωρίς όνομα)";
+      o.dataset.id = profileId;
+      o.dataset.profileId = profileId;
+      o.dataset.profileName = profileName;
+      o.dataset.mapping = JSON.stringify(profileMap);
+      o.dataset.invoiceMtype = profileInvoiceMtype;
+      o.dataset.receiptMtype = profileReceiptMtype;
       sel.appendChild(o);
     });
     
@@ -1221,29 +1284,83 @@ function katToPercent(k){
       if (repeatReceiptMtypeContainer) repeatReceiptMtypeContainer.style.display = 'none';
     }
 
+    const resolveProfilePayloadFromOption = (opt) => {
+      if (!opt) {
+        return {
+          mapping: normalizeMapping(defaultMap || {}),
+          invoiceMtype: String(invoiceMtype || ''),
+          receiptMtype: String(receiptMtype || ''),
+          name: '',
+          id: ''
+        };
+      }
+
+      let parsedMap = normalizeMapping(defaultMap || {});
+      try {
+        parsedMap = normalizeMapping(JSON.parse((opt.dataset && opt.dataset.mapping) || '{}'));
+      } catch(_) {}
+
+      return {
+        mapping: parsedMap,
+        invoiceMtype: String((opt.dataset && opt.dataset.invoiceMtype) || ''),
+        receiptMtype: String((opt.dataset && opt.dataset.receiptMtype) || ''),
+        name: String((opt.dataset && opt.dataset.profileName) || '').trim(),
+        id: String((opt.dataset && (opt.dataset.profileId || opt.dataset.id)) || '').trim(),
+      };
+    };
+
+    const applyMtypesFromSelection = (opt, payload) => {
+      try {
+        const p = payload || resolveProfilePayloadFromOption(opt);
+        const invoiceVal = String((p && p.invoiceMtype) || '');
+        const receiptVal = String((p && p.receiptMtype) || '');
+        if (repeatMtypeSelect && repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none') {
+          repeatMtypeSelect.value = invoiceVal;
+        }
+        if (repeatReceiptMtypeSelect && repeatReceiptMtypeContainer && repeatReceiptMtypeContainer.style.display !== 'none') {
+          repeatReceiptMtypeSelect.value = receiptVal;
+        }
+        try {
+          window.__repeat_invoice_mtype = invoiceVal;
+          window.__repeat_receipt_mtype = receiptVal;
+        } catch(_) {}
+      } catch(_) {}
+    };
+
     // 3) αν έχει αποθηκευτεί ενεργό προφίλ, επίλεξέ το και προ-συμπλήρωσε
-    if (savedName && Array.from(sel.options).some(o => o.value === savedName)){
-      sel.value = savedName;
+    const selectedBySavedName = Array.from(sel.options).find(o =>
+      o.value === savedName ||
+      (o.dataset && o.dataset.id && o.dataset.id === savedName) ||
+      (o.textContent && o.textContent.trim() === savedName)
+    );
+
+    if (savedName && selectedBySavedName){
+      sel.value = selectedBySavedName.value;
       try{
-        const m = JSON.parse(sel.selectedOptions[0].dataset.mapping || "{}");
-        renderMapping(m);
-        setActiveProfileHint(savedName);
+        const selected = sel.selectedOptions[0];
+        const selectedPayload = resolveProfilePayloadFromOption(selected);
+        renderMapping(selectedPayload.mapping || {});
+        applyMtypesFromSelection(selected, selectedPayload);
+        setActiveProfileHint(selectedPayload.name || savedName);
 
       } catch (_e) {
         renderMapping(defaultMap);
       }
     } else {
       sel.value = "";
-      renderMapping(defaultMap); // "Γενικό"
+      const generalPayload = resolveProfilePayloadFromOption(sel.selectedOptions[0]);
+      renderMapping((generalPayload && generalPayload.mapping) || defaultMap); // "Γενικό"
+      applyMtypesFromSelection(sel.selectedOptions[0], generalPayload);
       setActiveProfileHint("");
 
     }
 
     sel.onchange = () => {
       const opt = sel.selectedOptions[0];
-      const m = (opt && opt.dataset.mapping) ? JSON.parse(opt.dataset.mapping) : defaultMap;
-      renderMapping(m);
-      setActiveProfileHint(sel.value || "");
+      const selectedPayload = resolveProfilePayloadFromOption(opt);
+      renderMapping((selectedPayload && selectedPayload.mapping) || defaultMap);
+      applyMtypesFromSelection(opt, selectedPayload);
+      setActiveProfileHint((selectedPayload && selectedPayload.name) || "");
 
       hint && (hint.style.display='none', hint.textContent='');
     };
@@ -1252,15 +1369,19 @@ function katToPercent(k){
     renderMapping(defaultMap);
   }
 
+  try { window._repeatMappingOverride = null; } catch(_) {}
+
   // τέλος: άνοιξε απλό repeat-mapping modal
   document.getElementById('repeatMappingModal').style.display = 'flex';
 }
   
-  document.getElementById('editRepeatMappingBtn')?.addEventListener('click', openModal);
+  document.getElementById('editRepeatMappingBtn')?.addEventListener('click', () => {
+    try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = false; } catch(_) {}
+    openModal();
+  });
   document.getElementById('editReceiptClassBtn')?.addEventListener('click', ()=>{
-    if (typeof openReceiptClassModal === 'function') {
-      openReceiptClassModal(window._lastSummaryObj || {});
-    }
+    try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = true; } catch(_) {}
+    openModal();
   });
   
 
@@ -1270,11 +1391,24 @@ function katToPercent(k){
 try {
   const p = new URLSearchParams(location.search);
   if (p.get('open_repeat') === '1') {
+    const repeatMode = String(p.get('repeat_mode') || '').trim().toLowerCase();
+    if (repeatMode === 'receipts') {
+      try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = true; } catch(_) {}
+      try {
+        localStorage.setItem('UI:useReceipts', '1');
+        const sw = document.getElementById('useReceiptsSwitch');
+        if (sw && !sw.checked) {
+          sw.checked = true;
+          sw.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      } catch(_) {}
+    }
     setTimeout(() => {
       if (window.openRepeatModal) window.openRepeatModal();
       try {
         const url = new URL(window.location.href);
         url.searchParams.delete('open_repeat');
+        url.searchParams.delete('repeat_mode');
         history.replaceState({}, '', url.toString());
       } catch(_){}
     }, 0);
@@ -1318,44 +1452,82 @@ try {
         const sel = document.getElementById('charProfileSelect');
         if (!sel) return;
 
-        const profileName = (sel.value || '').trim();
-        // Αν είναι "Γενικό" (κενό value), δεν ενημερώνουμε profile στο credentials
-        if (!profileName) return;
-
         const opt = sel.selectedOptions && sel.selectedOptions[0];
+        const profileName = String((opt && opt.dataset && opt.dataset.profileName) || sel.value || '').trim();
+
+        const receiptsMode = (typeof rcRepeatModalShouldUseReceiptsMode === 'function')
+          ? !!rcRepeatModalShouldUseReceiptsMode()
+          : ((typeof isReceiptsOn === 'function') ? !!isReceiptsOn() : false);
+
         const profileId = (opt && opt.dataset && opt.dataset.id) ? opt.dataset.id : "";
+        const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+        const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
+        const invoiceMtype = (repeatMtypeSelect && repeatMtypeSelect.value) ? String(repeatMtypeSelect.value).trim() : '';
+        const receiptMtype = (repeatReceiptMtypeSelect && repeatReceiptMtypeSelect.value) ? String(repeatReceiptMtypeSelect.value).trim() : '';
 
         // Διάβασε το mapping που έβαλε ο χρήστης στα dropdowns του modal τώρα
         const pctMap = readPercentMappingFromUI();      // 0/6/13/17/24
         const katMap = percentToKat(pctMap);            // kat_fpa_*
 
-        if (profileId){
-          // ΚΥΡΙΑ ΟΔΟΣ: Update στο credentials ΜΕ id -> δεν δημιουργεί νέο στο rename
-          const r = await fetch('/api/profiles/save', {
-            method:'POST',
-            headers:{ 'Content-Type':'application/json' },
-            credentials:'same-origin',
-            body: JSON.stringify({ id: profileId, name: profileName, map: katMap })
-          });
-          const j = await r.json().catch(()=>null);
-          if (!(j && j.ok)) {
-            console.warn('profiles/save failed:', j);
-            // Fallback (σπάνια χρειάζεται): legacy char_profiles με mapping σε ποσοστά
+        if (receiptsMode) {
+          // Receipts flow: υποστηρίζει και Γενικό (κενό name) + mtype fields
+          // Για Γενικό profile (κενό όνομα) δεν γράφουμε σε char_profiles,
+          // γιατί δημιουργεί "(χωρίς όνομα)" εγγραφές στο dropdown.
+          if (profileName) {
             await fetch('/api/char_profiles/save', {
               method:'POST',
               headers:{ 'Content-Type':'application/json' },
               credentials:'same-origin',
-              body: JSON.stringify({ vat: VAT, name: profileName, mapping: pctMap })
+              body: JSON.stringify({
+                vat: VAT,
+                name: profileName,
+                mode: 'receipts',
+                mapping: katMap,
+                invoice_mtype: invoiceMtype,
+                receipt_mtype: receiptMtype,
+              })
             });
           }
         } else {
-          // Δεν έχουμε id (παλιό/legacy profile) -> fallback σε char_profiles (ποσοστά)
-          await fetch('/api/char_profiles/save', {
-            method:'POST',
-            headers:{ 'Content-Type':'application/json' },
-            credentials:'same-origin',
-            body: JSON.stringify({ vat: VAT, name: profileName, mapping: pctMap })
-          });
+          // Invoices flow: κράτα την υπάρχουσα κύρια οδό για named profiles.
+          if (!profileName) return;
+
+          if (profileId){
+            const r = await fetch('/api/profiles/save', {
+              method:'POST',
+              headers:{ 'Content-Type':'application/json' },
+              credentials:'same-origin',
+              body: JSON.stringify({ id: profileId, name: profileName, map: katMap })
+            });
+            const j = await r.json().catch(()=>null);
+            if (!(j && j.ok)) {
+              console.warn('profiles/save failed:', j);
+              await fetch('/api/char_profiles/save', {
+                method:'POST',
+                headers:{ 'Content-Type':'application/json' },
+                credentials:'same-origin',
+                body: JSON.stringify({
+                  vat: VAT,
+                  name: profileName,
+                  mode: 'invoices',
+                  mapping: katMap,
+                })
+              });
+            }
+          } else {
+            // legacy χωρίς id -> αποθήκευση μέσω char_profiles
+            await fetch('/api/char_profiles/save', {
+              method:'POST',
+              headers:{ 'Content-Type':'application/json' },
+              credentials:'same-origin',
+              body: JSON.stringify({
+                vat: VAT,
+                name: profileName,
+                mode: 'invoices',
+                mapping: katMap,
+              })
+            });
+          }
         }
         // Δεν κάνουμε preventDefault: η δική σου αποθήκευση repeat_entry συνεχίζει κανονικά
       }catch(err){
@@ -4430,7 +4602,8 @@ function prefillSummaryModal(){
   useReceiptsSwitch?.addEventListener('change', () => {
   // ποιο όνομα να δείξω στο hint; πάρε την τρέχουσα επιλογή από το select του modal,
   // αλλιώς άφησε κενό => θα εμφανιστεί "Γενικό"
-  const name = (document.getElementById('charProfileSelect')?.value || "");
+  const selectedOpt = document.getElementById('charProfileSelect')?.selectedOptions?.[0];
+  const name = (selectedOpt?.dataset?.profileName || document.getElementById('charProfileSelect')?.value || "");
   setActiveProfileHint(name);
   try {
     remoteCtrl?.pageModeChanged?.(currentScannerMode());
@@ -4871,7 +5044,9 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
       const resp = await apiGetRepeatEntry(VAT);
       if(resp && resp.ok){
         const repeat = resp.repeat_entry || { enabled: false, mapping: {} };
+        try { window.__RC_REPEAT_ENTRY_LAST = repeat; } catch(_) {}
         try { window.__repeat_invoice_mtype = String(repeat.invoice_mtype || '').trim(); } catch(_) {}
+        try { window.__repeat_receipt_mtype = String(repeat.receipt_mtype || '').trim(); } catch(_) {}
         if(resp.expense_tags && Array.isArray(resp.expense_tags) && resp.expense_tags.length){
           CUSTOMER_CATEGORIES = resp.expense_tags.slice();
         }

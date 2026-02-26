@@ -53,7 +53,14 @@
       var v = localStorage.getItem(KEY_REPEAT_ENABLED);
       if (v !== null) stored = flagToBool(v);
     } catch(_){}
-    var enabled = (domVal !== null) ? domVal : !!stored;
+    var enabled;
+    if (stored !== null) {
+      enabled = stored;
+    } else if (domVal !== null) {
+      enabled = domVal;
+    } else {
+      enabled = false;
+    }
 
     var mapping = {};
     try {

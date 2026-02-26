@@ -748,9 +748,11 @@
     const summarySaysAnalysis = !!(summary && (summary.receipt_analysis_enabled === true || summary.receiptAnalysisEnabled === true || summary.receipts_analysis_enabled === true));
     const hasUrlBaseline = !!(summary && summary.receipt_url_totals && typeof summary.receipt_url_totals === 'object');
     const lockedAnalysis = !!window.__RC_RECEIPT_ANALYSIS_LOCK;
-    const receiptsAnalysis = explicitReceiptMode
-      ? (explicitReceiptMode === 'analysis')
-      : !!(isReceiptAnalysisActive() || summarySaysAnalysis || hasUrlBaseline || lockedAnalysis);
+    const receiptsAnalysis = isReceiptSummary && (
+      explicitReceiptMode
+        ? (explicitReceiptMode === 'analysis')
+        : !!(isReceiptAnalysisActive() || summarySaysAnalysis || hasUrlBaseline || lockedAnalysis)
+    );
     if (isReceiptSummary && receiptsAnalysis) {
       window.__RC_RECEIPT_ANALYSIS_LOCK = true;
       window.__RC_FORCE_RECEIPT_ANALYSIS = true;

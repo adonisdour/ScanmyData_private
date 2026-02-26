@@ -2457,6 +2457,43 @@ def _set_char_profiles(creds, vat: str, profiles: list):
     # για list δεν χρειάζεται ειδικό χειρισμό, το dict είναι reference
     return creds
 
+
+def _normalize_char_profile(entry: dict) -> Optional[dict]:
+    if not isinstance(entry, dict):
+        return None
+    mapping = entry.get("mapping") if isinstance(entry.get("mapping"), dict) else None
+    if mapping is None and isinstance(entry.get("map"), dict):
+        mapping = entry.get("map")
+    profile = dict(entry)
+    profile["mapping"] = mapping or {}
+    profile["mode"] = str(entry.get("mode") or ("" if entry.get("mode") == "" else "invoices")).strip().lower()
+    profile["id"] = str(entry.get("id") or "").strip()
+    profile["invoice_mtype"] = str(entry.get("invoice_mtype") or "").strip()
+    profile["receipt_mtype"] = str(entry.get("receipt_mtype") or "").strip()
+    return profile
+
+
+def _filter_char_profiles_by_mode(raw_profiles: list, mode: str) -> List[dict]:
+    normalized: List[dict] = []
+    if isinstance(raw_profiles, list):
+        for entry in raw_profiles:
+            prof = _normalize_char_profile(entry)
+            if prof:
+                normalized.append(prof)
+
+    target_mode = (mode or "invoices").strip().lower()
+    if target_mode == "receipts":
+        return [p for p in normalized if (p.get("mode") in ("receipts", ""))]
+    return [p for p in normalized if (p.get("mode") or "invoices") == "invoices"]
+
+
+def _is_general_profile(profile: dict) -> bool:
+    name = str((profile or {}).get("name") or "").strip()
+    if not name:
+        return True
+    normalized = name.casefold()
+    return normalized in {"γενικο", "γενικό", "general", "default"}
+
 def _get_repeat_entry(creds, vat: str):
     cust, _ = _get_customer(creds, vat, create=False)
     if not isinstance(cust, dict):
@@ -9045,7 +9082,24 @@ def profiles_page():
         categories = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
-    profiles = client.get("char_profiles", [])
+    raw_profiles = client.get("char_profiles", []) or []
+    profiles = [p for p in _filter_char_profiles_by_mode(raw_profiles, mode) if not _is_general_profile(p)]
+
+    g_category_data = None
+    try:
+        from g_category_helpers import (
+            is_g_category_active,
+            get_available_categories_for_g,
+            enrich_categories_with_mtype,
+        )
+
+        if client and is_g_category_active(client):
+            settings = load_settings()
+            if settings:
+                categories = get_available_categories_for_g(settings, categories)
+                g_category_data = enrich_categories_with_mtype(categories, settings)
+    except Exception:
+        log.exception("profiles_page: failed to prepare g-category payload")
     # δίνουμε πάντα λίστα (όχι Undefined)
     return render_template(
         "profiles.html",
@@ -9056,6 +9110,7 @@ def profiles_page():
         profiles=profiles,
         category_labels=labels,
         vat_constraints=constraints,
+        g_category_data=g_category_data,
     )
 
 
@@ -9306,24 +9361,8 @@ def api_char_profiles_get():
             if group_client:
                 client = group_client
     client = client or {}
-    raw_profiles = client.get("char_profiles", [])
-    normalized_profiles = []
-    for p in raw_profiles if isinstance(raw_profiles, list) else []:
-        if not isinstance(p, dict):
-            continue
-        p_mode = str(p.get("mode") or "").strip().lower()
-        mapping = p.get("mapping") if isinstance(p.get("mapping"), dict) else (p.get("map") if isinstance(p.get("map"), dict) else {})
-        prof = dict(p)
-        prof["mode"] = p_mode or "invoices"
-        prof["mapping"] = mapping
-        normalized_profiles.append(prof)
-
-    # filter profiles by mode flag.
-    # receipts also include legacy profiles with no explicit mode.
-    if mode == "receipts":
-        profiles = [p for p in normalized_profiles if str(p.get("mode") or "").strip().lower() in ("receipts", "") or "mode" not in p]
-    else:
-        profiles = [p for p in normalized_profiles if str(p.get("mode") or "invoices").strip().lower() == "invoices"]
+    raw_profiles = client.get("char_profiles", []) or []
+    profiles = _filter_char_profiles_by_mode(raw_profiles, mode)
 
     expense_tags = _list_receipt_categories(client) if mode == "receipts" else _list_invoice_categories(client)
     receipt_expense_tags = _list_receipt_categories(client)
@@ -9352,6 +9391,8 @@ def api_char_profiles_save():
     mode = (data.get("mode") or "invoices").strip().lower()
     if mode not in ("invoices", "receipts"):
         mode = "invoices"
+    invoice_mtype = str(data.get("invoice_mtype") or "").strip()
+    receipt_mtype = str(data.get("receipt_mtype") or "").strip()
 
     # If vat not provided, try to use session active credential
     active_name = ""
@@ -9444,8 +9485,16 @@ def api_char_profiles_save():
         hit["mapping"] = mapping
         hit.pop("map", None)
         hit["mode"] = mode
+        hit["invoice_mtype"] = invoice_mtype
+        hit["receipt_mtype"] = receipt_mtype
     else:
-        arr.append({"name": name, "mapping": mapping, "mode": mode})
+        arr.append({
+            "name": name,
+            "mapping": mapping,
+            "mode": mode,
+            "invoice_mtype": invoice_mtype,
+            "receipt_mtype": receipt_mtype,
+        })
     client["char_profiles"] = arr
     if save_path is not None:
         try:
@@ -9455,7 +9504,16 @@ def api_char_profiles_save():
             _save_credentials(creds)
     else:
         _save_credentials(creds)
-    return jsonify(ok=True, profile={"name": name, "mapping": mapping, "mode": mode})
+    return jsonify(
+        ok=True,
+        profile={
+            "name": name,
+            "mapping": mapping,
+            "mode": mode,
+            "invoice_mtype": invoice_mtype,
+            "receipt_mtype": receipt_mtype,
+        },
+    )
 # ------- repeat entry mapping (πάντα ποσοστά) -------
 
 
@@ -9532,33 +9590,7 @@ def api_char_profiles_delete():
 
 @app.get("/profiles", endpoint="char_profiles_ui")
 def char_profiles_ui():
-    """Σελίδα δημιουργίας/επεξεργασίας Προφίλ"""
-    vat = request.args.get("vat","").strip()
-    creds = _load_credentials()
-    client = _find_client(creds, vat=vat) if vat else None
-    if not client:
-        try:
-            active = get_active_credential_from_session() or {}
-        except Exception:
-            active = {}
-        active_vat = str((active or {}).get("vat") or "").strip()
-        if active_vat:
-            client = _find_client(creds, vat=active_vat)
-        if not client and isinstance(active, dict) and active:
-            client = active
-    client = client or {}
-    expense_tags = _list_invoice_categories(client)
-    labels = _category_labels_for_client(client)
-    constraints = _category_vat_constraints(client)
-    profiles = client.get("char_profiles", [])
-    return render_template(
-        "profiles.html",
-        vat=client.get("vat",""),
-        expense_tags=expense_tags,
-        profiles=profiles,
-        category_labels=labels,
-        vat_constraints=constraints,
-    )
+    return profiles_page()
 @app.route("/api/next_receipt_mark", methods=["GET"])
 def api_next_receipt_mark():
     """
