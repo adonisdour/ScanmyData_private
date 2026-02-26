@@ -675,15 +675,45 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
 
-            # Λογαριασμός Γ Κατηγορίας (ΧΡΕΩΣΗ)
-            account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr, analysis_enabled=analysis_enabled)
+            canon_lower = str(canon or "").strip().lower()
+            is_cash_credit_line = is_auto_cash_payment and canon_lower in {"ταμείο", "ταμειο", "cash"}
+            line_crdb = 1 if is_cash_credit_line else 0
+
+            # Λογαριασμός Γ Κατηγορίας
+            # Για auto cash-payment: ΕΠΙΒΑΛΛΕΤΑΙ κανόνας
+            #   - Χρέωση: προμηθευτής (λιανικής για αποδείξεις / χονδρικής για τιμολόγια)
+            #   - Πίστωση: ταμείο
+            if is_auto_cash_payment:
+                if is_cash_credit_line:
+                    account = _get_account_for_g(settings_all, "ταμείο", 0, is_receipt=is_receipt)
+                    dbg = {
+                        "category": canon,
+                        "vat_in": vr,
+                        "used_key": "forced_cash_account_auto_cash_payment",
+                        "chosen": account,
+                    }
+                else:
+                    account = _account_header_P_g(settings_all, is_receipt)
+                    if not account:
+                        supplier_canon = "προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής"
+                        account = _get_account_for_g(settings_all, supplier_canon, 0, is_receipt=is_receipt)
+                    dbg = {
+                        "category": canon,
+                        "vat_in": vr,
+                        "used_key": "forced_supplier_account_auto_cash_payment",
+                        "chosen": account,
+                    }
+            else:
+                # Κανονική ροή (non-mirror)
+                account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr, analysis_enabled=analysis_enabled)
+
             if not account:
                 issues.append({
                     "code": "missing_account_g",
-                    "message": f"Δεν βρέθηκε λογαριασμός Γ για {canon}, VAT={vr}%. Tried: {dbg.get('tried_keys')}"
+                    "message": f"Δεν βρέθηκε λογαριασμός Γ για {canon}, VAT={vr}%. Tried: {dbg.get('tried_keys') if isinstance(dbg, dict) else ''}"
                 })
                 continue
-            
+
             # Validation με Chart of Accounts
             if coa_df is not None and not _validate_account_in_coa(account, coa_df):
                 issues.append({
@@ -691,10 +721,6 @@ def build_preview_rows_for_ui_g(
                     "message": f"Ο λογαριασμός {account} δεν υπάρχει στο λογιστικό σχέδιο (κατηγορία: {canon}, ΦΠΑ: {vr}%)"
                 })
                 # Συνέχισε ούτως ή άλλως - θα δουν το warning
-
-            canon_lower = str(canon or "").strip().lower()
-            is_cash_credit_line = is_auto_cash_payment and canon_lower in {"ταμείο", "ταμειο", "cash"}
-            line_crdb = 1 if is_cash_credit_line else 0
 
             # Detail row για export (με MTYPE)
             # ΣΗΜΑΝΤΙΚΟ: Αν έχουμε CoA και θα προστεθεί λογαριασμός ΦΠΑ,
@@ -743,8 +769,12 @@ def build_preview_rows_for_ui_g(
                 })
             
             # Line για preview
+            preview_category = canon
+            if is_auto_cash_payment:
+                preview_category = "ταμείο" if is_cash_credit_line else ("προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής")
+
             lines_out.append({
-                "category": canon,
+                "category": preview_category,
                 "vat_rate": int(vr) if vr is not None else 0,
                 "vat_rate_in": int(vr) if vr is not None else 0,
                 "lcode": account,

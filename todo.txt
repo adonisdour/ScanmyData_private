@@ -11,4 +11,4 @@ curl -v \
 
 τσεκαρισμα αποδειξεων με σειριακο ταμειακης
 reason size limit 128 (fix), χρωματα dark mode modal summary
-ελεγχος γραμμων εντος του modal summary αναλυσης αποδειξεων
+chat.svg δεν αλλαξε ακομα.

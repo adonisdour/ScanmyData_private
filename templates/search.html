@@ -155,77 +155,7 @@
 
 
 
-<!-- SUMMARY MODAL (always in DOM for AJAX receipt flows) -->
-<div id="summaryModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 overflow-auto p-4" style="display:none;">
-    <div class="bg-white rounded-lg shadow-lg w-full max-w-6xl p-6">
-
-        <!-- HEADER -->
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-semibold">
-                 Περίληψη Παραστατικού - <span id="summaryModalMark">MARK</span>
-            </h3>
-            <button type="button" id="modalCloseX" class="text-gray-500 text-xl font-bold modal-summary-close modal-cancel-btn">✕</button>
-        </div>
-
-        <!-- SUMMARY INFO -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <div><strong>Α/Α Παραστατικού</strong><div id="summary_AA"></div></div>
-            <div><strong>ΑΦΜ</strong><div id="summary_AFM"></div></div>
-            <div><strong>Επωνυμία</strong><div id="summary_Name"></div></div>
-            <div><strong>Ημερομηνία</strong><div id="summary_issueDate"></div></div>
-            <div><strong>Τύπος Παραστατικού</strong><div id="summary_type_name"></div></div>
-          <div><strong>Τρόπος Πληρωμής</strong><div id="summary_paymentMethodLabel"></div></div>
-            <div><strong>Καθαρή Αξία</strong><div id="summary_totalNetValue"></div></div>
-            <div><strong>ΦΠΑ</strong><div id="summary_totalVatAmount"></div></div>
-            <div><strong>Σύνολο</strong><div id="summary_totalValue"></div></div>
-        </div>
-
-          <div id="summaryInferredWarning" class="mb-3 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900 text-sm" style="display:none;">
-            ⚠ Η ανάλυση ΦΠΑ είναι προϊόν υπολογισμού και όχι ακριβής ανάλυση από το παραστατικό.
-          </div>
-
-        <!-- LINES -->
-        <h4 id="summaryLinesHeader" class="font-medium mt-4 mb-2">Γραμμές Παραστατικού (για χαρακτηρισμό)</h4>
-        <div id="summaryLinesContainer" class="overflow-auto max-h-96 border rounded p-2"></div>
-
-        <!-- MTYPE για Γ Category (invoice-level) -->
-        <div id="invoiceMtypeContainer" class="mt-4" style="display:none;">
-            <label class="font-medium text-sm">Είδος Κίνησης (για Γ Κατηγορία)</label>
-            <select id="invoiceMtypeSelect" class="mt-1 p-2 border rounded w-full max-w-md">
-                <option value="">-- επιλέξτε είδος κίνησης --</option>
-            </select>
-        </div>
-
-        <!-- MTYPE για Αποδείξεις (receipt-level) -->
-        <div id="receiptMtypeContainerSummary" class="mt-4" style="display:none;">
-            <label class="font-medium text-sm">Είδος Κίνησης (για Αποδείξεις)</label>
-            <select id="receiptMtypeSelectSummary" class="mt-1 p-2 border rounded w-full max-w-md">
-                <option value="">-- επιλέξτε είδος κίνησης --</option>
-            </select>
-        </div>
-
-        <!-- FOOTER -->
-        <div class="mt-4 flex justify-between items-center">
-            <div class="text-sm text-gray-600">
-                Σημείωση: οι κατηγορίες προέρχονται από τα settings του πελάτη. Μπορείτε να ορίσετε/επεξεργαστείτε αυτές τις επιλογές στη σελίδα Credentials.
-            </div>
-
-            <div class="flex justify-end gap-2">
-                <form method="POST" action="{{ url_for('save_summary') }}" id="saveSummaryForm">
-                    <input type="hidden" name="summary_json" id="summaryJsonInput" value='{{ modal_summary | tojson | safe if modal_summary else "{}" }}'>
-                    <input type="hidden" id="summaryDataInput" name="summary_data" value='{}'>
-                    <button type="submit" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση στο Cache</button>
-                    <input type="hidden" id="scrapeUrlField" name="scrape_url" value="">
-                    <input type="hidden" id="scrapeCategoryField" name="scrape_category" value="">
-                    <input type="hidden" id="scrapeForceField" name="scrape_force" value="false">
-                </form>
-                <button type="button" id="modalCloseBtn" class="px-3 py-2 border rounded">Κλείσιμο</button>
-            </div>
-        </div>
-
-    </div>
-</div>
-
+{% include 'receipt_summary_modal.html' %}
 
 {# --- Repeat mapping modal (dynamic, populated by JS) --- #}
 <!-- REPEAT MAPPING MODAL (CLEAN) -->
@@ -2157,1113 +2087,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Helper: show transient flash (client-side)
-/* ====== Render summary lines into modal and wire handlers ====== */
- function renderSummaryLinesFromObject(obj) {
-  // keep a reference so other logic (toggles) can re-open the modal later
-  window._lastSummaryObj = obj || {};
-  // if the summary itself is a receipt, ensure the switch is checked so the
-  // user sees the receipts UI (dropdown, URL field, etc.)
-  try {
-    if (obj && obj.is_receipt) {
-      const sw = document.getElementById('useReceiptsSwitch');
-      if (sw && !sw.checked) {
-        sw.checked = true;
-        sw.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }
-  } catch (_) {}
-  const receiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked) || !!obj?.is_receipt;
-  const RECEIPT_CATEGORY = 'αποδειξακια';
-  // if the summary object itself is marked as requiring analysis, bypass the
-  // normal summary modal and open the dedicated receipt-classification modal
-  // open classification modal whenever we are handling receipts and
-  // analysis is active due to the user or the object, **and** repeat mode is
-  // enabled (per request).
-  const isRepeat = !!document.getElementById('repeatEntrySwitch')?.checked;
-  const summaryModalEl = document.getElementById('summaryModal');
-  const summaryVisible = !!(summaryModalEl && window.getComputedStyle(summaryModalEl).display !== 'none');
-  if (receiptsMode && isRepeat && isReceiptAnalysisOn() && !summaryVisible && !rcShouldSuppressModalSwitch()) {
-    // avoid showing the standard modal
-    try { hideSummaryModal(); } catch(_) {}
-    if (typeof openReceiptClassModal === 'function') {
-      openReceiptClassModal(obj);
-    }
-    return;
-  }
-
-  const container = document.getElementById('summaryLinesContainer');
-  const summaryInput = document.getElementById('summaryJsonInput');
-  if(!container || !summaryInput) return;
-
-  container.innerHTML = '';
-  let lines = [];
-  if (Array.isArray(obj.lines)) lines = obj.lines;
-  else if (obj.lines && typeof obj.lines === 'object') {
-    try { lines = Object.values(obj.lines).filter(Boolean); } catch(_) { lines = []; }
-  }
-  if ((!lines || !lines.length) && obj.raw && Array.isArray(obj.raw.lines)) {
-    lines = obj.raw.lines;
-  }
-
-  // Σε receipts μικτό mode κρύβουμε τη χειροκίνητη ταξινόμηση γραμμών.
-  // Παραμένουν ενεργά τα υπόλοιπα πεδία του modal (π.χ. MTYPE/αποθήκευση).
-  const header = document.getElementById('summaryLinesHeader');
-  const isReceiptSummary = !!(obj && (obj.is_receipt === true || /αποδει/i.test(String(obj.type_name || '') + ' ' + String(obj.category || ''))));
-  const hideLinesForReceiptsMixed = receiptsMode && isReceiptSummary && !isReceiptAnalysisOn();
-  if (header) header.style.display = hideLinesForReceiptsMixed ? 'none' : '';
-  container.style.display = hideLinesForReceiptsMixed ? 'none' : '';
-  if (hideLinesForReceiptsMixed) {
-    container.innerHTML = '';
-  }
-
-  if (!receiptsMode && (!lines || lines.length === 0)) {
-    return;
-  }
-
-  try {
-    const markCandidates = [obj && (obj.mark || obj.MARK || obj.Mark), obj && obj.number];
-    const rawMark = markCandidates.find(val => val != null && String(val).trim() !== '');
-    if (rawMark) {
-      const digits = String(rawMark).replace(/[^0-9]/g, '');
-      if (digits) {
-        window.__RC_pendingSummaryMarks = Array.isArray(window.__RC_pendingSummaryMarks)
-          ? window.__RC_pendingSummaryMarks
-          : [];
-        if (!window.__RC_pendingSummaryMarks.includes(digits)) {
-          window.__RC_pendingSummaryMarks.push(digits);
-        }
-        if (typeof window.__RC_autoSubmitRememberMark === 'function') {
-          try { window.__RC_autoSubmitRememberMark(digits); } catch(_) {}
-        }
-      }
-    }
-  } catch(_) {}
-
-  // helper to persist back to the hidden input
-    (function(){
-  function safeParseJson(s){
-    try { return JSON.parse(s || '{}'); } catch(e){ return {}; }
-  }
-
-  const summaryInput = document.getElementById('summaryJsonInput');
-  const container = document.getElementById('summaryLinesContainer');
-
-  // fallback server-side object (if Jinja rendered modal_summary)
-  const SERVER_MODAL_SUMMARY = (function(){
-    try { return {{ modal_summary | tojson | safe if modal_summary else 'null' }}; } catch(e){ return null; }
-  })()
-  try {
-    var __cc = document.getElementById('summaryLinesContainer');
-    if (__cc && __cc.dataset && __cc.dataset.phase === 'iife') {
-      // IIFE already rendered content -> skip second render path
-      if (typeof persist === 'function') try{ persist(); }catch(e){}
-      return;
-    }
-  } catch(e) {}
-;
-
-  // helper to get current summary object (prefer hidden input, fallback server var)
-  function getSummaryObj(){
-    if(summaryInput && summaryInput.value && summaryInput.value.trim() !== ''){
-      const parsed = safeParseJson(summaryInput.value);
-      if(parsed && typeof parsed === 'object') return parsed;
-    }
-    if(SERVER_MODAL_SUMMARY) return SERVER_MODAL_SUMMARY;
-    return { lines: [] };
-  }
-
-  // ensure each line has id and normalized keys
-  function normalizeSummary(summary){
-    if(!summary) summary = {};
-    let lines = [];
-    if (Array.isArray(summary.lines)) lines = summary.lines.slice();
-    else if (summary.lines && typeof summary.lines === 'object') {
-      try { lines = Object.values(summary.lines).filter(Boolean); } catch(_) { lines = []; }
-    }
-    if ((!lines || !lines.length) && summary.raw && Array.isArray(summary.raw.lines)) {
-      lines = summary.raw.lines.slice();
-    }
-    const norm = lines.map((l, idx) => {
-      const id = (l && (l.id || l.line_id)) ? String(l.id || l.line_id) : ('l' + idx);
-      return {
-        id: id,
-        description: l && (l.description || l.desc || '') || '',
-        amount: l && (l.amount || l.lineTotal || l.total || '') || '',
-        vat: l && (l.vat || l.vatRate || '') || '',
-        vatCategory: l && (l.vatCategory || l.vat_category || '') || '',
-        category: l && (l.category || l.cat || '') || ''
-      };
-    });
-    return { ...summary, lines: norm };
-  }
-
-  // build DOM for multiple lines (table)
-  const RECEIPT_VAT_OPTIONS = ['0%', '6%', '13%', '17%', '24%'];
-
-  function normalizeVatCategoryValue(raw){
-    let norm = (raw || '').toString().toLowerCase().trim().replace(',', '.');
-    if (/\b24\b|24%|24\.0/.test(norm)) return '24%';
-    if (/\b17\b|17%|17\.0/.test(norm)) return '17%';
-    if (/\b13\b|13%|13\.0/.test(norm)) return '13%';
-    if (/\b6\b|6%|6\.0/.test(norm)) return '6%';
-    if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|exempt|no\s*vat/.test(norm)) return '0%';
-    return (raw || '').toString().trim();
-  }
-
-  function renderVatCategorySelect(lineId, rawValue){
-    const selected = normalizeVatCategoryValue(rawValue || '');
-    const options = ['<option value="">-- επίλεξε --</option>'];
-    RECEIPT_VAT_OPTIONS.forEach(v => {
-      const sel = selected === v ? ' selected' : '';
-      options.push('<option value="' + escapeHtml(v) + '"' + sel + '>' + escapeHtml(v) + '</option>');
-    });
-    if (selected && !RECEIPT_VAT_OPTIONS.includes(selected)) {
-      options.push('<option value="' + escapeHtml(selected) + '" selected>' + escapeHtml(selected) + '</option>');
-    }
-    return '<select class="receipt-analysis-vat-category p-1 border rounded w-full" data-line-id="' +
-      escapeHtml(String(lineId || '')) + '">' + options.join('') + '</select>';
-  }
-
-  function buildTableHTML(lines, categories){
-    const table = document.createElement('table');
-    table.className = 'w-full border-collapse';
-    
-    // Check if Γ Category (για MTYPE column)
-    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
-    const isReceiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked);
-    const receiptsAnalysis = isReceiptAnalysisActive();
-    
-    const showLineMtype = isGCategory && isReceiptsMode && !receiptsAnalysis;
-
-    const thead = document.createElement('thead');
-    thead.className = 'bg-gray-100 sticky top-0';
-    thead.innerHTML = '<tr>' +
-      '<th class="p-2 border text-left">#</th>' +
-      '<th class="p-2 border text-left">ΦΠΑ Κατηγορία</th>' +
-      '<th class="p-2 border text-right">Καθαρή Αξία</th>' +
-      '<th class="p-2 border text-right">ΦΠΑ</th>' +
-      '<th class="p-2 border text-left">Κατηγορία Εξόδου</th>' +
-      (showLineMtype ? '<th class="p-2 border text-left">MTYPE</th>' : '') +
-      (receiptsAnalysis ? '<th class="p-2 border text-center">Ενέργεια</th>' : '') +
-      '</tr>';
-    table.appendChild(thead);
-
-    const tbody = document.createElement('tbody');
-    tbody.id = 'renderedLinesTableBody';
-    
-    // Για Γ Κατηγορία: εντοπισμός διπλότυπων γραμμών
-    const seenLines = new Map();
-    
-    lines.forEach((ln, idx) => {
-      const tr = document.createElement('tr');
-      tr.dataset.lineId = ln.id || ('l' + idx);
-      tr.dataset.vat = ln.vatCategory || ln.vat || '';
-
-      const lineId = ln.id || ('l' + idx);
-      const vatCatCell = receiptsAnalysis
-        ? renderVatCategorySelect(lineId, ln.vatCategory || ln.vat || '')
-        : '<span class="break-words">' + escapeHtml(ln.vatCategory || '') + '</span>';
-      const amountCell = receiptsAnalysis
-        ? '<input type="text" class="receipt-analysis-amount p-1 border rounded w-full text-right" data-line-id="' + escapeHtml(String(lineId)) + '" value="' + escapeHtml(String(ln.amount || '')) + '" placeholder="0,00">'
-        : escapeHtml(String(ln.amount || ''));
-      const vatCell = receiptsAnalysis
-        ? '<input type="text" class="receipt-analysis-vat p-1 border rounded w-full text-right" data-line-id="' + escapeHtml(String(lineId)) + '" value="' + escapeHtml(String(ln.vat || '')) + '" placeholder="0,00">'
-        : escapeHtml(String(ln.vat || ''));
-
-      tr.innerHTML = '<td class="p-2 border text-sm text-gray-600">' + (idx+1) + '</td>' +
-        '<td class="p-2 border">' + vatCatCell + '</td>' +
-        '<td class="p-2 border text-right">' + amountCell + '</td>' +
-        '<td class="p-2 border text-right">' + vatCell + '</td>' +
-        '<td class="p-2 border"></td>' +
-        (showLineMtype ? '<td class="p-2 border"></td>' : '') +
-        (receiptsAnalysis ? '<td class="p-2 border text-center"></td>' : '');
-
-      // create category select
-      const select = document.createElement('select');
-      select.className = 'expense-category p-1 border rounded w-full';
-      select.dataset.lineId = lineId;
-      select.name = `category[${select.dataset.lineId}]`;
-      const emptyOpt = document.createElement('option'); emptyOpt.value=''; emptyOpt.innerText='-- επίλεξε --';
-      select.appendChild(emptyOpt);
-      const categoriesForVat = receiptsAnalysis
-        ? getCategoriesForVatInReceiptAnalysis(ln.vatCategory || ln.vat || '', categories || [])
-        : (categories || []).filter(c => categoryAllowedForVat(c, ln.vatCategory || ln.vat || ''));
-      categoriesForVat.forEach(c => {
-        const o = document.createElement('option'); o.value = c; o.textContent = labelForCategory(c);
-
-        if(c === ln.category) o.selected = true;
-        select.appendChild(o);
-      });
-
-      const categoryCell = tr.querySelectorAll('td')[4];
-      categoryCell.appendChild(select);
-      
-      // Add MTYPE dropdown if Γ Category and receipts mode
-      if (showLineMtype) {
-        const mtypeCell = tr.querySelectorAll('td')[5];
-        const mtypeSelect = document.createElement('select');
-        mtypeSelect.className = 'line-mtype p-1 border rounded w-full';
-        mtypeSelect.dataset.lineId = lineId;
-        mtypeSelect.name = `mtype[${mtypeSelect.dataset.lineId}]`;
-        
-        const mtypeEmptyOpt = document.createElement('option');
-        mtypeEmptyOpt.value = '';
-        mtypeEmptyOpt.innerText = '-- επίλεξε --';
-        mtypeSelect.appendChild(mtypeEmptyOpt);
-        
-        const mtypeOptions = window.G_CATEGORY_DATA.mtype_options || [];
-        mtypeOptions.forEach(mt => {
-          const mtOpt = document.createElement('option');
-          mtOpt.value = mt.value;
-          mtOpt.textContent = mt.label + ' (' + mt.value + ')';
-          if (mt.value === ln.mtype) mtOpt.selected = true;
-          mtypeSelect.appendChild(mtOpt);
-        });
-        
-        mtypeCell.appendChild(mtypeSelect);
-      }
-
-      if (receiptsAnalysis) {
-        const actionCellIndex = showLineMtype ? 6 : 5;
-        const actionCell = tr.querySelectorAll('td')[actionCellIndex];
-        if (actionCell) {
-          const removeBtn = document.createElement('button');
-          removeBtn.type = 'button';
-          removeBtn.className = 'remove-summary-line px-2 py-1 rounded text-sm font-medium bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600';
-          removeBtn.dataset.lineId = lineId;
-          removeBtn.textContent = 'Αφαίρεση';
-          if ((lines || []).length <= 1) removeBtn.disabled = true;
-          actionCell.appendChild(removeBtn);
-        }
-      }
-
-      // Για Γ Κατηγορία: απόκρυψη διπλότυπων γραμμών
-      if (isGCategory) {
-        // Χρήση του _is_duplicate flag από το backend αν υπάρχει
-        if (ln._is_duplicate) {
-          tr.style.display = 'none';
-          tr.dataset.duplicate = 'true';
-        } else {
-          // Αν δεν υπάρχει flag, χρήσιμοποίησε το παλιό σύστημα detection
-          const lineKey = `${ln.vatCategory || ''}_${ln.amount || ''}_${ln.vat || ''}`;
-          
-          if (seenLines.has(lineKey)) {
-            // Διπλότυπη γραμμή - κρύψε την
-            tr.style.display = 'none';
-            tr.dataset.duplicate = 'true';
-          } else {
-            // Πρώτη φορά που βλέπουμε αυτή τη γραμμή
-            seenLines.set(lineKey, true);
-          }
-        }
-      }
-
-      tbody.appendChild(tr);
-    });
-
-    table.appendChild(tbody);
-    return table;
-  }
-
-  // build single-line buttons UI
-  function buildSingleLineHTML(line, categories){
-    const wrapper = document.createElement('div');
-    wrapper.className = 'border rounded p-4';
-    wrapper.dataset.lineId = line.id || 'l0';
-
-    const grid = document.createElement('div');
-    grid.className = 'mb-3 grid grid-cols-1 md:grid-cols-3 gap-3';
-    grid.innerHTML = '<div><strong>ΦΠΑ Κατηγορία</strong><div>' + escapeHtml(line.vatCategory || '') + '</div></div>' +
-      '<div><strong>Καθαρή Αξία</strong><div>' + escapeHtml(String(line.amount || '')) + '</div></div>' +
-      '<div><strong>ΦΠΑ</strong><div>' + escapeHtml(String(line.vat || '')) + '</div></div>';
-    wrapper.appendChild(grid);
-
-    const controls = document.createElement('div');
-    controls.className = 'mb-3';
-    const title = document.createElement('strong');
-    title.innerText = 'Επίλεξε Κατηγορία Εξόδου';
-    controls.appendChild(title);
-
-    const btnwrap = document.createElement('div');
-    btnwrap.id = 'renderedCategoryButtons';
-    btnwrap.className = 'mt-2 flex flex-wrap gap-2';
-    const singleLineCats = isReceiptAnalysisActive()
-      ? getCategoriesForVatInReceiptAnalysis(line.vatCategory || line.vat || '', categories || [])
-      : (categories || []).filter(c => categoryAllowedForVat(c, line.vatCategory || line.vat || ''));
-    singleLineCats.forEach(c => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'category-btn px-3 py-2 border rounded hover:bg-sky-50';
-      btn.dataset.cat = c;
-      btn.dataset.lineId = line.id || 'l0';
-      btn.innerText = (window.labelForCategory ? window.labelForCategory(c) : c);
-
-      if(c === line.category){
-        btn.classList.add('bg-sky-600');
-        btn.classList.add('text-white');
-      }
-      btnwrap.appendChild(btn);
-    });
-
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.className = 'px-3 py-2 border rounded text-sm ml-2 modal-warning-btn modal-warning-btn--danger dark:bg-red-600 dark:hover:bg-red-700 clear-category';
-    clearBtn.innerText = 'Καθαρισμός';
-    btnwrap.appendChild(clearBtn);
-
-    controls.appendChild(btnwrap);
-    wrapper.appendChild(controls);
-    
-    return wrapper;
-  }
-
-  function escapeHtml(s){
-    if(!s && s !== 0) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  // read categories from server-provided global or from a safe default
-  function getCategories(){
-    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
-    if (receiptsAnalysis) {
-      if (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length) {
-        return window.RECEIPT_CUSTOMER_CATEGORIES;
-      }
-      try {
-        const serverReceipt = {{ (receipt_custom_categories or []) | tojson | safe }} || [];
-        const cleanedReceipt = [];
-        (Array.isArray(serverReceipt) ? serverReceipt : []).forEach(item => {
-          const key = String(item || '').trim();
-          if (!key) return;
-          if (!cleanedReceipt.includes(key)) cleanedReceipt.push(key);
-        });
-        if (!cleanedReceipt.includes('αποδειξακια')) cleanedReceipt.unshift('αποδειξακια');
-        if (cleanedReceipt.length > 1) {
-          window.RECEIPT_CUSTOMER_CATEGORIES = cleanedReceipt.slice();
-          window.__RC_RECEIPT_CATEGORIES_CACHE = cleanedReceipt.slice();
-          return cleanedReceipt;
-        }
-      } catch(_) {}
-      return ['αποδειξακια'];
-    }
-    try {
-      const js = (function(){ try { return {{ customer_categories | tojson | safe }}; } catch(e){ return null; } })();
-      if(Array.isArray(js) && js.length) return js;
-    } catch(e){}
-    return window.CUSTOMER_CATEGORIES || [];
-  }
-
-  function normalizeCategoryListSafe(list){
-    const out = [];
-    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
-    (list || []).forEach(item => {
-      if(!item) return;
-      const key = String(item).trim();
-      if(!key) return;
-      if(!receiptsAnalysis && key.toLowerCase() === 'αποδειξακια') return;
-      if(!out.includes(key)) out.push(key);
-    });
-    return out;
-  }
-
-  function getRepeatMappingCategoriesForVat(vatKey){
-    try {
-      const rawVat = String(vatKey || '').trim();
-      const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(rawVat) : rawVat;
-      if (!normVat) return [];
-      const root = document.getElementById('repeatMappingList');
-      if (!root) return [];
-      const selectEls = Array.from(root.querySelectorAll('select[data-vat]'));
-      const sel = selectEls.find(s => String(s.dataset.vat || '').trim() === normVat);
-      if (!sel) return [];
-
-      const out = [];
-      sel.querySelectorAll('option').forEach(opt => {
-        const v = String(opt.value || '').trim();
-        if (!v) return;
-        if (!out.includes(v)) out.push(v);
-      });
-      return out;
-    } catch(_) {
-      return [];
-    }
-  }
-
-  function receiptCategoryAllowedForVatStrict(cat, vatKey){
-    try {
-      const key = String(cat || '').trim();
-      if (!key) return false;
-      const constraints = (window && window.CATEGORY_VAT_CONSTRAINTS && typeof window.CATEGORY_VAT_CONSTRAINTS === 'object')
-        ? window.CATEGORY_VAT_CONSTRAINTS
-        : {};
-      const allowed = constraints[key];
-      const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(vatKey) : String(vatKey || '').trim();
-      if (!normVat) return true;
-      if (!Array.isArray(allowed) || !allowed.length) return true;
-      return allowed.includes(normVat);
-    } catch(_) {
-      return true;
-    }
-  }
-
-  function getCategoriesForVatInReceiptAnalysis(vatKey, baseCategories){
-    let receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
-      ? window.RECEIPT_CUSTOMER_CATEGORIES.slice()
-      : (Array.isArray(window.__RC_RECEIPT_CATEGORIES_CACHE) ? window.__RC_RECEIPT_CATEGORIES_CACHE.slice() : []);
-
-    if ((!receiptOnly || !receiptOnly.length) && Array.isArray(baseCategories) && baseCategories.length) {
-      receiptOnly = baseCategories.slice();
-    }
-
-    if (!receiptOnly.includes('αποδειξακια')) receiptOnly.unshift('αποδειξακια');
-
-    return normalizeCategoryListSafe(receiptOnly).filter(c => receiptCategoryAllowedForVatStrict(c, vatKey));
-  }
-
-  function ensureSummaryCategories(){
-    const existing = getCategories();
-    const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
-    const existingNormalized = normalizeCategoryListSafe(existing || []);
-    const existingOnlyReceiptPlaceholder = existingNormalized.length === 1
-      && String(existingNormalized[0] || '').trim().toLowerCase() === 'αποδειξακια';
-
-    if (Array.isArray(existing) && existing.length && !(receiptsAnalysis && existingOnlyReceiptPlaceholder)) {
-      window.__SUMMARY_CATEGORIES_FETCHED = true;
-      return Promise.resolve(existing);
-    }
-    if (window.__SUMMARY_CATEGORIES_PROMISE) return window.__SUMMARY_CATEGORIES_PROMISE;
-    const vat = window._repeatModalVAT || "{{ vat or '' }}";
-    const mode = (isReceiptAnalysisActive() || isReceiptsOn()) ? 'receipts' : 'invoices';
-    const q = vat ? ('?vat=' + encodeURIComponent(vat) + '&mode=' + encodeURIComponent(mode)) : ('?mode=' + encodeURIComponent(mode));
-    window.__SUMMARY_CATEGORIES_PROMISE = fetch('/api/char_profiles' + q, {
-      credentials: 'same-origin'
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        const receiptsAnalysis = isReceiptAnalysisActive() || !!window.__RC_FORCE_RECEIPT_ANALYSIS;
-        const serverReceiptFallback = (function(){
-          try { return {{ (receipt_custom_categories or []) | tojson | safe }} || []; }
-          catch(_){ return []; }
-        })();
-        const receiptTags = (function(){
-          try {
-            if (j && Array.isArray(j.receipt_expense_tags) && j.receipt_expense_tags.length) return j.receipt_expense_tags.slice();
-            if (mode === 'receipts' && j && Array.isArray(j.expense_tags) && j.expense_tags.length) return j.expense_tags.slice();
-            if (mode === 'receipts' && j && Array.isArray(j.options) && j.options.length) return j.options.slice();
-            if (Array.isArray(serverReceiptFallback) && serverReceiptFallback.length) return serverReceiptFallback.slice();
-          } catch(_) {}
-          return [];
-        })();
-        const tags = (j && Array.isArray(j.expense_tags)) ? j.expense_tags.slice() : [];
-
-        const normalizedReceipt = normalizeCategoryListSafe(receiptTags);
-        if (!normalizedReceipt.includes('αποδειξακια')) normalizedReceipt.unshift('αποδειξακια');
-        window.RECEIPT_CUSTOMER_CATEGORIES = normalizedReceipt;
-        window.__RC_RECEIPT_CATEGORIES_CACHE = normalizedReceipt.slice();
-
-        if (!receiptsAnalysis && tags.length) {
-          const normalized = normalizeCategoryListSafe(tags);
-          CUSTOMER_CATEGORIES = normalized;
-          window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-        }
-
-        if (j && j.category_labels) {
-          window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
-          Object.assign(window.CATEGORY_LABELS, j.category_labels);
-        }
-        if (j && j.vat_constraints && typeof j.vat_constraints === 'object') {
-          try {
-            if (typeof setCategoryConstraints === 'function') setCategoryConstraints(j.vat_constraints);
-            window.CATEGORY_VAT_CONSTRAINTS = j.vat_constraints;
-          } catch(_) {}
-        }
-        window.__SUMMARY_CATEGORIES_FETCHED = true;
-        return getCategories();
-      })
-      .catch(() => {
-        window.__SUMMARY_CATEGORIES_FETCHED = true;
-        return getCategories();
-      })
-      .finally(() => {
-        window.__SUMMARY_CATEGORIES_PROMISE = null;
-      });
-    return window.__SUMMARY_CATEGORIES_PROMISE;
-  }
-  window.ensureSummaryCategories = ensureSummaryCategories;
-
-  // Setup invoice-level MTYPE dropdown for Γ Category
-  function setupInvoiceMtype(summary) {
-    const mtypeContainer = document.getElementById('invoiceMtypeContainer');
-    const mtypeSelect = document.getElementById('invoiceMtypeSelect');
-    
-    if (!mtypeContainer || !mtypeSelect) return;
-    
-    // Check if Γ Category
-    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
-    
-    // Check if repeat is enabled (με fallback αν η συνάρτηση δεν υπάρχει ακόμα)
-    let repeatEnabled = false;
-    try {
-      if (typeof repeatSwitchOn === 'function') {
-        repeatEnabled = repeatSwitchOn();
-      } else {
-        repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
-      }
-    } catch (e) {
-      repeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
-    }
-    
-    // Εμφάνιση dropdown μόνο για τιμολόγια (όχι για αποδείξεις).
-    const isReceiptsMode = isReceiptsOn();
-    const isSummaryReceipt = summary && (
-      summary.is_receipt === true ||
-      /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || ''))
-    );
-
-    const savedMtype = summary.mtype || summary.invoice_mtype || '';
-    const shouldShow = isGCategory && !isReceiptsMode && !isSummaryReceipt;
-    
-    if (shouldShow) {
-      // Show container
-      mtypeContainer.style.display = 'block';
-      
-      // Clear and populate dropdown
-      mtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
-      const movementTypes = window.G_CATEGORY_DATA.mtype_options || [];
-      
-      movementTypes.forEach(mt => {
-        const option = document.createElement('option');
-        option.value = mt.value;
-        option.textContent = mt.label + ' (' + mt.value + ')';
-        if (mt.value === savedMtype) {
-          option.selected = true;
-        }
-        mtypeSelect.appendChild(option);
-      });
-      
-      // Add change listener
-      mtypeSelect.addEventListener('change', function() {
-        const selectedValue = this.value;
-        // Save to localStorage
-        if (selectedValue) {
-          localStorage.setItem('saved_invoice_mtype', selectedValue);
-        }
-        // Update the summary JSON immediately
-        const summaryInput = document.getElementById('summaryJsonInput');
-        if (summaryInput) {
-          try {
-            const summary = JSON.parse(summaryInput.value || '{}');
-            summary.mtype = selectedValue;
-            summary.invoice_mtype = selectedValue;
-            summaryInput.value = JSON.stringify(summary);
-          } catch (e) {
-            console.warn('Failed to update summary mtype', e);
-          }
-        }
-        updateSummaryFromDom();
-      });
-    } else {
-      // Hide container if not needed
-      mtypeContainer.style.display = 'none';
-    }
-  }
-
-  // Setup receipt-level MTYPE dropdown (for receipts mode)
-  function setupReceiptMtype(summary) {
-    const mtypeContainer = document.getElementById('receiptMtypeContainerSummary');
-    const mtypeSelect = document.getElementById('receiptMtypeSelectSummary');
-    
-    if (!mtypeContainer || !mtypeSelect) return;
-    
-    // Check if we're in receipts mode
-    const isReceiptsMode = isReceiptsOn();
-    
-    // Check if Γ Category
-    const isGCategory = window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0;
-    
-    // Keep placeholder selected by default; prefill only if explicit value exists in current summary
-    const savedMtype = summary.mtype || summary.receipt_mtype || '';
-    
-    // Show dropdown if:
-    // 1. The summary represents a receipt OR we're in receipts mode
-    // 2. Is Γ Category
-    // Note: Αφαιρέθηκε η απαίτηση για repeatEnabled - το MTYPE εμφανίζεται πάντα για αποδείξεις Γ κατηγορίας
-    const isSummaryReceipt = summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || '')));
-    const shouldShow = (isSummaryReceipt || isReceiptsMode) && isGCategory;
-    
-    if (shouldShow) {
-      mtypeContainer.style.display = 'block';
-      
-      // Clear and populate dropdown
-      mtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
-      const movementTypes = window.G_CATEGORY_DATA.mtype_options || [];
-      
-      movementTypes.forEach(mt => {
-        const option = document.createElement('option');
-        option.value = mt.value;
-        option.textContent = mt.label + ' (' + mt.value + ')';
-        if (mt.value === savedMtype) {
-          option.selected = true;
-        }
-        mtypeSelect.appendChild(option);
-      });
-      
-      // Add change listener
-      mtypeSelect.addEventListener('change', function() {
-        const selectedValue = this.value;
-        // Save to localStorage
-        if (selectedValue) {
-          localStorage.setItem('saved_receipt_mtype', selectedValue);
-        }
-        updateSummaryFromDom();
-      });
-    } else {
-      mtypeContainer.style.display = 'none';
-    }
-  }
-
-  // render everything into the container
-  function renderSummaryLines(){
-    if(!container) return;
-    const summary = normalizeSummary(getSummaryObj());
-    const receiptsAnalysis = isReceiptAnalysisActive() || summary.receipt_analysis_enabled === true;
-    window.__RC_FORCE_RECEIPT_ANALYSIS = receiptsAnalysis;
-    const isReceiptSummary = !!(summary && (summary.is_receipt === true || /αποδει/i.test(String(summary.type_name || '') + ' ' + String(summary.category || ''))));
-    const hideLinesForReceiptsMixed = isReceiptsOn() && isReceiptSummary && !receiptsAnalysis;
-    const headerEl = document.getElementById('summaryLinesHeader');
-    if (headerEl) headerEl.style.display = hideLinesForReceiptsMixed ? 'none' : '';
-    container.style.display = hideLinesForReceiptsMixed ? 'none' : '';
-
-    if (hideLinesForReceiptsMixed) {
-      container.innerHTML = '';
-      try {
-        summary.receipt_analysis_enabled = false;
-        if (Array.isArray(summary.lines)) {
-          summary.lines = summary.lines.map((line, idx) => {
-            const nextLine = Object.assign({}, line || {});
-            if (!nextLine.id) nextLine.id = 'l' + idx;
-            if (!nextLine.category) nextLine.category = 'αποδειξακια';
-            return nextLine;
-          });
-        }
-        const inputEl = document.getElementById('summaryJsonInput');
-        if (inputEl) inputEl.value = JSON.stringify(summary);
-      } catch (_) {}
-      setupInvoiceMtype(summary);
-      setupReceiptMtype(summary);
-      return;
-    }
-
-    let lines = summary.lines || [];
-    if (receiptsAnalysis && (!Array.isArray(lines) || !lines.length)) {
-      lines = [{ id: 'r0', description: '', amount: '', vat: '', vatCategory: '', category: '' }];
-      summary.lines = lines;
-      try {
-        summary.receipt_analysis_enabled = true;
-        const inputEl = document.getElementById('summaryJsonInput');
-        if (inputEl) inputEl.value = JSON.stringify(summary);
-      } catch (_) {}
-    }
-    const categories = getCategories();
-
-    // clear container
-    container.innerHTML = '';
-
-    const hasOnlyReceiptPlaceholder = Array.isArray(categories)
-      && categories.length === 1
-      && String(categories[0] || '').trim().toLowerCase() === 'αποδειξακια';
-    const mustAwaitCategoryFetch = !window.__SUMMARY_CATEGORIES_FETCHED
-      && ((!categories || !categories.length) || (receiptsAnalysis && hasOnlyReceiptPlaceholder));
-
-    if (mustAwaitCategoryFetch) {
-      const loading = document.createElement('div');
-      loading.className = 'mt-2 text-sm text-gray-600';
-      loading.innerText = 'Φόρτωση κατηγοριών...';
-      container.appendChild(loading);
-      ensureSummaryCategories().then(() => {
-        renderSummaryLines();
-      });
-      return;
-    }
-
-    // Title (optional)
-    // const info = document.createElement('div'); info.className='mb-2 text-sm text-gray-700'; container.appendChild(info);
-
-    if(lines.length === 0){
-      const warn = document.createElement('div');
-      warn.className = 'mt-4 p-3 bg-yellow-50 rounded';
-      warn.innerText = 'Δεν βρέθηκαν γραμμές για αυτό το MARK.';
-      container.appendChild(warn);
-      wireInteractions();
-    try{ container.dataset.phase = 'iife'; }catch(e){}
- // ensure handlers cleared
-      // Setup invoice-level MTYPE dropdown (για Γ Category)
-      setupInvoiceMtype(summary);
-      
-      // Setup receipt-level MTYPE dropdown (για Αποδείξεις)
-      setupReceiptMtype(summary);
-      return;
-    }
-
-    if(lines.length === 1 && !receiptsAnalysis){
-      container.appendChild(buildSingleLineHTML(lines[0], categories));
-    } else {
-      container.appendChild(buildTableHTML(lines, categories));
-      if (receiptsAnalysis) {
-        const controls = document.createElement('div');
-        controls.className = 'mt-2 flex justify-end';
-        const addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.className = 'px-3 py-1 rounded text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-600';
-        addBtn.innerText = 'Προσθήκη γραμμής';
-        addBtn.addEventListener('click', function(){
-          try {
-            const summaryInput = document.getElementById('summaryJsonInput');
-            const obj = JSON.parse(summaryInput?.value || '{}');
-            obj.lines = Array.isArray(obj.lines) ? obj.lines : [];
-            obj.lines.push({
-              id: 'r' + obj.lines.length,
-              description: '',
-              amount: '',
-              vat: '',
-              vatCategory: '',
-              category: ''
-            });
-            obj.receipt_analysis_enabled = true;
-            if (summaryInput) summaryInput.value = JSON.stringify(obj);
-            renderSummaryLines();
-          } catch(_) {}
-        });
-        controls.appendChild(addBtn);
-        container.appendChild(controls);
-      }
-    }
-
-    // after building DOM, wire events
-    wireInteractions();
-    
-    // Setup invoice-level MTYPE dropdown (για Γ Category)
-    setupInvoiceMtype(summary);
-    
-    // Setup receipt-level MTYPE dropdown (για Αποδείξεις)
-    setupReceiptMtype(summary);
-  }
-
-  // update hidden input from current DOM selections/buttons
-
-  function wireInteractions(){
-    function parseMoneyInput(raw){
-      const txt = String(raw || '').trim();
-      if (!txt) return NaN;
-      const normalized = txt.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
-      const val = parseFloat(normalized);
-      return Number.isFinite(val) ? val : NaN;
-    }
-
-    function formatMoneyOutput(val){
-      if (!Number.isFinite(val)) return '';
-      return val.toFixed(2).replace('.', ',');
-    }
-
-    function vatRateFromCategory(rawVatCategory){
-      const normalized = normalizeVatCategoryValue(rawVatCategory);
-      if (!normalized) return NaN;
-      const n = parseFloat(String(normalized).replace('%', ''));
-      return Number.isFinite(n) ? n : NaN;
-    }
-
-    function autoFillVatForLine(lineId){
-      if (!lineId) return;
-      const vatCategoryInput = document.querySelector('.receipt-analysis-vat-category[data-line-id="' + lineId + '"]');
-      const amountInput = document.querySelector('.receipt-analysis-amount[data-line-id="' + lineId + '"]');
-      const vatInput = document.querySelector('.receipt-analysis-vat[data-line-id="' + lineId + '"]');
-      if (!vatCategoryInput || !amountInput || !vatInput) return;
-      const amount = parseMoneyInput(amountInput.value || '');
-      const vatRate = vatRateFromCategory(vatCategoryInput.value || '');
-      if (!Number.isFinite(amount) || !Number.isFinite(vatRate)) return;
-      const vatValue = amount * (vatRate / 100);
-      vatInput.value = formatMoneyOutput(vatValue);
-    }
-
-    function autoFillAmountFromVatForLine(lineId){
-      if (!lineId) return;
-      const vatCategoryInput = document.querySelector('.receipt-analysis-vat-category[data-line-id="' + lineId + '"]');
-      const amountInput = document.querySelector('.receipt-analysis-amount[data-line-id="' + lineId + '"]');
-      const vatInput = document.querySelector('.receipt-analysis-vat[data-line-id="' + lineId + '"]');
-      if (!vatCategoryInput || !amountInput || !vatInput) return;
-      const vatRate = vatRateFromCategory(vatCategoryInput.value || '');
-      const vatValue = parseMoneyInput(vatInput.value || '');
-      if (!Number.isFinite(vatRate) || !Number.isFinite(vatValue) || vatRate <= 0) return;
-      const amount = vatValue * 100 / vatRate;
-      amountInput.value = formatMoneyOutput(amount);
-    }
-
-    // remove old handlers by cloning nodes if necessary (to avoid duplicate attachments)
-    document.querySelectorAll('select.expense-category').forEach(sel => {
-      sel.addEventListener('change', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        // Όταν αλλάζει μια category, ενημέρωσε και τις hidden duplicate lines με το ίδιο VAT
-        const lineId = this.dataset.lineId || '';
-        const tr = document.querySelector(`[data-line-id="${lineId}"]`);
-        const vatCat = tr ? tr.dataset.vat : '';
-        const newCat = this.value;
-        
-        console.log('📝 Category changed:', {lineId, vatCat, newCat, trFound: !!tr});
-        
-        if (vatCat && newCat) {
-          // Βρες όλες τις γραμμές με το ίδιο VAT και ενημέρωσε τις
-          const allRows = document.querySelectorAll(`[data-line-id][data-vat="${vatCat}"]`);
-          console.log(`  Found ${allRows.length} rows with VAT="${vatCat}"`);
-          
-          allRows.forEach(row => {
-            const rowLid = row.dataset.lineId;
-            if (rowLid && rowLid !== lineId) {
-              // Αυτή είναι duplicate line με ίδιο VAT - ενημέρωσέ της
-              const dupSel = row.querySelector(`select.expense-category[data-line-id="${rowLid}"]`);
-              console.log(`  → Updating duplicate ${rowLid} to ${newCat}:`, {dupSelFound: !!dupSel, currentValue: dupSel ? dupSel.value : 'N/A'});
-              if (dupSel && dupSel.value !== newCat) {
-                dupSel.value = newCat;
-                console.log(`    ✓ Updated`);
-              }
-            }
-          });
-        }
-        
-        updateSummaryFromDom();
-      });
-    });
-
-    document.querySelectorAll('.receipt-analysis-vat-category').forEach(sel => {
-      sel.addEventListener('keydown', function(ev){
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      });
-      sel.addEventListener('change', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        const lineId = this.dataset.lineId || '';
-        try {
-          const catSel = document.querySelector('select.expense-category[data-line-id="' + lineId + '"]');
-          if (catSel) {
-            const previous = catSel.value || '';
-            const allowedCategories = getCategoriesForVatInReceiptAnalysis(this.value || '', getCategories() || []);
-            catSel.innerHTML = '';
-            const empty = document.createElement('option');
-            empty.value = '';
-            empty.innerText = '-- επίλεξε --';
-            catSel.appendChild(empty);
-            allowedCategories.forEach(c => {
-              const opt = document.createElement('option');
-              opt.value = c;
-              opt.textContent = (typeof labelForCategory === 'function' ? labelForCategory(c) : c);
-              if (previous && previous === c) opt.selected = true;
-              catSel.appendChild(opt);
-            });
-            if (previous && !allowedCategories.includes(previous)) catSel.value = '';
-          }
-        } catch(_) {}
-        autoFillVatForLine(lineId);
-        updateSummaryFromDom();
-      });
-    });
-
-    document.querySelectorAll('.receipt-analysis-amount').forEach(inp => {
-      inp.addEventListener('keydown', function(ev){
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      });
-      inp.addEventListener('input', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        const lineId = this.dataset.lineId || '';
-        autoFillVatForLine(lineId);
-        updateSummaryFromDom();
-      });
-      inp.addEventListener('change', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        const lineId = this.dataset.lineId || '';
-        autoFillVatForLine(lineId);
-        updateSummaryFromDom();
-      });
-    });
-
-    document.querySelectorAll('.receipt-analysis-vat').forEach(inp => {
-      inp.addEventListener('keydown', function(ev){
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      });
-      inp.addEventListener('input', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        const lineId = this.dataset.lineId || '';
-        autoFillAmountFromVatForLine(lineId);
-        updateSummaryFromDom();
-      });
-      inp.addEventListener('change', function(){
-        try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
-        const lineId = this.dataset.lineId || '';
-        autoFillAmountFromVatForLine(lineId);
-        updateSummaryFromDom();
-      });
-    });
-
-    const summaryModal = document.getElementById('summaryModal');
-    if (summaryModal && !summaryModal.__rc_receipt_analysis_enter_guard) {
-      summaryModal.addEventListener('keydown', function(ev){
-        if (ev.key !== 'Enter') return;
-        const target = ev.target;
-        if (!target || !(target instanceof HTMLElement)) return;
-        if (!target.closest('#summaryLinesContainer')) return;
-        if (!target.matches('.receipt-analysis-amount, .receipt-analysis-vat, .receipt-analysis-vat-category')) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-      }, true);
-      summaryModal.__rc_receipt_analysis_enter_guard = true;
-    }
-
-    const linesContainer = document.getElementById('summaryLinesContainer');
-    if (linesContainer && !linesContainer.__rc_edit_guard_bound) {
-      const markEditing = () => { try { rcMarkSummaryEditingWindow(4500); } catch(_) {} };
-      linesContainer.addEventListener('focusin', markEditing, true);
-      linesContainer.addEventListener('click', markEditing, true);
-      linesContainer.addEventListener('change', markEditing, true);
-      linesContainer.__rc_edit_guard_bound = true;
-    }
-
-    document.querySelectorAll('.remove-summary-line').forEach(btn => {
-      btn.addEventListener('click', function(){
-        const lineId = String(this.dataset.lineId || '').trim();
-        if (!lineId) return;
-        try {
-          const summaryInput = document.getElementById('summaryJsonInput');
-          const obj = JSON.parse(summaryInput?.value || '{}');
-          const current = Array.isArray(obj.lines) ? obj.lines : [];
-          const next = current.filter(l => String((l && (l.id || l.line_id)) || '') !== lineId);
-          obj.lines = next.length ? next : [{ id: 'r0', description: '', amount: '', vat: '', vatCategory: '', category: '' }];
-          obj.receipt_analysis_enabled = true;
-          if (summaryInput) summaryInput.value = JSON.stringify(obj);
-          renderSummaryLines();
-        } catch(_) {}
-      });
-    });
-    
-    // MTYPE dropdowns (line-level for receipts)
-    document.querySelectorAll('select.line-mtype').forEach(sel => {
-      sel.addEventListener('change', function(){
-        updateSummaryFromDom();
-      });
-    });
-
-    // category buttons (single-line)
-    document.querySelectorAll('#renderedCategoryButtons .category-btn').forEach(btn => {
-      btn.addEventListener('click', function(){
-        const lineId = this.dataset.lineId || '';
-        // toggle this button active/inactive
-        document.querySelectorAll('#renderedCategoryButtons .category-btn').forEach(b => {
-          if(b.dataset.lineId === lineId){
-            b.classList.remove('bg-sky-600'); b.classList.remove('text-white');
-          }
-        });
-        const isActive = !(this.classList.contains('bg-sky-600'));
-        if(isActive){
-          this.classList.add('bg-sky-600'); this.classList.add('text-white');
-        } else {
-          this.classList.remove('bg-sky-600'); this.classList.remove('text-white');
-        }
-        updateSummaryFromDom();
-      });
-    });
-
-    // clear buttons
-    document.querySelectorAll('.clear-category').forEach(cb => {
-      cb.addEventListener('click', function(){
-        const parent = cb.closest('[data-line-id]');
-        if(!parent) return;
-        const lid = parent.dataset.lineId || '';
-        // clear UI
-        document.querySelectorAll('#renderedCategoryButtons .category-btn').forEach(b => {
-          if(b.dataset.lineId === lid){ b.classList.remove('bg-sky-600'); b.classList.remove('text-white'); }
-        });
-        // if there is a select for same line (unlikely in single-line view) clear it
-        const sel = document.querySelector('select.expense-category[data-line-id="' + lid + '"]');
-        if(sel) sel.value = '';
-        updateSummaryFromDom();
-      });
-    });
-  }
-
-  // watch hidden input changes (some flows set it programmatically before opening modal)
-  let lastSummaryValue = summaryInput ? summaryInput.value : '';
-  function pollSummaryInput(){
-    const now = summaryInput ? summaryInput.value : '';
-    if(now !== lastSummaryValue){
-      lastSummaryValue = now;
-      // Avoid re-rendering while user edits categories in the open modal.
-      try {
-        const modalEl = document.getElementById('summaryModal');
-        const visible = modalEl && window.getComputedStyle(modalEl).display !== 'none';
-        const lastEdit = window.__RC_LAST_SUMMARY_EDIT || 0;
-        if (visible && lastEdit && (Date.now() - lastEdit) < 800) {
-          return;
-        }
-      } catch(_) {}
-      // re-render so UI matches new data
-      renderSummaryLines();
-    }
-  }
-  let pollTimer = null;
-  try {
-    pollTimer = setInterval(pollSummaryInput, 250);
-    window.addEventListener('beforeunload', ()=> { if(pollTimer) clearInterval(pollTimer); });
-  } catch(e){ /* ignore */ }
-
-  // ensure initial render on load (modal might be shown later)
-  try { renderSummaryLines(); } catch(e){ console.warn('initial renderSummaryLines failed', e); }
-
-  // also re-render whenever modal is shown (in case show logic sets display later)
-  const modal = document.getElementById('summaryModal');
-  if(modal){
-    // intercept style changes to detect show
-    const obs = new MutationObserver(muts => {
-      muts.forEach(m => {
-        if(m.attributeName === 'style' || m.attributeName === 'class'){
-          const disp = window.getComputedStyle(modal).display;
-          if(disp !== 'none'){
-            // modal visible -> render (ensure DOM inside ready)
-            setTimeout(renderSummaryLines, 10);
-            setTimeout(relabelSummaryModal, 20);
-
-          }
-        }
-      });
-    });
-
-    document.querySelectorAll('.receipt-analysis-vat-category, .receipt-analysis-amount, .receipt-analysis-vat').forEach(inp => {
-      inp.addEventListener('change', function(){
-        try { updateSummaryFromDom(); } catch(_) {}
-      });
-      inp.addEventListener('input', function(){
-        try { updateSummaryFromDom(); } catch(_) {}
-      });
-    });
-    try { obs.observe(modal, { attributes: true, attributeFilter:['style','class'] }); } catch(e){ /* ignore */ }
-  }
-
-  // expose for debug and for RC_AUTO_INJECT modal
-  window._renderSummaryLines = renderSummaryLines;
-  window.buildTableHTML = buildTableHTML;
-  window.buildSingleLineHTML = buildSingleLineHTML;
-  window.wireInteractions = wireInteractions;
-  window.updateSummaryFromDom = updateSummaryFromDom;
-})();
+{% include 'receipt_summary_analysis_logic.html' %}
   // Μην εκτελείς τον legacy renderer παρακάτω — προκαλεί διπλή εμφάνιση γραμμών.
   return;
   function persist() {
@@ -5170,6 +3994,8 @@ function hideSummaryModal(){
   const modal = document.getElementById('summaryModal');
   if(!modal) return;
   modal.style.display = 'none';
+  try { window.__RC_RECEIPT_ANALYSIS_LOCK = false; } catch(_) {}
+  try { window.__RC_FORCE_RECEIPT_ANALYSIS = false; } catch(_) {}
   try { if (typeof window.clearSummaryModalUI === 'function') window.clearSummaryModalUI(); } catch(_) {}
   try {
     const api = window.WaitOverlay;
@@ -5455,6 +4281,13 @@ function prefillSummaryModal(){
       );
       if (analysisUiActive || isReceiptAnalysisOn() || data.receipt_analysis_enabled === true) {
         data.receipt_analysis_enabled = true;
+        try {
+          const isReceipt = !!(data.is_receipt === true || /αποδει/i.test(String(data.type_name || '') + ' ' + String(data.category || '')));
+          if (isReceipt) {
+            window.__RC_RECEIPT_ANALYSIS_LOCK = true;
+            window.__RC_FORCE_RECEIPT_ANALYSIS = true;
+          }
+        } catch(_) {}
       }
 
       input.value = JSON.stringify(data);
@@ -6635,6 +5468,59 @@ try {
 
       // Prepare summary object για modal
       const receiptAnalysisEnabled = isReceiptAnalysisOn();
+      const __rcParseMoney = (raw) => {
+        try {
+          let txt = String(raw || '').trim().replace(/\s+/g, '');
+          if (!txt) return NaN;
+          const hasComma = txt.includes(',');
+          const hasDot = txt.includes('.');
+          if (hasComma && hasDot) {
+            if (txt.lastIndexOf(',') > txt.lastIndexOf('.')) txt = txt.replace(/\./g, '').replace(',', '.');
+            else txt = txt.replace(/,/g, '');
+          } else if (hasComma) {
+            txt = txt.replace(',', '.');
+          } else if (hasDot) {
+            if (/^-?\d{1,3}(\.\d{3})+$/.test(txt)) txt = txt.replace(/\./g, '');
+          }
+          const cleaned = txt.replace(/[^0-9.-]/g, '');
+          const val = parseFloat(cleaned);
+          return Number.isFinite(val) ? val : NaN;
+        } catch(_) { return NaN; }
+      };
+
+      let __urlVatFromAnalysis = NaN;
+      let __urlNetFromAnalysis = NaN;
+      try {
+        if (j && j.vat_analysis && typeof j.vat_analysis === 'object') {
+          let vatSum = 0;
+          let netSum = 0;
+          let hasAny = false;
+          Object.keys(j.vat_analysis).forEach(k => {
+            if (String(k) === '__inferred__') return;
+            const row = j.vat_analysis[k] || {};
+            const vatVal = __rcParseMoney(row.vat_amount || row.vat || '');
+            const netVal = __rcParseMoney(row.net_amount || row.net || row.gross_amount || '');
+            if (Number.isFinite(vatVal)) { vatSum += vatVal; hasAny = true; }
+            if (Number.isFinite(netVal)) { netSum += netVal; hasAny = true; }
+          });
+          if (hasAny) {
+            __urlVatFromAnalysis = vatSum;
+            __urlNetFromAnalysis = netSum;
+          }
+        }
+      } catch(_) {}
+
+      const __fmtMoney = (v, fallback='') => Number.isFinite(v) ? v.toFixed(2).replace('.', ',') : fallback;
+      const __urlTotal = __rcParseMoney(j.total_amount || (j.raw && (j.raw.totalValue || j.raw.total_amount || j.raw.total)) || '');
+      const __urlVatRaw = __rcParseMoney((j.raw && (j.raw.totalVatAmount || j.raw.totalVat || j.raw.vat_total)) || j.total_vat || '');
+      const __urlVat = Number.isFinite(__urlVatRaw) ? __urlVatRaw : __urlVatFromAnalysis;
+      const __urlNetFromRaw = __rcParseMoney((j.raw && (j.raw.totalNetValue || j.raw.net_total || j.raw.netAmount)) || j.total_net || '');
+      const __urlNet = Number.isFinite(__urlNetFromRaw)
+        ? __urlNetFromRaw
+        : (Number.isFinite(__urlNetFromAnalysis)
+            ? __urlNetFromAnalysis
+            : (Number.isFinite(__urlTotal) && Number.isFinite(__urlVat) ? (__urlTotal - __urlVat) : __urlTotal));
+
       const summaryObj = {
         mark: nextMark,
         AA: j.progressive_aa || '',
@@ -6642,14 +5528,19 @@ try {
         Name: j.issuer_name || '',
         issueDate: j.issue_date || '',
         type_name: 'ΑΠΟΔΕΙΞΗ',
-        totalValue: j.total_amount || '',
-        totalNetValue: j.total_amount || '',
-        totalVatAmount: (j.raw && (j.raw.totalVatAmount || j.raw.totalVat)) || '',
+        totalValue: __fmtMoney(__urlTotal, j.total_amount || ''),
+        totalNetValue: __fmtMoney(__urlNet, j.total_amount || ''),
+        totalVatAmount: __fmtMoney(__urlVat, (j.raw && (j.raw.totalVatAmount || j.raw.totalVat)) || ''),
           lines: [],
             receipt_analysis_enabled: receiptAnalysisEnabled,
             vat_analysis: (j.vat_analysis || (j.raw && j.raw.vat_analysis) || null),
             vat_analysis_inferred: !!(j.vat_analysis_inferred || (j.raw && j.raw.vat_analysis_inferred))
       ,
+        receipt_url_totals: {
+        net: Number.isFinite(__urlNet) ? __urlNet : '',
+        vat: Number.isFinite(__urlVat) ? __urlVat : '',
+        total: Number.isFinite(__urlTotal) ? __urlTotal : ''
+        },
   type: 'ΑΠΟΔΕΙΞΗ',
         category: (receiptAnalysisEnabled ? '' : 'αποδειξακια'),
   is_receipt: true,
@@ -6737,6 +5628,60 @@ try {
           description: (j.raw && (j.raw.description || '')) || '',
           category: ''
         });
+      }
+
+      try {
+        let lineNet = 0;
+        let lineVat = 0;
+        (Array.isArray(summaryObj.lines) ? summaryObj.lines : []).forEach(ln => {
+          const netVal = __rcParseMoney((ln && (ln.amount || ln.lineTotal || ln.total)) || '');
+          const vatVal = __rcParseMoney((ln && (ln.vat || ln.vatRate)) || '');
+          if (Number.isFinite(netVal)) lineNet += netVal;
+          if (Number.isFinite(vatVal)) lineVat += vatVal;
+        });
+
+        const curTotals = (summaryObj.receipt_url_totals && typeof summaryObj.receipt_url_totals === 'object')
+          ? summaryObj.receipt_url_totals
+          : {};
+        let baseTotal = __rcParseMoney(curTotals.total);
+        let baseVat = __rcParseMoney(curTotals.vat);
+        let baseNet = __rcParseMoney(curTotals.net);
+
+        if (!Number.isFinite(baseVat) && lineVat > 0) baseVat = lineVat;
+        if (!Number.isFinite(baseNet) && lineNet > 0) baseNet = lineNet;
+        if (!Number.isFinite(baseTotal)) {
+          const jTotal = __rcParseMoney(j.total_amount || (j.raw && (j.raw.totalValue || j.raw.total_amount || j.raw.total)) || '');
+          if (Number.isFinite(jTotal)) baseTotal = jTotal;
+        }
+        if (!Number.isFinite(baseTotal) && Number.isFinite(baseNet) && Number.isFinite(baseVat)) baseTotal = baseNet + baseVat;
+        if (!Number.isFinite(baseNet) && Number.isFinite(baseTotal) && Number.isFinite(baseVat)) baseNet = baseTotal - baseVat;
+        if (!Number.isFinite(baseVat) && Number.isFinite(baseTotal) && Number.isFinite(baseNet)) baseVat = baseTotal - baseNet;
+
+        summaryObj.receipt_url_totals = {
+          net: Number.isFinite(baseNet) ? baseNet : '',
+          vat: Number.isFinite(baseVat) ? baseVat : '',
+          total: Number.isFinite(baseTotal) ? baseTotal : ''
+        };
+      } catch(_) {}
+
+      try {
+        const allowedNonZero = [];
+        if (j.vat_analysis && typeof j.vat_analysis === 'object') {
+          Object.keys(j.vat_analysis).forEach(k => {
+            if (String(k) === '__inferred__') return;
+            const nk = normalizeVatCategoryValue(k);
+            if (nk && nk !== '0%' && !allowedNonZero.includes(nk)) allowedNonZero.push(nk);
+          });
+        }
+        if (!allowedNonZero.length && Array.isArray(summaryObj.lines)) {
+          summaryObj.lines.forEach(ln => {
+            const nk = normalizeVatCategoryValue((ln && (ln.vatCategory || ln.vat_category)) || '');
+            if (nk && nk !== '0%' && !allowedNonZero.includes(nk)) allowedNonZero.push(nk);
+          });
+        }
+        summaryObj.receipt_allowed_vat_nonzero = allowedNonZero;
+      } catch(_) {
+        summaryObj.receipt_allowed_vat_nonzero = summaryObj.receipt_allowed_vat_nonzero || [];
       }
 
       // Populate modal inputs
@@ -6858,7 +5803,330 @@ function initializeSelectAllCheckbox() {
   }
 }
 
+function __rcParseMoneyForTotals(raw){
+  let txt = String(raw || '').trim().replace(/\s+/g, '');
+  if (!txt) return NaN;
+  const hasComma = txt.includes(',');
+  const hasDot = txt.includes('.');
+  if (hasComma && hasDot) {
+    if (txt.lastIndexOf(',') > txt.lastIndexOf('.')) txt = txt.replace(/\./g, '').replace(',', '.');
+    else txt = txt.replace(/,/g, '');
+  } else if (hasComma) {
+    txt = txt.replace(',', '.');
+  } else if (hasDot) {
+    if (/^-?\d{1,3}(\.\d{3})+$/.test(txt)) txt = txt.replace(/\./g, '');
+  }
+  const cleaned = txt.replace(/[^0-9.-]/g, '');
+  const val = parseFloat(cleaned);
+  return Number.isFinite(val) ? val : NaN;
+}
+
+function __rcNormalizeVatCategory(raw){
+  let norm = (raw || '').toString().toLowerCase().trim().replace(',', '.');
+  if (/\b24\b|24%|24\.0/.test(norm)) return '24%';
+  if (/\b17\b|17%|17\.0/.test(norm)) return '17%';
+  if (/\b13\b|13%|13\.0/.test(norm)) return '13%';
+  if (/\b6\b|6%|6\.0/.test(norm)) return '6%';
+  if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|exempt|no\s*vat/.test(norm)) return '0%';
+  return (raw || '').toString().trim();
+}
+
+function __rcGetAllowedNonZeroVatFromSummary(summary){
+  const src = (summary && typeof summary === 'object') ? summary : {};
+  const out = [];
+  try {
+    const explicit = Array.isArray(src.receipt_allowed_vat_nonzero) ? src.receipt_allowed_vat_nonzero : [];
+    explicit.forEach(v => {
+      const n = __rcNormalizeVatCategory(v);
+      if (n && n !== '0%' && !out.includes(n)) out.push(n);
+    });
+  } catch(_) {}
+  try {
+    if (!out.length && src.vat_analysis && typeof src.vat_analysis === 'object') {
+      Object.keys(src.vat_analysis).forEach(k => {
+        if (String(k) === '__inferred__') return;
+        const n = __rcNormalizeVatCategory(k);
+        if (n && n !== '0%' && !out.includes(n)) out.push(n);
+      });
+    }
+  } catch(_) {}
+  return out;
+}
+
+function __rcReceiptUrlTotalsBaseline(summary){
+  const src = (summary && typeof summary === 'object') ? summary : {};
+  const baseline = (src.receipt_url_totals && typeof src.receipt_url_totals === 'object')
+    ? src.receipt_url_totals
+    : ((src.url_totals && typeof src.url_totals === 'object') ? src.url_totals : {});
+
+  const total = __rcParseMoneyForTotals(
+    baseline.total
+    ?? baseline.totalValue
+    ?? src.totalValue
+    ?? (src.raw && (src.raw.totalValue || src.raw.total_amount || src.raw.total))
+  );
+  const vat = __rcParseMoneyForTotals(
+    baseline.vat
+    ?? baseline.totalVatAmount
+    ?? src.totalVatAmount
+    ?? (src.raw && (src.raw.totalVatAmount || src.raw.totalVat || src.raw.vat_total))
+  );
+  let net = __rcParseMoneyForTotals(
+    baseline.net
+    ?? baseline.totalNetValue
+    ?? src.totalNetValue
+    ?? (src.raw && (src.raw.totalNetValue || src.raw.net_total || src.raw.netAmount))
+  );
+
+  if ((!Number.isFinite(net) || !Number.isFinite(vat) || !Number.isFinite(total)) && Array.isArray(src.lines)) {
+    let lineNet = 0;
+    let lineVat = 0;
+    src.lines.forEach(line => {
+      const n = __rcParseMoneyForTotals(line && (line.amount || line.lineTotal || line.total));
+      const v = __rcParseMoneyForTotals(line && (line.vat || line.vatRate));
+      if (Number.isFinite(n)) lineNet += n;
+      if (Number.isFinite(v)) lineVat += v;
+    });
+    if (!Number.isFinite(net) && lineNet > 0) net = lineNet;
+    if (!Number.isFinite(vat) && lineVat > 0) vat = lineVat;
+    if (!Number.isFinite(total) && (lineNet > 0 || lineVat > 0)) total = lineNet + lineVat;
+  }
+
+  if (!Number.isFinite(net) && Number.isFinite(total) && Number.isFinite(vat)) net = total - vat;
+  if (!Number.isFinite(vat) && Number.isFinite(total) && Number.isFinite(net)) vat = total - net;
+  if (!Number.isFinite(total) && Number.isFinite(net) && Number.isFinite(vat)) total = net + vat;
+
+  if (!Number.isFinite(net) || !Number.isFinite(vat) || !Number.isFinite(total)) {
+    try {
+      const hdrNet = __rcParseMoneyForTotals(document.getElementById('summary_totalNetValue')?.textContent || '');
+      const hdrVat = __rcParseMoneyForTotals(document.getElementById('summary_totalVatAmount')?.textContent || '');
+      const hdrTotal = __rcParseMoneyForTotals(document.getElementById('summary_totalValue')?.textContent || '');
+      if (!Number.isFinite(net) && Number.isFinite(hdrNet)) net = hdrNet;
+      if (!Number.isFinite(vat) && Number.isFinite(hdrVat)) vat = hdrVat;
+      if (!Number.isFinite(total) && Number.isFinite(hdrTotal)) total = hdrTotal;
+      if (!Number.isFinite(net) && Number.isFinite(total) && Number.isFinite(vat)) net = total - vat;
+      if (!Number.isFinite(vat) && Number.isFinite(total) && Number.isFinite(net)) vat = total - net;
+      if (!Number.isFinite(total) && Number.isFinite(net) && Number.isFinite(vat)) total = net + vat;
+    } catch(_) {}
+  }
+  return { net, vat, total };
+}
+
+function __rcComputeReceiptClassificationProgress(summary){
+  const src = (summary && typeof summary === 'object') ? summary : {};
+  const baseline = __rcReceiptUrlTotalsBaseline(src);
+  const lines = Array.isArray(src.lines) ? src.lines : [];
+
+  let nonZeroNet = 0;
+  let nonZeroVat = 0;
+  let zeroReceiptGross = 0;
+
+  lines.forEach(line => {
+    const cat = String((line && line.category) || '').trim().toLowerCase();
+    const vatKey = __rcNormalizeVatCategory((line && (line.vatCategory || line.vat_category)) || '');
+    const amount = __rcParseMoneyForTotals(line && line.amount);
+    const vat = __rcParseMoneyForTotals(line && line.vat);
+    const safeAmount = Number.isFinite(amount) ? amount : 0;
+    const safeVat = Number.isFinite(vat) ? vat : 0;
+
+    if (vatKey === '0%' && cat === 'αποδειξακια') {
+      zeroReceiptGross += (safeAmount + safeVat);
+      return;
+    }
+
+    if (vatKey && vatKey !== '0%') {
+      nonZeroNet += safeAmount;
+      nonZeroVat += safeVat;
+    }
+  });
+
+  const classifiedTotal = nonZeroNet + nonZeroVat + zeroReceiptGross;
+  const remaining = {
+    net: Number.isFinite(baseline.net) ? (baseline.net - nonZeroNet) : NaN,
+    vat: Number.isFinite(baseline.vat) ? (baseline.vat - nonZeroVat) : NaN,
+    total: Number.isFinite(baseline.total) ? (baseline.total - classifiedTotal) : NaN,
+  };
+
+  return {
+    baseline,
+    used: {
+      nonZeroNet,
+      nonZeroVat,
+      zeroReceiptGross,
+      total: classifiedTotal,
+    },
+    remaining,
+  };
+}
+
+function __rcFmtMoney(v){
+  if (!Number.isFinite(v)) return '—';
+  return v.toFixed(2).replace('.', ',');
+}
+
+function __rcIsReceiptAnalysisContext(summary){
+  const s = (summary && typeof summary === 'object') ? summary : {};
+  const analysisUiActive = !!document.querySelector('#summaryLinesContainer .receipt-analysis-amount, #summaryLinesContainer .receipt-analysis-vat, #summaryLinesContainer .receipt-analysis-vat-category');
+  const analysisFlag = !!(s.receipt_analysis_enabled === true || s.receiptAnalysisEnabled === true || s.receipts_analysis_enabled === true);
+  const hasUrlBaseline = !!(s.receipt_url_totals && typeof s.receipt_url_totals === 'object');
+  const isReceipt = !!(s.is_receipt === true || /αποδει/i.test(String(s.type_name || '') + ' ' + String(s.category || '')));
+  const explicitReceiptMode = (function(){
+    try {
+      const chooserExists = !!document.querySelector('[data-receipt-mode]');
+      if (!chooserExists) return '';
+      const mode = String(localStorage.getItem('rc:receiptMode') || '').toLowerCase();
+      if (mode === 'analysis' || mode === 'mixed') return mode;
+      return 'mixed';
+    } catch(_) { return ''; }
+  })();
+  if (isReceipt && explicitReceiptMode) return explicitReceiptMode === 'analysis';
+  return isReceipt && (analysisUiActive || analysisFlag || hasUrlBaseline || !!window.__RC_FORCE_RECEIPT_ANALYSIS || !!window.__RC_RECEIPT_ANALYSIS_LOCK || !!isReceiptAnalysisOn());
+}
+
+async function __rcValidateReceiptAnalysisTotalsBeforeSave(){
+  try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_) {}
+
+  let summary = {};
+  try { summary = JSON.parse(document.getElementById('summaryJsonInput')?.value || '{}'); }
+  catch(_) { summary = {}; }
+
+  if (!__rcIsReceiptAnalysisContext(summary)) return true;
+
+  // Hard required-fields check (defensive, even if button was enabled by mistake)
+  try {
+    const markInvalid = (el, invalid) => {
+      if (!el) return;
+      el.classList.toggle('border-red-500', !!invalid);
+      el.classList.toggle('ring-2', !!invalid);
+      el.classList.toggle('ring-red-200', !!invalid);
+    };
+
+    const missingVatRows = [];
+    const vatSelects = Array.from(document.querySelectorAll('#summaryLinesContainer .receipt-analysis-vat-category[data-line-id]'));
+    vatSelects.forEach(sel => {
+      const lineId = String(sel.dataset.lineId || '').trim();
+      const missing = !String(sel.value || '').trim();
+      markInvalid(sel, missing);
+      if (missing && lineId) missingVatRows.push(lineId);
+    });
+    if (missingVatRows.length) {
+      await showModalAlert('Ελλιπή πεδία', 'Συμπλήρωσε την κατηγορία ΦΠΑ σε όλες τις γραμμές πριν την αποθήκευση.');
+      return false;
+    }
+
+    const invoiceMtypeContainer = document.getElementById('invoiceMtypeContainer');
+    const invoiceMtypeSelect = document.getElementById('invoiceMtypeSelect');
+    if (invoiceMtypeContainer && window.getComputedStyle(invoiceMtypeContainer).display !== 'none') {
+      const missingInvoiceMtype = (!invoiceMtypeSelect || !String(invoiceMtypeSelect.value || '').trim());
+      markInvalid(invoiceMtypeSelect, missingInvoiceMtype);
+      if (missingInvoiceMtype) {
+        await showModalAlert('Ελλιπή πεδία', 'Συμπλήρωσε το Είδος Κίνησης (MTYPE) πριν την αποθήκευση.');
+        return false;
+      }
+    } else {
+      markInvalid(invoiceMtypeSelect, false);
+    }
+
+    const receiptMtypeContainer = document.getElementById('receiptMtypeContainerSummary');
+    const receiptMtypeSelect = document.getElementById('receiptMtypeSelectSummary');
+    if (receiptMtypeContainer && window.getComputedStyle(receiptMtypeContainer).display !== 'none') {
+      const missingReceiptMtype = (!receiptMtypeSelect || !String(receiptMtypeSelect.value || '').trim());
+      markInvalid(receiptMtypeSelect, missingReceiptMtype);
+      if (missingReceiptMtype) {
+        await showModalAlert('Ελλιπή πεδία', 'Συμπλήρωσε το Είδος Κίνησης για τις αποδείξεις πριν την αποθήκευση.');
+        return false;
+      }
+    } else {
+      markInvalid(receiptMtypeSelect, false);
+    }
+  } catch(_) {}
+
+  const lines = Array.isArray(summary.lines) ? summary.lines : [];
+  const allowedNonZeroVat = __rcGetAllowedNonZeroVatFromSummary(summary);
+  const lineVatIssues = [];
+  const progress = __rcComputeReceiptClassificationProgress(summary);
+  const nonZeroNet = progress.used.nonZeroNet;
+  const nonZeroVat = progress.used.nonZeroVat;
+  const linesGross = progress.used.total;
+  lines.forEach(line => {
+    const vatCategory = __rcNormalizeVatCategory(line && (line.vatCategory || line.vat_category || ''));
+    const cat = String(line && line.category || '').trim().toLowerCase();
+
+    if (cat === 'αποδειξακια') {
+      if (vatCategory && vatCategory !== '0%') lineVatIssues.push('Για κατηγορία αποδειξακια επιτρέπεται μόνο ΦΠΑ 0%.');
+    } else if (cat) {
+      if (vatCategory === '0%') lineVatIssues.push('Για κατηγορίες εκτός αποδειξακια δεν επιτρέπεται ΦΠΑ 0%.');
+      if (vatCategory && allowedNonZeroVat.length && !allowedNonZeroVat.includes(vatCategory)) {
+        lineVatIssues.push('Μη επιτρεπτή κατηγορία ΦΠΑ: ' + vatCategory + '. Επιτρεπτές: ' + allowedNonZeroVat.join(', ') + '.');
+      }
+    }
+
+  });
+
+  if (lineVatIssues.length) {
+    await showModalAlert('Μη έγκυρος συνδυασμός ΦΠΑ', Array.from(new Set(lineVatIssues)).join(' '));
+    return false;
+  }
+
+  const baseline = progress.baseline;
+  const tol = 0.01;
+  const mismatches = [];
+  if (Number.isFinite(baseline.net) && nonZeroNet > (baseline.net + tol)) mismatches.push('Καθαρή Αξία');
+  if (Number.isFinite(baseline.vat) && nonZeroVat > (baseline.vat + tol)) mismatches.push('ΦΠΑ');
+  if (Number.isFinite(baseline.total) && linesGross > (baseline.total + tol)) mismatches.push('Σύνολο');
+
+  if (mismatches.length) {
+    await showModalAlert(
+      'Ασυμφωνία Ανάλυσης',
+      'Τα αθροίσματα γραμμών ξεπερνούν τα όρια του URL για: ' + mismatches.join(', ') + '. Διόρθωσε τα ποσά πριν την αποθήκευση.'
+    );
+    return false;
+  }
+
+  if (Number.isFinite(progress.remaining.total) && Math.abs(progress.remaining.total) > tol) {
+    await showModalAlert(
+      'Εκκρεμεί Υπόλοιπο',
+      'Απομένει υπόλοιπο προς χαρακτηρισμό στο Σύνολο: ' + __rcFmtMoney(progress.remaining.total) + '. Πριν την αποθήκευση πρέπει να μηδενίσει.'
+    );
+    return false;
+  }
+  return true;
+}
+
+window.__rcValidateReceiptAnalysisTotalsBeforeSave = __rcValidateReceiptAnalysisTotalsBeforeSave;
+
+const __rcSummaryForm = document.getElementById('saveSummaryForm');
+if (__rcSummaryForm && !__rcSummaryForm.dataset.rcTotalsGuardBound) {
+  __rcSummaryForm.dataset.rcTotalsGuardBound = '1';
+  __rcSummaryForm.addEventListener('submit', function(e){
+    if (window.__RC_SUMMARY_SUBMIT_BYPASS) return;
+    e.preventDefault();
+    try { e.stopImmediatePropagation(); } catch(_) {}
+    try { e.stopPropagation(); } catch(_) {}
+
+    if (window.__RC_SUMMARY_SUBMIT_VALIDATING) return;
+    window.__RC_SUMMARY_SUBMIT_VALIDATING = true;
+
+    Promise.resolve(__rcValidateReceiptAnalysisTotalsBeforeSave())
+      .then(ok => {
+        if (!ok) return;
+        window.__RC_SUMMARY_SUBMIT_BYPASS = true;
+        try {
+          if (typeof __rcSummaryForm.requestSubmit === 'function') __rcSummaryForm.requestSubmit();
+          else __rcSummaryForm.submit();
+        } finally {
+          setTimeout(() => { window.__RC_SUMMARY_SUBMIT_BYPASS = false; }, 0);
+        }
+      })
+      .finally(() => {
+        window.__RC_SUMMARY_SUBMIT_VALIDATING = false;
+      });
+  }, true);
+}
+
 document.getElementById('saveSummaryForm')?.addEventListener('submit', async function(e){
+  const _okTotals = await __rcValidateReceiptAnalysisTotalsBeforeSave();
+  if (!_okTotals) { e.preventDefault(); return; }
   const scrapeUrl = document.getElementById('scrapeUrlField')?.value || '';
   if(!scrapeUrl) return; // let normal (invoice) flow proceed
   e.preventDefault();
@@ -6901,6 +6169,33 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     return Number.isFinite(val) ? val : NaN;
   }
 
+  function getReceiptUrlTotalsBaseline(obj){
+    const summaryObj = (obj && typeof obj === 'object') ? obj : {};
+    const baseline = (summaryObj.receipt_url_totals && typeof summaryObj.receipt_url_totals === 'object')
+      ? summaryObj.receipt_url_totals
+      : ((summaryObj.url_totals && typeof summaryObj.url_totals === 'object') ? summaryObj.url_totals : {});
+
+    const total = parseMoneyForValidation(
+      baseline.total
+      ?? baseline.totalValue
+      ?? (summaryObj.raw && (summaryObj.raw.totalValue || summaryObj.raw.total_amount || summaryObj.raw.total))
+    );
+    const vat = parseMoneyForValidation(
+      baseline.vat
+      ?? baseline.totalVatAmount
+      ?? (summaryObj.raw && (summaryObj.raw.totalVatAmount || summaryObj.raw.totalVat || summaryObj.raw.vat_total))
+    );
+    let net = parseMoneyForValidation(
+      baseline.net
+      ?? baseline.totalNetValue
+      ?? (summaryObj.raw && (summaryObj.raw.totalNetValue || summaryObj.raw.net_total || summaryObj.raw.netAmount))
+    );
+    if (!Number.isFinite(net) && Number.isFinite(total) && Number.isFinite(vat)) {
+      net = total - vat;
+    }
+    return { net, vat, total };
+  }
+
   function resolveSummaryTotal(fieldName, domId){
     const fromSummary = parseMoneyForValidation(summary[fieldName]);
     if (Number.isFinite(fromSummary)) return fromSummary;
@@ -6926,9 +6221,10 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     });
     const linesTotal = linesNet + linesVat;
 
-    const summaryNet = resolveSummaryTotal('totalNetValue', 'summary_totalNetValue');
-    const summaryVat = resolveSummaryTotal('totalVatAmount', 'summary_totalVatAmount');
-    const summaryTotal = resolveSummaryTotal('totalValue', 'summary_totalValue');
+    const urlBaseline = getReceiptUrlTotalsBaseline(summary);
+    const summaryNet = Number.isFinite(urlBaseline.net) ? urlBaseline.net : resolveSummaryTotal('totalNetValue', 'summary_totalNetValue');
+    const summaryVat = Number.isFinite(urlBaseline.vat) ? urlBaseline.vat : resolveSummaryTotal('totalVatAmount', 'summary_totalVatAmount');
+    const summaryTotal = Number.isFinite(urlBaseline.total) ? urlBaseline.total : resolveSummaryTotal('totalValue', 'summary_totalValue');
 
     const mismatches = [];
     if (!nearlyEqual(linesNet, summaryNet, tolerance)) mismatches.push('Καθαρή Αξία');
@@ -6938,7 +6234,7 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     if (mismatches.length) {
       await showModalAlert(
         'Ασυμφωνία Ανάλυσης',
-        'Η ανάλυση γραμμών δεν συμφωνεί με τα συνολικά της περίληψης για: ' + mismatches.join(', ') + '. Διόρθωσε τα ποσά πριν την αποθήκευση.'
+        'Η ανάλυση γραμμών δεν συμφωνεί με τα συνολικά που ήρθαν από το URL της απόδειξης για: ' + mismatches.join(', ') + '. Διόρθωσε τα ποσά πριν την αποθήκευση.'
       );
       return;
     }
@@ -7011,6 +6307,8 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
 if (!window.__SUMMARY_INVOICE_SUBMIT_BOUND) {
 window.__SUMMARY_INVOICE_SUBMIT_BOUND = true;
 document.getElementById('saveSummaryForm')?.addEventListener('submit', async function(e){
+  const _okTotals = await __rcValidateReceiptAnalysisTotalsBeforeSave();
+  if (!_okTotals) { e.preventDefault(); return; }
   const scrapeUrl = document.getElementById('scrapeUrlField')?.value || '';
   if(!scrapeUrl) {
     // Invoice flow - προσθήκη payment validation (για repeat και non-repeat)
@@ -7063,6 +6361,39 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
       } catch(err) {
         console.warn('Failed to re-parse summary after DOM update', err);
       }
+    }
+
+    const markFieldInvalidLocal = (el, invalid) => {
+      if (!el) return;
+      el.classList.toggle('border-red-500', !!invalid);
+      el.classList.toggle('ring-2', !!invalid);
+      el.classList.toggle('ring-red-200', !!invalid);
+    };
+
+    if (!isReceipt) {
+      const categorySelects = Array.from(document.querySelectorAll('#summaryLinesContainer select.expense-category[data-line-id]'));
+      let missingCategory = false;
+      categorySelects.forEach(sel => {
+        const missing = !String(sel.value || '').trim();
+        markFieldInvalidLocal(sel, missing);
+        if (missing) missingCategory = true;
+      });
+      if (missingCategory) {
+        releaseSummarySaveLock();
+        await showModalAlert('Ελλιπή πεδία', 'Συμπλήρωσε χαρακτηρισμό σε όλες τις γραμμές πριν την αποθήκευση.');
+        return;
+      }
+
+      const invoiceMtypeContainer = document.getElementById('invoiceMtypeContainer');
+      const invoiceMtypeRequired = !!(isGCategory && invoiceMtypeContainer && window.getComputedStyle(invoiceMtypeContainer).display !== 'none');
+      const invoiceMtypeMissing = invoiceMtypeRequired && !String((invoiceSelectEl && invoiceSelectEl.value) || summary.mtype || summary.invoice_mtype || '').trim();
+      markFieldInvalidLocal(invoiceSelectEl, invoiceMtypeMissing);
+      if (invoiceMtypeMissing) {
+        releaseSummarySaveLock();
+        await showModalAlert('Ελλιπή πεδία', 'Για Γ κατηγορίας τιμολόγιο πρέπει να επιλέξεις Είδος Κίνησης (MTYPE) πριν την αποθήκευση.');
+        return;
+      }
+      if (!invoiceMtypeMissing) markFieldInvalidLocal(invoiceSelectEl, false);
     }
 
     // Για αποδείξεις σε receipt-analysis, μπλόκαρε save όταν τα totals γραμμών
@@ -7346,11 +6677,81 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
   // parse summary from hidden input
   let summary = {};
   try {
+    try { if (typeof updateSummaryFromDom === 'function') updateSummaryFromDom(); } catch(_) {}
     summary = JSON.parse(document.getElementById('summaryJsonInput').value || '{}');
   } catch(err){
     console.warn('Failed parsing summaryJsonInput', err);
     showFlash('Σφάλμα: άκυρα δεδομένα παραστατικού.', 'error');
     return;
+  }
+
+  try {
+    const parseMoneyForValidation = (raw) => {
+      const txt = String(raw || '').trim();
+      if (!txt) return NaN;
+      const cleaned = txt.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
+      const val = parseFloat(cleaned);
+      return Number.isFinite(val) ? val : NaN;
+    };
+
+    const getReceiptUrlTotalsBaseline = (obj) => {
+      const summaryObj = (obj && typeof obj === 'object') ? obj : {};
+      const baseline = (summaryObj.receipt_url_totals && typeof summaryObj.receipt_url_totals === 'object')
+        ? summaryObj.receipt_url_totals
+        : ((summaryObj.url_totals && typeof summaryObj.url_totals === 'object') ? summaryObj.url_totals : {});
+
+      const total = parseMoneyForValidation(
+        baseline.total
+        ?? baseline.totalValue
+        ?? (summaryObj.raw && (summaryObj.raw.totalValue || summaryObj.raw.total_amount || summaryObj.raw.total))
+      );
+      const vat = parseMoneyForValidation(
+        baseline.vat
+        ?? baseline.totalVatAmount
+        ?? (summaryObj.raw && (summaryObj.raw.totalVatAmount || summaryObj.raw.totalVat || summaryObj.raw.vat_total))
+      );
+      let net = parseMoneyForValidation(
+        baseline.net
+        ?? baseline.totalNetValue
+        ?? (summaryObj.raw && (summaryObj.raw.totalNetValue || summaryObj.raw.net_total || summaryObj.raw.netAmount))
+      );
+      if (!Number.isFinite(net) && Number.isFinite(total) && Number.isFinite(vat)) {
+        net = total - vat;
+      }
+      return { net, vat, total };
+    };
+
+    const analysisUiActive = !!document.querySelector('#summaryLinesContainer .receipt-analysis-amount, #summaryLinesContainer .receipt-analysis-vat, #summaryLinesContainer .receipt-analysis-vat-category');
+    const receiptAnalysisEnabled = !!(summary && (summary.receipt_analysis_enabled === true || summary.receiptAnalysisEnabled === true || isReceiptAnalysisOn()));
+
+    if (receiptAnalysisEnabled || analysisUiActive) {
+      const lines = Array.isArray(summary.lines) ? summary.lines : [];
+      let linesNet = 0;
+      let linesVat = 0;
+      lines.forEach(line => {
+        const amount = parseMoneyForValidation(line && line.amount);
+        const vat = parseMoneyForValidation(line && line.vat);
+        if (Number.isFinite(amount)) linesNet += amount;
+        if (Number.isFinite(vat)) linesVat += vat;
+      });
+      const linesTotal = linesNet + linesVat;
+      const baseline = getReceiptUrlTotalsBaseline(summary);
+      const tol = 0.01;
+      const mismatches = [];
+      if (Number.isFinite(baseline.net) && Math.abs(linesNet - baseline.net) > tol) mismatches.push('Καθαρή Αξία');
+      if (Number.isFinite(baseline.vat) && Math.abs(linesVat - baseline.vat) > tol) mismatches.push('ΦΠΑ');
+      if (Number.isFinite(baseline.total) && Math.abs(linesTotal - baseline.total) > tol) mismatches.push('Σύνολο');
+
+      if (mismatches.length) {
+        await showModalAlert(
+          'Ασυμφωνία Ανάλυσης',
+          'Η ανάλυση γραμμών δεν συμφωνεί με τα συνολικά που ήρθαν από το URL της απόδειξης για: ' + mismatches.join(', ') + '. Διόρθωσε τα ποσά πριν την αποθήκευση.'
+        );
+        return;
+      }
+    }
+  } catch (validationErr) {
+    console.warn('receipt analysis totals validation failed', validationErr);
   }
 
   // robust AFM extraction (try many variants)
@@ -8145,6 +7546,9 @@ function readMappingFromUI(){
     }
 
     function renderLines(lines){
+      if (window.__RC_MAIN_SUMMARY_RENDERER_ACTIVE && typeof window._renderSummaryLines === 'function') {
+        return;
+      }
       if(!linesContainer) return;
       linesContainer.innerHTML = '';
       if(!Array.isArray(lines) || lines.length === 0){
@@ -8279,50 +7683,35 @@ function readMappingFromUI(){
             safeText(paymentEl, '');
           }
         }
-        const netLines = (Array.isArray(obj.lines) && obj.lines.length)
-          ? obj.lines
-          : ((obj.raw && Array.isArray(obj.raw.lines)) ? obj.raw.lines : []);
-        let netSum = 0;
-        netLines.forEach(l => {
-          const raw = String((l && (l.amount || l.lineTotal || l.total)) || '').trim();
-          if (!raw) return;
-          const cleaned = raw.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
-          const parsed = parseFloat(cleaned);
-          if (Number.isFinite(parsed)) netSum += parsed;
-        });
-
-        const isReceiptObj = !!(obj && (obj.is_receipt === true || /αποδει/i.test(String(obj.type_name || obj.type || obj.category || ''))));
-        const receiptAnalysisEnabledObj = !!(obj && (obj.receipt_analysis_enabled || obj.receipts_analysis_enabled || obj.receiptAnalysisEnabled || obj.analysis_receipts));
-
-        let netDisplay = obj.totalNetValue || (obj.raw && obj.raw.totalNetValue) || '';
-        if (isReceiptObj && receiptAnalysisEnabledObj && netSum > 0) {
-          netDisplay = netSum.toFixed(2).replace('.', ',');
-        } else if (!String(netDisplay || '').trim() && netSum > 0) {
-          netDisplay = netSum.toFixed(2).replace('.', ',');
-        }
-        if (!String(netDisplay || '').trim()) {
-          netDisplay = obj.total_amount || obj.totalValue || (obj.raw && obj.raw.total_amount) || '';
-        }
-        safeText(netEl, netDisplay);
-        let vatDisplay = obj.totalVatAmount || (obj.raw && (obj.raw.totalVatAmount || obj.raw.totalVat)) || '';
-        if (!String(vatDisplay || '').trim()) {
-          const vatLines = (Array.isArray(obj.lines) && obj.lines.length)
-            ? obj.lines
-            : ((obj.raw && Array.isArray(obj.raw.lines)) ? obj.raw.lines : []);
-          let vatSum = 0;
-          vatLines.forEach(l => {
-            const raw = String((l && (l.vat || l.vatRate)) || '').trim();
-            if (!raw) return;
-            const cleaned = raw.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
-            const parsed = parseFloat(cleaned);
-            if (Number.isFinite(parsed)) vatSum += parsed;
-          });
-          if (vatSum > 0) {
-            vatDisplay = vatSum.toFixed(2).replace('.', ',');
+        const parseMoney = (raw) => {
+          let txt = String(raw || '').trim().replace(/\s+/g, '');
+          if (!txt) return NaN;
+          const hasComma = txt.includes(',');
+          const hasDot = txt.includes('.');
+          if (hasComma && hasDot) {
+            if (txt.lastIndexOf(',') > txt.lastIndexOf('.')) txt = txt.replace(/\./g, '').replace(',', '.');
+            else txt = txt.replace(/,/g, '');
+          } else if (hasComma) {
+            txt = txt.replace(',', '.');
+          } else if (hasDot) {
+            if (/^-?\d{1,3}(\.\d{3})+$/.test(txt)) txt = txt.replace(/\./g, '');
           }
-        }
-        safeText(vatEl, vatDisplay);
-        safeText(totEl, obj.totalValue || obj.total_amount || (obj.raw && obj.raw.total_amount) || '');
+          const cleaned = txt.replace(/[^0-9.-]/g, '');
+          const parsed = parseFloat(cleaned);
+          return Number.isFinite(parsed) ? parsed : NaN;
+        };
+        const fmt = (num, fallback='') => Number.isFinite(num) ? num.toFixed(2).replace('.', ',') : fallback;
+        const baseline = (obj && obj.receipt_url_totals && typeof obj.receipt_url_totals === 'object') ? obj.receipt_url_totals : {};
+        const baseNet = parseMoney(baseline.net ?? baseline.totalNetValue ?? obj.totalNetValue ?? (obj.raw && obj.raw.totalNetValue));
+        const baseVat = parseMoney(baseline.vat ?? baseline.totalVatAmount ?? obj.totalVatAmount ?? (obj.raw && (obj.raw.totalVatAmount || obj.raw.totalVat)));
+        const baseTot = parseMoney(baseline.total ?? baseline.totalValue ?? obj.totalValue ?? obj.total_amount ?? (obj.raw && obj.raw.total_amount));
+        const finalNet = Number.isFinite(baseNet)
+          ? baseNet
+          : (Number.isFinite(baseTot) && Number.isFinite(baseVat) ? (baseTot - baseVat) : NaN);
+
+        safeText(netEl, fmt(finalNet, obj.totalNetValue || ''));
+        safeText(vatEl, fmt(baseVat, obj.totalVatAmount || ''));
+        safeText(totEl, fmt(baseTot, obj.totalValue || obj.total_amount || ''));
         try {
           const inferred = !!(obj.vat_analysis_inferred || (obj.raw && obj.raw.vat_analysis_inferred));
           if (inferredWarningEl) inferredWarningEl.style.display = inferred ? '' : 'none';

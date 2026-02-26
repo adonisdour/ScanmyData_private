@@ -1,0 +1,71 @@
+<!-- SUMMARY MODAL (always in DOM for AJAX receipt flows) -->
+<div id="summaryModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 overflow-auto p-4" style="display:none;">
+    <div class="bg-white rounded-lg shadow-lg w-full max-w-6xl p-6">
+
+        <!-- HEADER -->
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold">
+                 Περίληψη Παραστατικού - <span id="summaryModalMark">MARK</span>
+            </h3>
+            <button type="button" id="modalCloseX" class="text-gray-500 text-xl font-bold modal-summary-close modal-cancel-btn">✕</button>
+        </div>
+
+        <!-- SUMMARY INFO -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div><strong>Α/Α Παραστατικού</strong><div id="summary_AA"></div></div>
+            <div><strong>ΑΦΜ</strong><div id="summary_AFM"></div></div>
+            <div><strong>Επωνυμία</strong><div id="summary_Name"></div></div>
+            <div><strong>Ημερομηνία</strong><div id="summary_issueDate"></div></div>
+            <div><strong>Τύπος Παραστατικού</strong><div id="summary_type_name"></div></div>
+          <div><strong>Τρόπος Πληρωμής</strong><div id="summary_paymentMethodLabel"></div></div>
+            <div><strong>Καθαρή Αξία</strong><div id="summary_totalNetValue"></div></div>
+            <div><strong>ΦΠΑ</strong><div id="summary_totalVatAmount"></div></div>
+            <div><strong>Σύνολο</strong><div id="summary_totalValue"></div></div>
+        </div>
+
+          <div id="summaryInferredWarning" class="mb-3 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900 text-sm" style="display:none;">
+            ⚠ Η ανάλυση ΦΠΑ είναι προϊόν υπολογισμού και όχι ακριβής ανάλυση από το παραστατικό.
+          </div>
+
+        <!-- LINES -->
+        <h4 id="summaryLinesHeader" class="font-medium mt-4 mb-2">Γραμμές Παραστατικού (για χαρακτηρισμό)</h4>
+        <div id="summaryLinesContainer" class="overflow-auto max-h-96 border rounded p-2"></div>
+
+        <!-- MTYPE για Γ Category (invoice-level) -->
+        <div id="invoiceMtypeContainer" class="mt-4" style="display:none;">
+            <label class="font-medium text-sm">Είδος Κίνησης (για Γ Κατηγορία)</label>
+            <select id="invoiceMtypeSelect" class="mt-1 p-2 border rounded w-full max-w-md">
+                <option value="">-- επιλέξτε είδος κίνησης --</option>
+            </select>
+        </div>
+
+        <!-- MTYPE για Αποδείξεις (receipt-level) -->
+        <div id="receiptMtypeContainerSummary" class="mt-4" style="display:none;">
+            <label class="font-medium text-sm">Είδος Κίνησης (για Αποδείξεις)</label>
+            <select id="receiptMtypeSelectSummary" class="mt-1 p-2 border rounded w-full max-w-md">
+                <option value="">-- επιλέξτε είδος κίνησης --</option>
+            </select>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="mt-4 flex justify-between items-center">
+            <div class="text-sm text-gray-600">
+                Σημείωση: οι κατηγορίες προέρχονται από τα settings του πελάτη. Μπορείτε να ορίσετε/επεξεργαστείτε αυτές τις επιλογές στη σελίδα Credentials.
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <form method="POST" action="{{ url_for('save_summary') }}" id="saveSummaryForm">
+                    <input type="hidden" name="summary_json" id="summaryJsonInput" value='{{ modal_summary | tojson | safe if modal_summary else "{}" }}'>
+                    <input type="hidden" id="summaryDataInput" name="summary_data" value='{}'>
+                    <button type="submit" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση στο Cache</button>
+                    <input type="hidden" id="scrapeUrlField" name="scrape_url" value="">
+                    <input type="hidden" id="scrapeCategoryField" name="scrape_category" value="">
+                    <input type="hidden" id="scrapeForceField" name="scrape_force" value="false">
+                </form>
+                <button type="button" id="modalCloseBtn" class="px-3 py-2 border rounded">Κλείσιμο</button>
+            </div>
+        </div>
+
+    </div>
+</div>
+
