@@ -9,11 +9,27 @@
   function ssGet(k){ try{return sessionStorage.getItem(k);}catch(_){return null;} }
   function ssSet(k,v){ try{sessionStorage.setItem(k,v);}catch(_){ } }
   function ssDel(k){ try{sessionStorage.removeItem(k);}catch(_){ } }
-  function onceKey(mark){ return 'rc-direct:' + String(mark||'').trim(); }
+  function onceKeyFromSummary(s){
+    try {
+      var mark = String((s && (s.mark || s.MARK)) || '').trim();
+      var aa = String((s && (s.AA || s.aa || s.number || s.progressive_aa)) || '').trim();
+      var afm = String((s && (s.AFM_issuer || s.AFM || s.issuer_vat)) || '').trim();
+      var date = String((s && (s.issueDate || s.issue_date || s.date)) || '').trim();
+      return 'rc-direct:' + [mark, aa, afm, date].join('|');
+    } catch(_) {
+      return 'rc-direct:' + String((s && (s.mark || s.MARK)) || '').trim();
+    }
+  }
   function isReceipts(){ try{var sw=$id('useReceiptsSwitch'); if(sw) return !!sw.checked;}catch(_){}
                          return lsGet('UI:useReceipts','0')==='1'; }
   function isRepeat(){   try{var rs=$id('repeatEntrySwitch'); if(rs) return !!rs.checked;}catch(_){}
                          return lsGet('REPEAT:enabled','0')==='1'; }
+  function isMixedMode(){
+    try{
+      var mode = localStorage.getItem('rc:receiptMode') || 'mixed';
+      return String(mode || '').toLowerCase() !== 'analysis';
+    }catch(_){ return true; }
+  }
   function parseSummary(){
     var el=$id('summaryJsonInput');
     if(!el || !el.value || el.value==='{}' || el.value==='null') return null;
@@ -28,7 +44,23 @@
     if(ui.includes('λήφθηκε')&&ui.includes('αποδεί')) return true;
     return false;
   }
-  function hasLines(s){ try{ return Array.isArray(s.lines)&&s.lines.length>0; }catch(_){ return false; } }
+  function hasLines(s){
+    try{
+      if(Array.isArray(s.lines) && s.lines.length>0){
+        for(var i=0;i<s.lines.length;i++){
+          var l = s.lines[i] || {};
+          var amt = String(l.amount || l.total || l.lineTotal || '').trim();
+          var vat = String(l.vat || l.vatRate || '').trim();
+          var cat = String(l.category || '').trim();
+          if(amt || vat || cat) return true;
+        }
+      }
+      // mixed receipts can be header-only
+      var total = String((s.totalValue || s.total_amount || s.totalNetValue || '')).trim();
+      var aa = String((s.AA || s.aa || s.number || s.progressive_aa || '')).trim();
+      return !!(total || aa);
+    }catch(_){ return false; }
+  }
   function normalizeReceipt(s){
     try{
       s.is_receipt=true;
@@ -59,9 +91,40 @@
       }).then(function(r){ if(!r.ok) throw new Error('save failed'); return r.text(); });
     }catch(e){ return Promise.reject(e); }
   }
-  function afterSubmit(mark){
+  function submitViaConfirmApi(s){
+    try{
+      var scrapeUrl = '';
+      try {
+        scrapeUrl = (($id('scrapeUrlField') && $id('scrapeUrlField').value) || ($id('scrapeUrlInput') && $id('scrapeUrlInput').value) || '').trim();
+      } catch(_) {}
+
+      return fetch('/api/confirm_receipt', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({
+          url: scrapeUrl,
+          summary: s,
+          force: false,
+          category: 'αποδειξακια',
+          receipt_analysis_enabled: false
+        })
+      }).then(function(r){
+        return r.json().catch(function(){ return null; }).then(function(j){ return { r: r, j: j }; });
+      }).then(function(out){
+        if(!out.r.ok || !out.j || !out.j.ok){
+          throw new Error((out.j && out.j.error) ? out.j.error : ('save failed (' + out.r.status + ')'));
+        }
+        return out.j;
+      });
+    }catch(e){ return Promise.reject(e); }
+  }
+  function afterSubmit(mark, dedupeKey){
     lsSet('UI:useReceipts','1');
-    ssDel(onceKey(mark));
+    if (dedupeKey) ssDel(dedupeKey);
     try{
       var successMsg = 'Αποθηκεύτηκε η απόδειξη (repeat).';
       if (window.showFlash) window.showFlash(successMsg, 'success', 4200);
@@ -76,15 +139,19 @@
   function tryDirect(){
     if(trying) return;
     if(!isReceipts()||!isRepeat()) return;
+    if(!isMixedMode()) return;
 
     var s=parseSummary();
     if(!s||!isReceiptSummary(s)||!hasLines(s)) return;
 
     var mark=String(s.mark||s.MARK||'').trim();
     if(!mark) return;
-    var k=onceKey(mark);
-    if(ssGet(k)) return;
-    ssSet(k,'1');
+    var k=onceKeyFromSummary(s);
+    var prevTs = parseInt(ssGet(k) || '0', 10);
+    var nowTs = Date.now();
+    // anti-double-submit window, but do not block forever
+    if(prevTs && !isNaN(prevTs) && (nowTs - prevTs) < 4000) return;
+    ssSet(k, String(nowTs));
     trying=true;
 
     s = normalizeReceipt(s);
@@ -120,26 +187,35 @@
       }
     } catch(e) { /* ignore */ }
 
-    if(submitViaForm(s)){
-      setTimeout(function(){ afterSubmit(mark); }, 50);
-    }else{
-      submitViaFetch(s).then(function(){ afterSubmit(mark); })
-        .catch(function(err){
-          trying=false;
-          ssDel(k);
-          try{
-            var errMsg = 'Σφάλμα αποθήκευσης: ' + (err && err.message ? err.message : 'server');
-            if (window.showFlash) window.showFlash(errMsg, 'error', 6000);
-            if (window.persistReceiptFlash) window.persistReceiptFlash(errMsg, 'error');
-          }catch(_){ }
-        });
-    }
+    submitViaConfirmApi(s)
+      .then(function(){ afterSubmit(mark, k); })
+      .catch(function(err){
+        // Fallback path (legacy) only if direct API failed
+        if(submitViaForm(s)){
+          setTimeout(function(){
+            trying=false;
+            ssDel(k);
+          }, 2500);
+          return;
+        }
+        submitViaFetch(s).then(function(){ afterSubmit(mark, k); })
+          .catch(function(err2){
+            trying=false;
+            ssDel(k);
+            try{
+              var msg = (err2 && err2.message) ? err2.message : ((err && err.message) ? err.message : 'server');
+              var errMsg = 'Σφάλμα αποθήκευσης: ' + msg;
+              if (window.showFlash) window.showFlash(errMsg, 'error', 6000);
+              if (window.persistReceiptFlash) window.persistReceiptFlash(errMsg, 'error');
+            }catch(_){ }
+          });
+      });
   }
 
   function patchOpenModal(){
     var old = window.openModal;
     window.openModal = function(id){
-      if(id==='summaryModal' && isReceipts() && isRepeat()){
+      if(id==='summaryModal' && isReceipts() && isRepeat() && isMixedMode()){
         tryDirect();
         return;
       }

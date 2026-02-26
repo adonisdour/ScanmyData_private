@@ -37,7 +37,12 @@ _firebase_initialized = False
 
 
 def init_firebase():
-    """Initialize Firebase Admin SDK"""
+    """Initialize Firebase Admin SDK and (optionally) enable DB I/O logging.
+
+    This wraps `db.reference` with a small proxy that logs every read/write/push
+    including an approximate payload size and elapsed time. Enable/disable via
+    environment variable `FIREBASE_LOG_IO` (default: enabled).
+    """
     global _firebase_app, _firebase_initialized
     
     if _firebase_initialized:
@@ -61,6 +66,15 @@ def init_firebase():
             }
         )
         _firebase_initialized = True
+
+        # Optionally monkey-patch db.reference to log every DB I/O
+        try:
+            if os.getenv('FIREBASE_LOG_IO', '1') == '1':
+                _patch_db_reference_logging()
+                logger.info('Firebase DB I/O logging enabled (FIREBASE_LOG_IO=1)')
+        except Exception:
+            logger.exception('Failed to enable Firebase DB I/O logging')
+
         logger.info("Firebase Admin SDK initialized successfully")
         return True
     
@@ -73,6 +87,89 @@ def init_firebase():
 def is_firebase_enabled() -> bool:
     """Check if Firebase is properly initialized"""
     return _firebase_initialized
+
+
+# -------------------------
+# Optional DB reference I/O logging
+# -------------------------
+def _patch_db_reference_logging() -> None:
+    """Wrap `db.reference` so every get/set/update/delete/push is logged.
+
+    The wrapper proxies the original Reference and intercepts common I/O
+    methods to emit: action, path, approximate payload/result size (bytes)
+    and elapsed_ms. This gives an application-level record of RTDB traffic
+    that can be compared to Firebase Usage charts.
+    """
+    try:
+        orig_ref = db.reference
+    except Exception:
+        logger.debug('firebase_admin.db.reference not available for patching')
+        return
+
+    class _LoggingRef:
+        def __init__(self, ref, path=None):
+            self._ref = ref
+            self._path = path or getattr(ref, 'path', '<unknown>')
+
+        def _log(self, action: str, payload=None, result=None, start_ts=None):
+            try:
+                now = datetime.now(timezone.utc)
+                start = start_ts or now
+                elapsed_ms = int((now - start).total_seconds() * 1000)
+                size = 0
+                try:
+                    if payload is not None:
+                        size = len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+                    elif result is not None:
+                        size = len(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+                except Exception:
+                    size = 0
+                logger.info('firebase.%s path=%s size=%d elapsed_ms=%d', action, self._path, size, elapsed_ms)
+            except Exception:
+                logger.exception('firebase logging failed')
+
+        def get(self, *args, **kwargs):
+            start = datetime.now(timezone.utc)
+            res = self._ref.get(*args, **kwargs)
+            self._log('read', result=res, start_ts=start)
+            return res
+
+        def set(self, value, *args, **kwargs):
+            start = datetime.now(timezone.utc)
+            res = self._ref.set(value, *args, **kwargs)
+            self._log('write', payload=value, start_ts=start)
+            return res
+
+        def update(self, value, *args, **kwargs):
+            start = datetime.now(timezone.utc)
+            res = self._ref.update(value, *args, **kwargs)
+            self._log('update', payload=value, start_ts=start)
+            return res
+
+        def delete(self, *args, **kwargs):
+            start = datetime.now(timezone.utc)
+            res = self._ref.delete(*args, **kwargs)
+            self._log('delete', start_ts=start)
+            return res
+
+        def push(self, *args, **kwargs):
+            start = datetime.now(timezone.utc)
+            res = self._ref.push(*args, **kwargs)
+            self._log('push', start_ts=start)
+            return res
+
+        def __getattr__(self, name):
+            return getattr(self._ref, name)
+
+    def _wrapped_reference(path=None, app=None):
+        ref = orig_ref(path, app=app or _firebase_app)
+        return _LoggingRef(ref, path=path)
+
+    try:
+        db.reference = _wrapped_reference
+    except Exception:
+        logger.exception('Failed to install db.reference logging wrapper')
+
 
 
 # ============================================================================
@@ -522,6 +619,36 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_
         # Build set of local file keys (what should exist in Firebase)
         local_file_keys = set()
         
+        # prepare smart sync remote metadata map
+        # smart_sync will skip uploading files whose mtime is unchanged; however
+        # the epsilon/ and excel/ folders are exempt (they are always uploaded on
+        # logout because they change constantly).
+        smart_sync = os.getenv('FIREBASE_SMART_SYNC', '1') == '1'
+        remote_meta = {}
+        if smart_sync:
+            # read existing remote file tree once
+            try:
+                firebase_path = f'/groups/{group_name}/files'
+                remote_tree = firebase_read_data_compressed(firebase_path) or {}
+                def _collect_meta(obj, prefix=''):
+                    if not isinstance(obj, dict):
+                        return
+                    for k, v in obj.items():
+                        keystr = str(k).lstrip('/')
+                        full = f"{prefix}/{keystr}".lstrip('/')
+                        if isinstance(v, dict) and 'content' in v and '_meta' in v:
+                            try:
+                                mtime = float(v.get('_meta', {}).get('mtime', 0) or 0)
+                            except Exception:
+                                mtime = 0
+                            remote_meta[full] = mtime
+                        elif isinstance(v, dict):
+                            _collect_meta(v, full)
+                _collect_meta(remote_tree, '')
+                logger.debug('[PUSH] Collected %d remote metadata entries for smart sync', len(remote_meta))
+            except Exception as e:
+                logger.warning('[PUSH] Could not collect remote metadata for smart sync: %s', e)
+        
         # Scan all files in the source directory (including subdirectories)
         for root, dirs, files in os.walk(source_dir):
             for fname in files:
@@ -581,6 +708,22 @@ def firebase_push_group_files(group_name: str, local_data_root: str = None, dry_
                     safe_firebase_key = '/'.join(safe_parts)
                     local_file_keys.add(safe_firebase_key)
                     
+                    # smart sync: skip if unchanged and not in epsilon/excel
+                    if smart_sync:
+                        rel = os.path.relpath(file_path, source_dir).replace('\\', '/')
+                        parts = rel.split('/')
+                        if not any(p in ('epsilon', 'excel') for p in parts):
+                            # compare with remote metadata
+                            remote_mtime = remote_meta.get(safe_firebase_key)
+                            try:
+                                local_mtime = os.path.getmtime(file_path)
+                            except Exception:
+                                local_mtime = None
+                            if remote_mtime and local_mtime and local_mtime <= remote_mtime:
+                                logger.debug('[PUSH] Skipping unchanged file %s', file_path)
+                                # still record key so deletion logic knows it exists
+                                local_file_keys.add(safe_firebase_key)
+                                continue
                     # Read file
                     with open(file_path, 'rb') as f:
                         file_content = f.read()
@@ -756,6 +899,16 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
         if not fernet_key:
             logger.warning('[PULL] No Fernet key available; encrypted files will not be decrypted')
         
+        # decide whether smart sync (skip unchanged files) is enabled
+        # note: epsilon/ and excel/ subdirectories are *always* pulled regardless
+        # of smart_sync, because those folders change frequently and we want to
+        # sync them only on login/logout rather than incrementally.
+        smart_sync = os.getenv('FIREBASE_SMART_SYNC', '1') == '1'
+        if smart_sync:
+            logger.debug('[PULL] Smart sync is enabled (unchanged files may be skipped); epsilon/excel will be ignored for skipping')
+        else:
+            logger.debug('[PULL] Smart sync is disabled; all files will be pulled')
+        
         def _get_file_name_with_extension(key_name):
             """
             Convert Firebase key names back to local file names.
@@ -815,10 +968,11 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
 
         total_files = _count_files(exported) or 0
         processed_files = 0
+        bytes_downloaded = 0
 
         def _recursive_process(obj, current_path=""):
             """Recursively find all files (flattened) and materialize them"""
-            nonlocal files_created, files_failed
+            nonlocal files_created, files_failed, bytes_downloaded
             
             if not isinstance(obj, dict):
                 return
@@ -854,6 +1008,12 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                             else:
                                 logger.debug('[PULL] No key available; using raw blob for %s', file_name)
 
+                            # account bytes downloaded for this pull (after optional decryption)
+                            try:
+                                bytes_downloaded += len(blob)
+                            except Exception:
+                                pass
+
                             # Determine where to write the file.
                             # Prefer preserving remote subdirectory structure (except imports/)
                             file_dir = target_dir
@@ -882,8 +1042,23 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
                                 os.makedirs(file_dir, exist_ok=True)
                                 logger.debug('[PULL] Routing epsilon_invoices file to epsilon/ subdirectory: %s', file_name)
 
-                            # Write file to appropriate directory
+                            # Build local path before potentially skipping
                             target_file_path = os.path.join(file_dir, file_name)
+
+                            # smart sync: skip if file unchanged and not in epsilon/excel
+                            if smart_sync:
+                                rel = os.path.relpath(target_file_path, target_dir)
+                                parts = rel.replace('\\', '/').split('/')
+                                if not any(p in ('epsilon', 'excel') for p in parts):
+                                    try:
+                                        if os.path.exists(target_file_path):
+                                            local_mtime = os.path.getmtime(target_file_path)
+                                            remote_mtime = float(val.get('_meta', {}).get('mtime', 0) or 0)
+                                            if remote_mtime and local_mtime >= remote_mtime:
+                                                logger.debug('[PULL] Skipping unchanged file %s', target_file_path)
+                                                continue
+                                    except Exception:
+                                        pass
                             # If this is a log file, append the content to the existing server log (paste behavior).
                             # For other files, overwrite with the Firebase copy (login-triggered pull should replace locals).
                             if file_name.endswith('.log'):
@@ -983,11 +1158,20 @@ def firebase_pull_group_to_local(group_name: str, local_data_root: str = None) -
             logger.warning('[PULL] Could not prune remote log variants: %s', e)
 
         # Log summary
-        logger.info('[PULL] Pulled files for group %s: created %d files, %d failed. Stored in: %s', 
-                    group_name, files_created, files_failed, target_dir)
-        # mark progress as complete
         try:
-            _set_progress('done', 100, f'Completed: {files_created} files')
+            logger.info('[PULL] Pulled files for group %s: created %d files, %d failed, bytes_downloaded=%d. Stored in: %s', 
+                        group_name, files_created, files_failed, bytes_downloaded, target_dir)
+            # Record per-pull bytes in activity logs for auditing
+            try:
+                firebase_log_activity('system', group_name, 'firebase_pull', {'bytes_downloaded': int(bytes_downloaded), 'files_created': int(files_created), 'files_failed': int(files_failed)})
+            except Exception:
+                logger.debug('Could not write firebase_pull activity entry')
+        except Exception:
+            pass
+
+        # mark progress as complete (include MB in message)
+        try:
+            _set_progress('done', 100, f'Completed: {files_created} files (downloaded {round(bytes_downloaded/1024.0/1024.0,2)} MB)')
         except Exception:
             pass
         return True
@@ -1280,13 +1464,12 @@ def _scan_and_sync_data_dir(data_dir: str, group_names: List[str] = None) -> Non
 
 
 def _sync_loop(data_dir: str, interval: int = 60):
+    """DEPRECATED: Background sync loop disabled to reduce RTDB traffic.
+    Sync now happens only on: login (pull), logout (push), and server startup (cleanup).
+    """
     global _sync_stop
-    while not _sync_stop:
-        try:
-            _scan_and_sync_data_dir(data_dir)
-        except Exception as e:
-            logger.error(f'Error during Firebase data sync: {e}')
-        time.sleep(interval)
+    logger.info('Ο βρόχος συγχρονισμού είναι απενεργοποιημένος (SYNC_ENABLED=0 από προεπιλογή). Ο συγχρονισμός γίνεται μόνο σύνδεση/αποσύνδεση.')
+    return
 
 
 def start_firebase_data_sync(data_dir: str = None, interval: int = 60) -> None:
@@ -1300,13 +1483,35 @@ def start_firebase_data_sync(data_dir: str = None, interval: int = 60) -> None:
     if data_dir is None:
         data_dir = os.path.join(os.getcwd(), 'data')
 
+    # Cleanup any stale per-group .sync_progress.json left by previous runs/crashes
+    try:
+        if os.path.isdir(data_dir):
+            for entry in os.listdir(data_dir):
+                grp_dir = os.path.join(data_dir, entry)
+                if os.path.isdir(grp_dir):
+                    try:
+                        clear_group_sync_progress(entry)
+                        logger.info('Cleared stale sync progress for group %s', entry)
+                    except Exception as e:
+                        logger.debug('Failed to clear stale sync progress for %s: %s', entry, e)
+    except Exception as e:
+        logger.debug('Failed to cleanup stale group sync progress files: %s', e)
+
+    # Background sync thread is now disabled by default.
+    # Sync happens only on login (pull), logout (push), and server startup (cleanup).
+    # To re-enable: set FIREBASE_SYNC_ENABLED=1 in .env
+    sync_enabled = os.getenv('FIREBASE_SYNC_ENABLED', '0') == '1'
+    if not sync_enabled:
+        logger.info('Ο συγχρονισμός με Firebase απενεργοποιήθηκε (FIREBASE_SYNC_ENABLED δεν ορίστηκε). Συγχρονισμός μόνο σύνδεση/αποσύνδεση.')
+        return
+
     if _sync_thread and _sync_thread.is_alive():
         return
 
     _sync_stop = False
     _sync_thread = threading.Thread(target=_sync_loop, args=(data_dir, interval), daemon=True)
     _sync_thread.start()
-    logger.info('Started Firebase data sync thread')
+    logger.info('Εκκινήθηκε νήμα συγχρονισμού δεδομένων Firebase (FIREBASE_SYNC_ENABLED=1)')
 
 
 def firebase_sync_group_folder(group_folder: str, data_dir: str = None) -> bool:
@@ -1414,3 +1619,87 @@ def stop_firebase_data_sync() -> None:
     _sync_stop = True
     if _sync_thread:
         _sync_thread.join(timeout=2)
+
+
+def sync_user_groups_from_firestore(user_id: int, firebase_uid: str = None) -> bool:
+    """Sync user's group memberships from Firestore to local SQLite database.
+    
+    Call this after user login to ensure local DB is in sync with Firestore.
+    - Queries Firestore for `/users/{firebase_uid}/groups`
+    - Updates local UserGroup table to match
+    - Returns True if sync succeeded or Firebase disabled, False on error
+    """
+    try:
+        if not is_firebase_enabled():
+            logger.debug('Firebase not enabled; skipping group sync')
+            return True
+        
+        if not firebase_uid:
+            logger.warning('No firebase_uid provided for user %s', user_id)
+            return False
+        
+        # Import locally to avoid circular dependency
+        from models import db, User, Group, UserGroup
+        from flask import current_app
+        
+        # Get user record
+        user = User.query.get(user_id)
+        if not user:
+            logger.warning('User %s not found in DB', user_id)
+            return False
+        
+        # Query Firestore for user's groups
+        try:
+            user_profile = firebase_read_data(f'/users/{firebase_uid}')
+            firestore_groups = []
+            if user_profile and isinstance(user_profile, dict) and 'groups' in user_profile:
+                firestore_groups = user_profile.get('groups', [])
+            
+            logger.info('Χρήστης %s: Βρέθηκαν %d ομάδες στο Firestore: %s', 
+                       firebase_uid, len(firestore_groups), firestore_groups)
+        except Exception as e:
+            logger.error('Failed to query Firestore groups for %s: %s', firebase_uid, e)
+            return False
+        
+        # Sync groups to local DB
+        try:
+            # Get local Group records by name
+            local_groups = {}
+            for grp in Group.query.all():
+                local_groups[grp.name] = grp
+            
+            # Add user to groups from Firestore if not already there
+            for group_name in firestore_groups:
+                if group_name not in local_groups:
+                    logger.debug('Group %s not found in local DB (creating)', group_name)
+                    # Create group if it doesn't exist (default data_folder = group_name)
+                    grp = Group(name=group_name, data_folder=group_name)
+                    db.session.add(grp)
+                    db.session.flush()
+                    local_groups[group_name] = grp
+                else:
+                    grp = local_groups[group_name]
+                
+                # Add user to this group if not already a member
+                existing_ug = UserGroup.query.filter_by(user_id=user_id, group_id=grp.id).first()
+                if not existing_ug:
+                    ug = UserGroup(user_id=user_id, group_id=grp.id, role='member')
+                    db.session.add(ug)
+                    logger.info('Added user %s to group %s', user_id, group_name)
+            
+            # Optionally: remove user from groups not in Firestore
+            # (be careful here - only do if Firestore is source of truth)
+            # For now, we'll keep existing local groups to avoid breaking things
+            
+            db.session.commit()
+            logger.info('User %s groups synced successfully', firebase_uid)
+            return True
+            
+        except Exception as e:
+            logger.error('Failed to sync groups to local DB for user %s: %s', firebase_uid, e)
+            db.session.rollback()
+            return False
+            
+    except Exception as e:
+        logger.error('Unexpected error in sync_user_groups_from_firestore: %s', e)
+        return False

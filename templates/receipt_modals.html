@@ -1,0 +1,79 @@
+{#
+This partial provides two modals related to receipt analysis.
+They are wrapped in a <template> so that search.html can clone them
+only when the user has enabled receipt analysis.
+#}
+<template id="rc-receipt-modals-template">
+
+<!-- RECEIPT CLASSIFICATION MODAL -->
+<div id="receiptClassModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 p-4" style="display:none;">
+  <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">Χαρακτηρισμός Αποδείξεων ανά ΦΠΑ</h3>
+      <button id="receiptClassCloseX" class="text-gray-500 text-xl font-bold">✕</button>
+    </div>
+
+    <div class="space-y-3">
+      <div class="text-sm text-gray-600">
+        Επίλεξε για κάθε ποσοστό ΦΠΑ ποια κατηγορία να χρησιμοποιείται για τις αποδείξεις.
+      </div>
+
+      <!-- Profile selector (receipts) -->
+      <div class="flex items-center gap-2">
+        <label class="text-sm font-medium">Προφίλ</label>
+        <select id="charProfileSelectClass" class="border rounded px-2 py-1"></select>
+        <a data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="px-2 py-1 border rounded">+</a>
+      </div>
+
+      <div id="receiptClassList" class="space-y-2"></div>
+    </div>
+
+    <div class="mt-4 flex justify-end gap-2">
+      <button id="receiptClassCancel" class="px-3 py-2 border rounded">Άκυρο</button>
+      <button id="receiptClassSave" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- RECEIPT REPEAT MAPPING MODAL -->
+<div id="receiptRepeatMappingModal" class="fixed inset-0 flex items-center justify-center bg-black/40 z-50 p-4" style="display:none;">
+  <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-lg font-semibold">Επαναληπτική αντιστοίχιση για Αποδείξεις</h3>
+      <button id="receiptRepeatModalCloseX" class="text-gray-500 text-xl font-bold">✕</button>
+    </div>
+
+    <div class="space-y-3">
+      <div class="text-sm text-gray-600">
+        Επίλεξε για κάθε ΦΠΑ-κατηγορία ποια κατηγορία εξόδου θέλεις να χρησιμοποιείται επαναληπτικά.
+      </div>
+
+      <!-- Επιλογή Προφίλ (ακριβώς όπως στο invoice modal) -->
+      <div class="flex items-center gap-2">
+        <label class="text-sm font-medium">Προφίλ</label>
+        <select id="charProfileSelectReceipt" class="border rounded px-2 py-1"></select>
+        <a data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="px-2 py-1 border rounded">+</a>
+      </div>
+
+      <div id="charMissingHintReceipt" class="text-sm text-red-600" style="display:none"></div>
+
+      <div id="receiptRepeatMappingList" class="space-y-2"></div>
+
+      <!-- MTYPE dropdowns for Γ Κατηγορία -->
+      <div id="repeatReceiptMtypeContainer" class="mt-4" style="display:none;">
+        <label class="text-sm font-medium">Είδος Κίνησης για Αποδείξεις (Γ Κατηγορία) <span class="text-red-600">*</span></label>
+        <select id="repeatReceiptMtypeSelect" class="border rounded px-2 py-1 w-full mt-1" required>
+          <option value="">-- επιλέξτε είδος κίνησης --</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mt-4 flex justify-end gap-2">
+      <button id="receiptRepeatModalCancel" class="px-3 py-2 border rounded">Άκυρο</button>
+      <button id="receiptRepeatModalSave" class="bg-sky-600 text-white px-3 py-2 rounded">Αποθήκευση</button>
+    </div>
+  </div>
+</div>
+
+</template>

@@ -44,6 +44,7 @@ from epsilon_bridge_multiclient_strict import (
     _canon_category,
     _infer_vat_rate_for_line,
     _is_receipt,
+    _receipt_analysis_enabled,
     _parse_lines,
     _reason_for_rec_enhanced,
     _load_client_map,
@@ -53,6 +54,37 @@ from epsilon_bridge_multiclient_strict import (
     _read_active_fiscal_year,
     characts_from_lines,
 )
+
+
+def _merge_custom_accounts_g(settings: Dict[str, Any], credential: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge custom category accounts for Γ category using account_g_* keys."""
+    merged = dict(settings or {})
+    if not isinstance(credential, dict):
+        return merged
+    custom_cats = credential.get("custom_categories")
+    if not isinstance(custom_cats, list):
+        return merged
+    for item in custom_cats:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("enabled"):
+            continue
+        slug = str(item.get("id") or item.get("slug") or "").strip()
+        if not slug:
+            continue
+        accounts = item.get("accounts") or {}
+        if not isinstance(accounts, dict):
+            continue
+        for rate_key, code in accounts.items():
+            code_str = str(code).strip()
+            if not code_str:
+                continue
+            rate_norm = re.sub(r"[^0-9]", "", str(rate_key))
+            if not rate_norm:
+                continue
+            key = f"account_g_{slug}_fpa_kat_{rate_norm}%"
+            merged[key] = code_str
+    return merged
 
 
 # ============================================================================
@@ -189,8 +221,52 @@ def _get_mtype_for_category(settings: Dict[str, Any], canon_category: str, line_
     if key in setts and setts[key]:
         return str(setts[key]).strip()
     
-    # Fallback στο default mapping
-    return DEFAULT_MTYPE_MAPPING.get(canon_category, '3')  # Default: Γενικά έξοδα
+    # Fallback σε invoice/article movement type (ΟΧΙ category-based MTYPE)
+    # ώστε να μην προκύπτει λάθος MTYPE=1 όταν λείπει το invoice mtype.
+    setts = _settings_norm(settings)
+    for article_key in (
+        "article_movement_type_agoron_exodon",
+        "article_movement_type_g",
+    ):
+        val = setts.get(_norm_key(article_key), "")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    return _get_article_movement_type(settings)
+
+
+def _resolve_invoice_mtype(rec: Dict[str, Any], settings: Dict[str, Any]) -> str:
+    """Resolve invoice-level MTYPE from multiple payload variants with safe fallback."""
+    raw = (
+        rec.get("mtype")
+        or rec.get("invoice_mtype")
+        or rec.get("receipt_mtype")
+        or rec.get("mType")
+        or rec.get("invoiceMtype")
+        or rec.get("receiptMtype")
+        or ""
+    )
+    mtype = str(raw).strip() if raw is not None else ""
+    if mtype:
+        return mtype
+
+    # Try to resolve from label when code is missing
+    label_raw = str(rec.get("mtype_label") or rec.get("movement_type_label") or "").strip().lower()
+    if label_raw:
+        setts = _settings_norm(settings)
+        label_map = {
+            _norm_key("article_movement_type_agoron_exodon_tameiaki"): "αγορών - εξόδων ταμειακή",
+            _norm_key("article_movement_type_tameiaki"): "ταμειακή",
+            _norm_key("article_movement_type_agoron_exodon"): "αγορών - εξόδων",
+            _norm_key("article_movement_type_symsifistiki"): "συμψηφιστική",
+            _norm_key("article_movement_type_agoron_exodon_opseos"): "αγορών - εξόδων όψεως",
+        }
+        for code_key, expected_label in label_map.items():
+            if label_raw == expected_label and str(setts.get(code_key) or "").strip():
+                return str(setts.get(code_key)).strip()
+
+    # Final fallback: generic article movement type (usually 12)
+    return _get_article_movement_type(settings)
 
 
 # ============================================================================
@@ -215,7 +291,20 @@ def _account_key_candidates_g(canon: str, rate: int) -> List[str]:
     ]
 
 
-def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int) -> str:
+def _fallback_category_candidates_g(canon: str, is_receipt: bool) -> List[str]:
+    """Fallback category order for resolving missing custom Γ accounts."""
+    raw = str(canon or "").strip().lower()
+    out: List[str] = []
+    if raw:
+        out.append(raw)
+    if "γενικες_δαπανες_με_φπα" not in out:
+        out.append("γενικες_δαπανες_με_φπα")
+    if is_receipt and "αποδειξακια" not in out:
+        out.append("αποδειξακια")
+    return out
+
+
+def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int, is_receipt: bool = False) -> str:
     """Βρίσκει λογαριασμό Γ Κατηγορίας"""
     setts = _settings_norm(settings)
     for key in _account_key_candidates_g(canon, rate):
@@ -224,6 +313,28 @@ def _get_account_for_g(settings: Dict[str, Any], canon: str, rate: int) -> str:
             account = val.strip()
             if account and _validate_g_account_format(account):
                 return account
+
+    # Fallbacks για ειδικές mirror κατηγορίες
+    canon_s = str(canon or "").strip().lower()
+    supplier_aliases = {
+        "προμηθευτής_χονδρικής", "προμηθευτης_χονδρικης",
+        "προμηθευτής_λιανικής", "προμηθευτης_λιανικης",
+        "προμηθευτής", "προμηθευτης", "supplier_wholesale", "supplier_retail"
+    }
+    supplier_retail_aliases = {"προμηθευτής_λιανικής", "προμηθευτης_λιανικης", "supplier_retail"}
+    cash_aliases = {"ταμείο", "ταμειο", "cash", "ταμειο_λογαριασμος"}
+
+    if canon_s in supplier_aliases:
+        supplier_key = "account_g_supplier_retail" if (is_receipt or canon_s in supplier_retail_aliases) else "account_g_supplier_wholesale"
+        val = setts.get(_norm_key(supplier_key), "")
+        if isinstance(val, str) and val.strip() and _validate_g_account_format(val.strip()):
+            return val.strip()
+
+    if canon_s in cash_aliases:
+        val = setts.get(_norm_key("account_g_cash"), "")
+        if isinstance(val, str) and val.strip() and _validate_g_account_format(val.strip()):
+            return val.strip()
+
     return ""
 
 
@@ -241,7 +352,8 @@ def _account_detail_for_line_g(
     settings: Dict[str, Any],
     category: str,
     is_receipt: bool,
-    vat_rate: Optional[int]
+    vat_rate: Optional[int],
+    analysis_enabled: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Εύρεση λογαριασμού για γραμμή - Γ Κατηγορία.
@@ -252,8 +364,8 @@ def _account_detail_for_line_g(
     chosen = ""
     used_key = ""
 
-    # Forced rate για receipts/εγγυοδοσία
-    forced_rate = 0 if (is_receipt or canon == "εγγυοδοσια") else None
+    # Forced rate μόνο για receipts χωρίς ανάλυση ή για εγγυοδοσία
+    forced_rate = 0 if (canon == "εγγυοδοσια" or (is_receipt and not analysis_enabled)) else None
     target_rate = int(forced_rate) if forced_rate is not None else (int(vat_rate) if vat_rate is not None else None)
 
     if target_rate is None:
@@ -270,9 +382,32 @@ def _account_detail_for_line_g(
                 used_key = key
                 break
 
+    if not chosen:
+        for fallback_canon in _fallback_category_candidates_g(canon, is_receipt):
+            if fallback_canon == canon:
+                continue
+            for key in _account_key_candidates_g(fallback_canon, target_rate):
+                tried.append(key)
+                val = setts.get(key)
+                if val and isinstance(val, str):
+                    account = val.strip()
+                    if account and _validate_g_account_format(account):
+                        chosen = account
+                        used_key = f"{key} (fallback:{fallback_canon})"
+                        break
+            if chosen:
+                break
+
+    if not chosen:
+        fallback_account = _get_account_for_g(settings, canon, target_rate, is_receipt=is_receipt)
+        if fallback_account:
+            chosen = fallback_account
+            used_key = "fallback_special_category"
+
     dbg = {
         "category": canon,
         "vat_in": vat_rate,
+        "analysis_enabled": bool(analysis_enabled),
         "forced_zero": bool(forced_rate is not None),
         "used_key": used_key,
         "tried_keys": tried,
@@ -352,7 +487,7 @@ def build_preview_rows_for_ui_g(
 
     cred_list = credentials if isinstance(credentials, list) else [credentials]
     active = next((c for c in cred_list if str(c.get("vat")) == str(vat)), (cred_list[0] if cred_list else {}))
-    settings_all = _merge_custom_accounts(settings_all, active)
+    settings_all = _merge_custom_accounts_g(settings_all, active)
     
     apod_type = (active or {}).get("apodeixakia_type", "")
     apod_supplier_id = _safe_int((active or {}).get("apodeixakia_supplier", ""))
@@ -449,16 +584,16 @@ def build_preview_rows_for_ui_g(
             issues.append({"code": "no_lines", "message": f"Δεν βρέθηκαν γραμμές για MARK={rec.get('mark')}"})
             continue
 
+        is_auto_cash_payment = bool(rec.get("_auto_cash_payment"))
+
         # Συγκέντρωση ανά κατηγορία + VAT
         aggregated: Dict[Tuple[str, int], Dict[str, Any]] = {}
         sum_net = 0.0
         sum_vat = 0.0
         
         # MTYPE είναι invoice-level (όχι line-level)
-        # Ελέγχουμε και τα δύο πεδία: mtype και invoice_mtype
-        invoice_mtype = rec.get("mtype") or rec.get("invoice_mtype") or ""
-        # Μετατροπή σε string (μπορεί να είναι int)
-        invoice_mtype = str(invoice_mtype).strip() if invoice_mtype else ""
+        # Resolve από πολλαπλά πεδία + mtype_label + ασφαλές fallback.
+        invoice_mtype = _resolve_invoice_mtype(rec, settings_all)
         logger.debug(f"[Γ Category] MARK={mark}, invoice_mtype from JSON: '{invoice_mtype}'")
 
         for ln in lines:
@@ -493,8 +628,17 @@ def build_preview_rows_for_ui_g(
                 }
             aggregated[key]["net"] += net
             aggregated[key]["vat"] += vat
-            sum_net += net
-            sum_vat += vat
+
+            canon_for_sum = _canon_category(cat)
+            canon_sum_lower = str(canon_for_sum or "").strip().lower()
+            is_cash_credit_category = canon_sum_lower in {"ταμείο", "ταμειο", "cash"}
+
+            # Για auto cash-payment mirror (2 γραμμές: προμηθευτής Χ + ταμείο Π),
+            # τα header sums πρέπει να αντικατοπτρίζουν το πληρωτέο μία φορά,
+            # άρα αγνοούμε τη γραμμή ταμείου από τα summary totals.
+            if not (is_auto_cash_payment and is_cash_credit_category):
+                sum_net += net
+                sum_vat += vat
 
         if not aggregated:
             continue
@@ -505,15 +649,19 @@ def build_preview_rows_for_ui_g(
         lines_out = []     # Για preview (ίδιο format με Β Category)
         lcodes_summary = []
         
-        # Πρώτα βρες τον λογαριασμό προμηθευτή (θα χρειαστεί για έλεγχο)
-        account_p = _account_header_P_g(settings_all, is_receipt)
-        if not account_p:
-            issues.append({
-                "code": "missing_supplier_account_g",
-                "message": f"Λείπει λογαριασμός προμηθευτή Γ για MARK={rec.get('mark')}"
-            })
-            continue
+        # Πρώτα βρες τον λογαριασμό προμηθευτή (χρειάζεται μόνο για non-mirror header πίστωση)
+        account_p = ""
+        if not is_auto_cash_payment:
+            account_p = _account_header_P_g(settings_all, is_receipt)
+            if not account_p:
+                issues.append({
+                    "code": "missing_supplier_account_g",
+                    "message": f"Λείπει λογαριασμός προμηθευτή Γ για MARK={rec.get('mark')}"
+                })
+                continue
         
+        analysis_enabled = _receipt_analysis_enabled(rec)
+
         for (cat, vr), agg in aggregated.items():
             canon = _canon_category(cat)
             
@@ -527,15 +675,45 @@ def build_preview_rows_for_ui_g(
                 })
                 continue
 
-            # Λογαριασμός Γ Κατηγορίας (ΧΡΕΩΣΗ)
-            account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr)
+            canon_lower = str(canon or "").strip().lower()
+            is_cash_credit_line = is_auto_cash_payment and canon_lower in {"ταμείο", "ταμειο", "cash"}
+            line_crdb = 1 if is_cash_credit_line else 0
+
+            # Λογαριασμός Γ Κατηγορίας
+            # Για auto cash-payment: ΕΠΙΒΑΛΛΕΤΑΙ κανόνας
+            #   - Χρέωση: προμηθευτής (λιανικής για αποδείξεις / χονδρικής για τιμολόγια)
+            #   - Πίστωση: ταμείο
+            if is_auto_cash_payment:
+                if is_cash_credit_line:
+                    account = _get_account_for_g(settings_all, "ταμείο", 0, is_receipt=is_receipt)
+                    dbg = {
+                        "category": canon,
+                        "vat_in": vr,
+                        "used_key": "forced_cash_account_auto_cash_payment",
+                        "chosen": account,
+                    }
+                else:
+                    account = _account_header_P_g(settings_all, is_receipt)
+                    if not account:
+                        supplier_canon = "προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής"
+                        account = _get_account_for_g(settings_all, supplier_canon, 0, is_receipt=is_receipt)
+                    dbg = {
+                        "category": canon,
+                        "vat_in": vr,
+                        "used_key": "forced_supplier_account_auto_cash_payment",
+                        "chosen": account,
+                    }
+            else:
+                # Κανονική ροή (non-mirror)
+                account, dbg = _account_detail_for_line_g(settings_all, cat, is_receipt, vr, analysis_enabled=analysis_enabled)
+
             if not account:
                 issues.append({
                     "code": "missing_account_g",
-                    "message": f"Δεν βρέθηκε λογαριασμός Γ για {canon}, VAT={vr}%. Tried: {dbg.get('tried_keys')}"
+                    "message": f"Δεν βρέθηκε λογαριασμός Γ για {canon}, VAT={vr}%. Tried: {dbg.get('tried_keys') if isinstance(dbg, dict) else ''}"
                 })
                 continue
-            
+
             # Validation με Chart of Accounts
             if coa_df is not None and not _validate_account_in_coa(account, coa_df):
                 issues.append({
@@ -544,11 +722,11 @@ def build_preview_rows_for_ui_g(
                 })
                 # Συνέχισε ούτως ή άλλως - θα δουν το warning
 
-            # Detail row για export (με MTYPE) - ΧΡΕΩΣΗ
+            # Detail row για export (με MTYPE)
             # ΣΗΜΑΝΤΙΚΟ: Αν έχουμε CoA και θα προστεθεί λογαριασμός ΦΠΑ,
             # τότε η χρέωση εξόδων ΔΕΝ πρέπει να περιλαμβάνει το ΦΠΑ στο VATAMT
             vat_account = None
-            if coa_df is not None and vr > 0:
+            if (not is_auto_cash_payment) and coa_df is not None and vr > 0 and line_crdb == 0:
                 vat_account = _get_vat_account_from_coa(account, vr, coa_df)
                 if vat_account:
                     logger.debug(f"[Γ Category] Found VAT account {vat_account} for {account} (ΦΠΑ: {vr}%)")
@@ -562,7 +740,7 @@ def build_preview_rows_for_ui_g(
                     "VATAMT": 0.0,  # Το ΦΠΑ θα πάει σε ξεχωριστή εγγραφή
                     "category": canon,
                     "vat_rate": vr,
-                    "CRDB": 0,  # Χρέωση
+                    "CRDB": line_crdb,
                     "ISAGRYP": "",  # Κενό για κύρια γραμμή
                 })
                 
@@ -586,13 +764,17 @@ def build_preview_rows_for_ui_g(
                     "VATAMT": agg["vat"],
                     "category": canon,
                     "vat_rate": vr,
-                    "CRDB": 0,  # Χρέωση
+                    "CRDB": line_crdb,
                     "ISAGRYP": "",  # Κενό
                 })
             
-            # Line για preview - ΧΡΕΩΣΗ (Debit)
+            # Line για preview
+            preview_category = canon
+            if is_auto_cash_payment:
+                preview_category = "ταμείο" if is_cash_credit_line else ("προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής")
+
             lines_out.append({
-                "category": canon,
+                "category": preview_category,
                 "vat_rate": int(vr) if vr is not None else 0,
                 "vat_rate_in": int(vr) if vr is not None else 0,
                 "lcode": account,
@@ -600,7 +782,7 @@ def build_preview_rows_for_ui_g(
                 "net": _round2(agg["net"]),
                 "vat": _round2(agg["vat"]) if not vat_account else 0.0,
                 "gross": _round2(agg["net"] + (agg["vat"] if not vat_account else 0.0)),
-                "crdb": "Χ",
+                "crdb": "Π" if line_crdb == 1 else "Χ",
                 "mtype": mtype,
             })
             lcodes_summary.append(account)
@@ -624,32 +806,34 @@ def build_preview_rows_for_ui_g(
         if not detail_rows:
             continue
 
-        # Προσθήκη ΠΙΣΤΩΣΗΣ προμηθευτή στα details και preview
-        detail_rows.append({
-            "MTYPE": detail_rows[0]["MTYPE"] if detail_rows else "",  # Χρήση του πρώτου MTYPE
-            "LCODE": account_p,
-            "NETAMT": sum_net + sum_vat,  # Σύνολο (NET + VAT) στο NETAMT
-            "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
-            "category": "προμηθευτής",
-            "vat_rate": 0,  # 0 για πίστωση προμηθευτή
-            "CRDB": 1,  # Πίστωση
-            "ISAGRYP": "",  # Κενό για προμηθευτή
-        })
-        
-        # Line για preview - ΠΙΣΤΩΣΗ προμηθευτή
-        lines_out.append({
-            "category": "προμηθευτής",
-            "vat_rate": 0,  # 0 για πίστωση προμηθευτή (όχι None)
-            "vat_rate_in": 0,  # Συμβατότητα με template
-            "lcode": account_p,
-            "lcode_detail": account_p,  # Συμβατότητα με template
-            "net": _round2(sum_net),
-            "vat": _round2(sum_vat),
-            "gross": _round2(sum_net + sum_vat),
-            "crdb": "Π",  # Πίστωση για preview
-            "mtype": detail_rows[0]["MTYPE"] if detail_rows else "",
-        })
-        lcodes_summary.append(account_p)
+        # Για κανονικά άρθρα: προσθήκη ΠΙΣΤΩΣΗΣ προμηθευτή.
+        # Για auto cash-payment mirror: ΟΧΙ extra γραμμή (έχουμε ήδη 2 γραμμές supplier debit + cash credit).
+        if not is_auto_cash_payment:
+            detail_rows.append({
+                "MTYPE": detail_rows[0]["MTYPE"] if detail_rows else "",  # Χρήση του πρώτου MTYPE
+                "LCODE": account_p,
+                "NETAMT": sum_net + sum_vat,  # Σύνολο (NET + VAT) στο NETAMT
+                "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
+                "category": "προμηθευτής",
+                "vat_rate": 0,  # 0 για πίστωση προμηθευτή
+                "CRDB": 1,  # Πίστωση
+                "ISAGRYP": "",  # Κενό για προμηθευτή
+            })
+            
+            # Line για preview - ΠΙΣΤΩΣΗ προμηθευτή
+            lines_out.append({
+                "category": "προμηθευτής",
+                "vat_rate": 0,  # 0 για πίστωση προμηθευτή (όχι None)
+                "vat_rate_in": 0,  # Συμβατότητα με template
+                "lcode": account_p,
+                "lcode_detail": account_p,  # Συμβατότητα με template
+                "net": _round2(sum_net),
+                "vat": _round2(sum_vat),
+                "gross": _round2(sum_net + sum_vat),
+                "crdb": "Π",  # Πίστωση για preview
+                "mtype": detail_rows[0]["MTYPE"] if detail_rows else "",
+            })
+            lcodes_summary.append(account_p)
 
         # Πάρε issuer info από το record
         aa = str(rec.get("aa") or rec.get("AA") or "")
@@ -689,6 +873,8 @@ def build_preview_rows_for_ui_g(
             "INVOICE": invoice_val,
             "ISKEPYO": 2,  # 2 = Αγορές (ΚΕΠΥΟ)
             "ISAGRYP": "",  # Κενό (θα συμπληρωθεί 0 μόνο στις γραμμές ΦΠΑ)
+            "MTYPE": detail_rows[0]["MTYPE"] if detail_rows else "",
+            "mtype": detail_rows[0]["MTYPE"] if detail_rows else "",
             "SUMKEPYOYP": round(sum_net, 2),
             "SUMKEPYONOTYP": 0,
             "SUMKEPYOFPA": round(sum_vat, 2),
@@ -804,10 +990,16 @@ def export_g_category(
         details = rec.get("_g_details", [])
         if not details:
             continue
+
+        src = rec.get("_source") or {}
+        is_auto_cash_payment = bool(src.get("_auto_cash_payment") or rec.get("_auto_cash_payment"))
         
-        # ΧΡΕΩΣΕΙΣ: Μία γραμμή για κάθε κατηγορία (λογαριασμός εξόδων)
+        # Για κανονικά άρθρα: εξαγωγή μόνο χρεώσεων από details και μετά synthetic πίστωση προμηθευτή.
+        # Για auto cash-payment: εξαγωγή ΟΛΩΝ των detail γραμμών (Χ + Π) όπως είναι.
         for detail in details:
-            if detail.get("CRDB") == 1:  # Αγνόησε την πίστωση από τα details (θα την προσθέσουμε μετά)
+            detail_crdb = int(detail.get("CRDB", 0) or 0)
+            if (not is_auto_cash_payment) and detail_crdb == 1:
+                # Στα non-mirror άρθρα η πίστωση προμηθευτή μπαίνει synthetic παρακάτω
                 continue
                 
             flat.append({
@@ -829,7 +1021,7 @@ def export_g_category(
                 "LCODE_DETAIL": detail["LCODE"],
                 "ISAGRYP_DETAIL": detail.get("ISAGRYP", ""),  # Από detail (κενό ή 0)
                 "KEPYOPARTY": "",
-                "CRDB": 0,  # 0 = Χρέωση (Debit)
+                "CRDB": detail_crdb,
                 "NETAMT": round(detail["NETAMT"], 2),  # Καθαρή αξία
                 "VATAMT": round(detail["VATAMT"], 2),  # ΦΠΑ
                 "AMOUNT": round(detail["NETAMT"] + detail["VATAMT"], 2),  # Σύνολο
@@ -837,37 +1029,38 @@ def export_g_category(
                 "REASON_DETAIL": rec["REASON"],
             })
         
-        # ΠΙΣΤΩΣΧ: Μία γραμμή για τον προμηθευτή (σύνολο)
-        total_amount = rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"]
-        # Χρησιμοποίησε το MTYPE από το πρώτο detail (όλα τα details έχουν το ίδιο MTYPE)
-        first_mtype = details[0]["MTYPE"] if details else article_mtype
-        flat.append({
-            "ARTID": artid,
-            "MTYPE": first_mtype,  # Χρήση του MTYPE από το invoice
-            "ISKEPYO": rec["ISKEPYO"],
-            "ISAGRYP": 0,
-            "CUSTID": rec["CUSTID"],
-            "MDATE": rec["MDATE"],
-            "REASON": rec["REASON"],
-            "INVOICE": rec["INVOICE"],
-            "SUMKEPYOYP": rec["SUMKEPYOYP"],
-            "SUMKEPYONOTYP": rec["SUMKEPYONOTYP"],
-            "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
-            "MSIGN": rec.get("MSIGN", ""),
-            "LCODE": "",  # Άδειο για Γ Category
-            
-            # ARTICLE_DETAIL
-            "LCODE_DETAIL": rec["LCODE_HEADER"],
-            "ISAGRYP_DETAIL": "",  # Κενό για προμηθευτή
-            "KEPYOPARTY": "",
-            "CRDB": 1,  # 1 = Πίστωση (Credit)
-            "NETAMT": round(rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"], 2),  # Σύνολο (NET + VAT)
-            "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
-            "AMOUNT": round(total_amount, 2),  # Σύνολο
-            "INVOICE_DETAIL": rec["INVOICE"],
-            "REASON_DETAIL": rec["REASON"],
-            "OTHEREXPEND": int(rec.get("OTHEREXPEND", 0) or 0)
-        })
+        # Για non-mirror: synthetic πίστωση προμηθευτή (σύνολο)
+        if not is_auto_cash_payment:
+            total_amount = rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"]
+            # Χρησιμοποίησε το MTYPE από το πρώτο detail (όλα τα details έχουν το ίδιο MTYPE)
+            first_mtype = details[0]["MTYPE"] if details else article_mtype
+            flat.append({
+                "ARTID": artid,
+                "MTYPE": first_mtype,  # Χρήση του MTYPE από το invoice
+                "ISKEPYO": rec["ISKEPYO"],
+                "ISAGRYP": 0,
+                "CUSTID": rec["CUSTID"],
+                "MDATE": rec["MDATE"],
+                "REASON": rec["REASON"],
+                "INVOICE": rec["INVOICE"],
+                "SUMKEPYOYP": rec["SUMKEPYOYP"],
+                "SUMKEPYONOTYP": rec["SUMKEPYONOTYP"],
+                "SUMKEPYOFPA": rec["SUMKEPYOFPA"],
+                "MSIGN": rec.get("MSIGN", ""),
+                "LCODE": "",  # Άδειο για Γ Category
+                
+                # ARTICLE_DETAIL
+                "LCODE_DETAIL": rec["LCODE_HEADER"],
+                "ISAGRYP_DETAIL": "",  # Κενό για προμηθευτή
+                "KEPYOPARTY": "",
+                "CRDB": 1,  # 1 = Πίστωση (Credit)
+                "NETAMT": round(rec["SUMKEPYOYP"] + rec["SUMKEPYOFPA"], 2),  # Σύνολο (NET + VAT)
+                "VATAMT": 0.0,  # 0 για πίστωση προμηθευτή
+                "AMOUNT": round(total_amount, 2),  # Σύνολο
+                "INVOICE_DETAIL": rec["INVOICE"],
+                "REASON_DETAIL": rec["REASON"],
+                "OTHEREXPEND": int(rec.get("OTHEREXPEND", 0) or 0)
+            })
         
         artid += 1
 

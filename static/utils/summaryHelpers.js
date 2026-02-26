@@ -12,6 +12,23 @@ export function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// Format an amount for display inside the summary modal.  Certain invoices
+// (e.g. credit notes) occasionally carry two numeric values in the same field
+// – one for debit, one for credit – separated by whitespace.  When this
+// happens the default rendering put them side‑by‑side which confuses the user.
+// We insert a line break so they stack vertically and add right‑alignment via
+// CSS.
+export function formatAmount(val) {
+  let s = String(val == null ? '' : val);
+  // After escaping we may still have plain spaces.  If the value looks like two
+  // numbers separated by whitespace, replace spaces with a <br> so the browser
+  // wraps them.
+  if (/\d[\d.,]*\s+\d/.test(s)) {
+    return escapeHtml(s).replace(/\s+/g, '<br>');
+  }
+  return escapeHtml(s);
+}
+
 export function getLabelForCategory(val) {
   if (!val) return '';
   const key = String(val);
@@ -54,7 +71,7 @@ export function buildSingleLineHTML(line, categories = []) {
       </div>
       <div>
         <strong>Ποσό</strong>
-        <div>${escapeHtml(String(line.amount || ''))}</div>
+        <div>${formatAmount(line.amount)}</div>
       </div>
       <div>
         <strong>ΦΠΑ</strong>
@@ -151,7 +168,7 @@ export function buildTableHTML(lines, categories = []) {
     tr.innerHTML = `
       <td class="idx-col">${idx + 1}</td>
       <td class="vat-col">${escapeHtml(ln.vatCategory || '')}</td>
-      <td class="amount-col">${escapeHtml(String(ln.amount || ''))}</td>
+      <td class="amount-col">${formatAmount(ln.amount)}</td>
       <td class="vat-value-col">${escapeHtml(String(ln.vat || ''))}</td>
       <td class="cat-col"></td>
     `;

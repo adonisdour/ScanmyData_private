@@ -448,6 +448,15 @@ def firebase_login():
         except Exception:
             pass
         
+        # Sync user's groups from Firestore to local DB
+        # This ensures the user's group memberships are up-to-date
+        try:
+            firebase_config.sync_user_groups_from_firestore(user.id, uid)
+            logger.info('User %s groups synced from Firestore on login', uid)
+        except Exception as e:
+            logger.error('Failed to sync groups from Firestore for user %s: %s', uid, e)
+            # Continue anyway - syncing is not critical
+        
         # Log the login with enhanced details
         try:
             from utils import log_user_activity

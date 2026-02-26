@@ -29,6 +29,9 @@
     <button onclick="showTab('email')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
       📧 Email
     </button>
+    <button onclick="showTab('firebase_usage')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
+      ☁️ Firebase Χρήση
+    </button>
     <button onclick="showTab('settings')" class="tab-button px-4 py-3 border-b-2 border-transparent font-medium text-gray-600 hover:text-gray-900">
       ⚙️ Ρυθμίσεις
     </button>
@@ -264,6 +267,20 @@
     </div>
   </div>
 
+  <!-- ==================== FIREBASE USAGE TAB ==================== -->
+  <div id="firebase_usage" class="tab-content hidden">
+    <div class="bg-white border border-gray-200 rounded-lg p-6">
+      <h2 class="text-lg font-bold mb-4">☁️ Firebase Realtime DB Usage</h2>
+      <div class="overflow-x-auto">
+        <canvas id="firebaseUsageChart" width="800" height="300"></canvas>
+      </div>
+      <p class="text-sm text-gray-600 mt-2">Downloaded per hour (auto MB/GB scale).</p>
+      <button onclick="loadFirebaseUsage()" class="mt-4 px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700">
+        🔄 Ανανέωση
+      </button>
+    </div>
+  </div>
+
   <!-- ==================== SETTINGS TAB ==================== -->
   <div id="settings" class="tab-content hidden">
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -346,6 +363,57 @@
         </div>
       </div>
 
+      <!-- Firebase Sync Settings -->
+      <div class="bg-white border border-gray-200 rounded-lg p-6">
+        <h3 class="text-lg font-bold mb-4">☁️ Firebase Sync Settings</h3>
+        
+        <div class="space-y-4">
+          <!-- Sync Enabled Toggle -->
+          <div class="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
+            <div>
+              <label class="font-medium text-gray-700">Ενεργοποίηση Συγχρονισμού</label>
+              <p class="text-xs text-gray-500 mt-1">Τα δεδομένα συγχρονίζονται κατά τη σύνδεση/αποσύνδεση από προεπιλογή. Ενεργοποιήστε για περιοδική συγχώνευση κάθε N δευτερόλεπτα.</p>
+            </div>
+            <input type="checkbox" id="sync-enabled" class="w-6 h-6 text-sky-600" />
+          </div>
+
+          <!-- Sync Interval Slider -->
+          <div class="p-3 bg-gray-50 rounded border border-gray-200">
+            <label class="block font-medium text-gray-700 mb-2">
+              Διάστημα Συγχρονισμού: <span id="syncIntervalValue" class="text-sky-600 font-bold">60</span>δ
+            </label>
+            <input 
+              type="range" 
+              id="sync-interval" 
+              class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-sky-600"
+              min="10" max="3600" value="60" step="10"
+              oninput="document.getElementById('syncIntervalValue').textContent = this.value"
+            />
+            <p class="text-xs text-gray-500 mt-2">10 δευτ. (έντονο) έως 60 λεπτά (απαλό)</p>
+          </div>
+
+          <!-- Smart Sync Toggle -->
+          <div class="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
+            <div>
+              <label class="font-medium text-gray-700">Έξυπνη Ανίχνευση Αρχείων</label>
+              <p class="text-xs text-gray-500 mt-1">Συγχρονίζει μόνο τα τροποποιημένα αρχεία (βάσει mtime). <strong>Εξαιρούνται</strong> οι υποφάκελοι <code>epsilon</code> και <code>excel</code>, που πάντα ανανεώνονται με σύνδεση/αποσύνδεση.</p>
+            </div>
+            <input type="checkbox" id="smart-sync" class="w-6 h-6 text-sky-600" checked />
+          </div>
+
+          <!-- Current Status -->
+          <div id="firebase-sync-status" class="p-3 bg-blue-50 border border-blue-200 rounded">
+            <h4 class="font-medium text-blue-800 mb-2">📊 Τρέχουσα Κατάσταση</h4>
+            <div class="text-sm text-blue-700" id="sync-status-text">Loading...</div>
+          </div>
+
+          <!-- Save Button -->
+          <button onclick="saveFirebaseSyncSettings()" class="w-full px-4 py-2 bg-sky-600 text-white rounded-md hover:bg-sky-700">
+            💾 Save Sync Settings
+          </button>
+        </div>
+      </div>
+
       <!-- Danger Zone -->
       <div class="bg-red-50 border border-red-200 rounded-lg p-6">
         <h3 class="text-lg font-bold mb-4 text-red-600">⚠️ Επικίνδυνες Ενέργειες</h3>
@@ -388,6 +456,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 // ==================== TAB MANAGEMENT ====================
 function showTab(tabName) {
@@ -412,6 +481,7 @@ function showTab(tabName) {
   }
   else if (tabName === 'backups') loadBackups();
   else if (tabName === 'email') loadEmailUsers();
+  else if (tabName === 'firebase_usage') loadFirebaseUsage();
 }
 
 // ==================== OVERVIEW TAB ====================
@@ -458,14 +528,32 @@ async function loadRecentActivity() {
       return;
     }
 
-    container.innerHTML = data.logs.map(log => `
+    // simple translations for common actions and system label
+    const actionTranslations = {
+      login: 'Σύνδεση',
+      logout: 'Αποσύνδεση',
+      user_logged_in: 'Σύνδεση χρήστη',
+      user_logged_out: 'Αποσύνδεση χρήστη',
+      user_joined_group: 'Είσοδος σε ομάδα',
+      user_left_group: 'Αποχώρηση από ομάδα',
+      group_create: 'Δημιουργία ομάδας',
+      group_delete: 'Διαγραφή ομάδας',
+      firebase_sync_settings_updated: 'Ενημέρωση ρυθμίσεων συγχρονισμού',
+      backup: 'Backup',
+      'system': 'Σύστημα'
+    };
+
+    container.innerHTML = data.logs.map(log => {
+      const userLabel = log.user ? (actionTranslations[log.user] || log.user) : 'Σύστημα';
+      const actionLabel = actionTranslations[log.action] || log.action;
+      return `
       <div class="p-3 border rounded bg-gray-50">
         <div class="text-xs text-gray-500">${log.timestamp || '-'}</div>
-        <div class="text-sm font-medium">${log.user || 'System'}</div>
-        <div class="text-sm text-gray-700">${log.action}</div>
+        <div class="text-sm font-medium">${userLabel}</div>
+        <div class="text-sm text-gray-700">${actionLabel}</div>
         <div class="text-xs text-gray-600">${log.group || '-'}</div>
       </div>
-    `).join('');
+    `}).join('');
   } catch (err) {
     console.error('Error loading recent activity:', err);
   }
@@ -1221,7 +1309,7 @@ async function loadLocalBackups() {
         <div class="p-3 border rounded bg-gray-50 flex justify-between items-center">
           <div class="text-sm">
             <div class="font-medium">💻 ${backup.name}</div>
-            <div class="text-xs text-gray-500">${backup.size_mb || 0} MB • ${backup.created_at || ''}</div>
+            <div class="text-xs text-gray-500">${backup.size_human || backup.size_mb || 0} MB • ${backup.created_at || ''}</div>
           </div>
           <div class="flex gap-2">
             <button onclick="downloadBackup('${backup.name}')" class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200" title="Download">
@@ -1278,7 +1366,7 @@ async function loadRemoteBackups() {
         <div class="p-3 border rounded bg-blue-50 flex justify-between items-center">
           <div class="text-sm">
             <div class="font-medium">☁️ ${backup.name}</div>
-            <div class="text-xs text-gray-500">${backup.size_mb || 0} MB • ${backup.created_at || ''}</div>
+            <div class="text-xs text-gray-500">${backup.size_human || backup.size_mb || 0} MB • ${backup.created_at || ''}</div>
           </div>
           <div class="flex gap-2">
             <button onclick="compareBackup('${backup.name}', 'remote')" class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
@@ -1302,14 +1390,27 @@ async function loadRemoteBackups() {
 
 async function compareBackup(backupName, type) {
   try {
+    // normalise path and ensure cookies sent
+    let path = backupName.replace(/^\/+/, '');
     const response = await fetch('/admin/api/backup/compare', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        backup_path: backupName, 
+        backup_path: path, 
         type: type 
       })
     });
+
+    if (!response.ok) {
+      let msg = `HTTP ${response.status}`;
+      try {
+        const errData = await response.json();
+        msg = errData.error || JSON.stringify(errData);
+      } catch (_) {}
+      throw new Error(msg);
+    }
+
     const data = await response.json();
     
     if (data.success && data.comparison) {
@@ -1318,7 +1419,8 @@ async function compareBackup(backupName, type) {
       showErrorModal('❌ Σφάλμα', 'Δεν ήταν δυνατή η σύγκριση: ' + (data.error || 'Άγνωστο σφάλμα'));
     }
   } catch (err) {
-    showErrorModal('❌ Σφάλμα', 'Σφάλμα σύγκρισης backup');
+    console.error('Backup compare error:', err);
+    showErrorModal('❌ Σφάλμα', 'Σφάλμα σύγκρισης backup: ' + (err.message || err));
   }
 }
 
@@ -1430,15 +1532,48 @@ function proceedWithRestore(backupName, type) {
 
 async function performBackupRestore(backupName, type) {
   try {
-    // Use the unified restore endpoint
-    const response = await fetch(`/admin/api/backups/restore/${encodeURIComponent(backupName)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        type: type
-      })
-    });
+    // determine the currently selected/active group from the global selector
+    const groupId = document.getElementById('group-select')?.value || null;
+    let response;
+    console.debug('performBackupRestore called', {backupName, type, groupId});
+
+    if (type === 'local') {
+      // local backups are stored on the server filesystem
+      response = await fetch(`/admin/api/backups/restore/${encodeURIComponent(backupName)}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          type: type,
+          group_id: groupId
+        })
+      });
+    } else {
+      // remote backups go through the JSON endpoint
+      let path = backupName.replace(/^\/+/, '');
+      response = await fetch('/admin/api/backup/restore', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backup_path: path,
+          target_group_id: groupId ? parseInt(groupId) : null
+        })
+      });
+    }
     
+    // make sure we handle HTTP error statuses gracefully
+    if (!response.ok) {
+      let errMsg = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errMsg = errorData.error || JSON.stringify(errorData);
+      } catch (_) {
+        // ignore parse errors
+      }
+      throw new Error(errMsg);
+    }
+
     const data = await response.json();
     
     if (data.success) {
@@ -1450,7 +1585,7 @@ async function performBackupRestore(backupName, type) {
     }
   } catch (err) {
     console.error('Backup restore error:', err);
-    showErrorModal('❌ Σφάλμα', 'Σφάλμα επαναφοράς backup');
+    showErrorModal('❌ Σφάλμα', 'Σφάλμα επαναφοράς backup: ' + (err.message || err));
   }
 }
 
@@ -1568,7 +1703,9 @@ async function restoreBackup(backupName) {
   if (!await showModalConfirm('Επιβεβαίωση Restore', `Είστε σίγουρος ότι θέλετε να κάνετε restore του backup "${backupName}" στην ομάδα "${document.getElementById('group-search').value}"?`, 'Restore', 'Άκυρο')) return;
   
   try {
-    const response = await fetch(`/admin/backups/restore/${backupName}`, { 
+    // also support names beginning with a slash (remote backups)
+    let name = backupName.replace(/^\/+/, '');
+    const response = await fetch(`/admin/backups/restore/${encodeURIComponent(name)}`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -2015,12 +2152,114 @@ function showErrorModal(title, message) {
   document.body.appendChild(modal);
 }
 
+// ==================== FIREBASE USAGE CHART ====================
+let firebaseChart = null;
+async function loadFirebaseUsage() {
+  try {
+    const res = await fetch('/api/admin/firebase-usage');
+    const json = await res.json();
+    if (!json.success) throw new Error('no data');
+    const labels = json.data.map(p => p.ts);
+    const valuesMb = json.data.map(p => (p.bytes / (1024 * 1024)));
+    const maxMb = valuesMb.reduce((m, v) => Math.max(m, v), 0);
+    const useGb = maxMb >= 1024;
+    const values = useGb ? valuesMb.map(v => v / 1024) : valuesMb;
+    const ctx = document.getElementById('firebaseUsageChart').getContext('2d');
+    const canvas = document.getElementById('firebaseUsageChart');
+    const minWidth = 800;
+    const perPoint = 70;
+    const desiredWidth = Math.max(minWidth, labels.length * perPoint);
+    canvas.width = desiredWidth;
+    if (firebaseChart) {
+      firebaseChart.data.labels = labels;
+      firebaseChart.data.datasets[0].data = values;
+      firebaseChart.data.datasets[0].label = useGb ? 'GB downloaded' : 'MB downloaded';
+      firebaseChart.options.scales.y.title.text = useGb ? 'GB' : 'MB';
+      firebaseChart.update();
+    } else {
+      firebaseChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: useGb ? 'GB downloaded' : 'MB downloaded',
+            data: values,
+            borderColor: 'rgb(54, 162, 235)',
+            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+            fill: true,
+            tension: 0.1,
+          }]
+        },
+        options: {
+          responsive: false,
+          scales: {
+            x: { display: true, title: { display: true, text: 'Day / Hour (UTC)' } },
+            y: { display: true, title: { display: true, text: useGb ? 'GB' : 'MB' } }
+          }
+        }
+      });
+    }
+  } catch (err) {
+    console.error('Error loading firebase usage', err);
+    alert('Αποτυχία φόρτωσης δεδομένων Firebase.');
+  }
+}
+
+// ==================== FIREBASE SYNC SETTINGS ====================
+async function loadFirebaseSyncSettings() {
+  try {
+    const res = await fetch('/api/admin/firebase-sync-settings');
+    const json = await res.json();
+    if (!json.success) throw new Error('Αποτυχία φόρτωσης ρυθμίσεων');
+    
+    document.getElementById('sync-enabled').checked = json.data.enabled || false;
+    document.getElementById('sync-interval').value = json.data.interval || 60;
+    document.getElementById('syncIntervalValue').textContent = json.data.interval || 60;
+    document.getElementById('smart-sync').checked = json.data.smart_sync !== false;
+    
+    // Update status
+    const statusDiv = document.getElementById('sync-status-text');
+    const status = json.data.enabled ? '✅ Ο συγχρονισμός είναι ΕΝΕΡΓΟΣ' : '⏸️ Ο συγχρονισμός είναι ΑΝΕΝΕΡΓΟΣ';
+    const freq = json.data.enabled ? ` (κάθε ${json.data.interval}δ)` : ' (συγχρονισμός μόνο κατά σύνδεση/αποσύνδεση)';
+    const smartStatus = json.data.smart_sync ? ' | Έξυπνος έλεγχος ΕΝΤΟΣ' : ' | Έξυπνος έλεγχος ΕΚΤΟΣ';
+    statusDiv.textContent = status + freq + smartStatus;
+  } catch (err) {
+    console.error('Σφάλμα φόρτωσης ρυθμίσεων συγχρονισμού', err);
+    document.getElementById('sync-status-text').textContent = '❌ Αποτυχία φόρτωσης';
+  }
+}
+
+async function saveFirebaseSyncSettings() {
+  try {
+    const enabled = document.getElementById('sync-enabled').checked;
+    const interval = parseInt(document.getElementById('sync-interval').value);
+    const smartSync = document.getElementById('smart-sync').checked;
+    
+    const res = await fetch('/api/admin/firebase-sync-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, interval, smart_sync: smartSync })
+    });
+    
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'Save failed');
+    
+    showSuccessModal('✅ Αποθήκευση', 'Οι ρυθμίσεις συγχρονισμού αποθηκεύτηκαν! Φόρτωση ξανά...', () => {
+      location.reload();
+    });
+  } catch (err) {
+    console.error('Error saving sync settings', err);
+    showErrorModal('❌ Σφάλμα', 'Αποτυχία αποθήκευσης ρυθμίσεων: ' + err.message);
+  }
+}
+
 // ==================== INITIALIZATION ====================
 window.addEventListener('load', function() {
   loadStats();
   loadUsers();
   loadEmailConfiguration();
   loadEmailProviderSettings();
+  loadFirebaseSyncSettings();
   
   // Auto-refresh stats every 30 seconds
   setInterval(loadStats, 30000);

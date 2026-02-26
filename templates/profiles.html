@@ -38,7 +38,13 @@
 </style>
 
 <div class="bg-white rounded shadow p-6">
-  <h2 class="text-lg font-semibold mb-4">Προφίλ Χαρακτηρισμών (Τιμολόγια)</h2>
+  <h2 class="text-lg font-semibold mb-2">Προφίλ Χαρακτηρισμών
+    (<span id="modeHeadline">{{ 'Αποδείξεις' if mode=='receipts' else 'Τιμολόγια' }}</span>)
+  </h2>
+  <div class="mb-4">
+    <a href="{{ url_for('profiles_page', vat=vat, mode='invoices') }}" class="text-sm mr-4 font-medium {{ '' if mode!='invoices' else 'underline' }}">Τιμολόγια</a>
+    <a href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="text-sm font-medium {{ '' if mode!='receipts' else 'underline' }}">Αποδείξεις</a>
+  </div>
 
   <div class="grid md:grid-cols-2 gap-6">
     <!-- Αριστερή στήλη: Δημιουργία/Ενημέρωση -->
@@ -52,6 +58,9 @@
 
         <div class="grid grid-cols-1 gap-2">
           <label class="text-sm font-medium">Αντιστοίχιση κατηγοριών</label>
+          {% if mode == 'receipts' %}
+          <div class="text-xs text-gray-600">Επιλέξτε για κάθε ποσοστό ΦΠΑ την κατηγορία που θα χρησιμοποιηθεί σε αποδείξεις.</div>
+          {% endif %}
 
           <div class="flex items-center gap-3">
   <div class="w-24 text-sm font-medium">0%</div>
@@ -129,6 +138,7 @@
 // ID-first profiles: list from /api/profiles; save uses id when present
 (function(){
   const VAT = "{{ vat or active_credential_vat or '' }}";
+  const MODE = "{{ mode }}"; // invoices or receipts
   const listEl = document.getElementById('profList');
   const msgEl  = document.getElementById('profMsg');
   const saveBtn = document.getElementById('btnSaveProf');
@@ -140,6 +150,12 @@
     try {
       return {{ (category_labels or {}) | tojson | safe }} || {};
     } catch(e){ return {}; }
+  })();
+
+  const SERVER_EXPENSE_TAGS = (function(){
+    try {
+      return {{ (expense_tags or []) | tojson | safe }} || [];
+    } catch(e){ return []; }
   })();
 
   let VAT_CONSTRAINTS = (function(){
@@ -183,14 +199,17 @@
     if(Object.prototype.hasOwnProperty.call(CATEGORY_LABELS, key)){
       return CATEGORY_LABELS[key];
     }
+    if (key.startsWith('custom_')) {
+      return key.replace(/^custom_/, '').replace(/_/g, ' ').toUpperCase();
+    }
     return key;
   }
 
   function allowedForVat(cat, vatKey){
-    if(!cat) return true;
+    if(!cat) return false;
     const key = String(cat);
     const arr = VAT_CONSTRAINTS && VAT_CONSTRAINTS[key];
-    if(!arr || !arr.length) return true;
+    if(!arr || !arr.length) return false;
     return arr.includes(vatKey);
   }
 
@@ -285,15 +304,19 @@
   }
 
   async function fetchCharProfiles(){
-    const r = await fetch(`/api/char_profiles?vat=${encodeURIComponent(VAT)}`, {credentials:'same-origin'});
+    let url = `/api/char_profiles?vat=${encodeURIComponent(VAT)}&mode=${encodeURIComponent(MODE || 'invoices')}`;
+    const r = await fetch(url, {credentials:'same-origin'});
     return r.json();
   }
   async function fetchCanonicalProfiles(){
     try{
       const r = await fetch('/api/profiles', {credentials:'same-origin'});
       const j = await r.json();
-      return (j && j.profiles) ? j.profiles : [];
-    }catch(_){ return []; }
+      return {
+        profiles: (j && j.profiles) ? j.profiles : [],
+        options: (j && j.options) ? j.options : []
+      };
+    }catch(_){ return { profiles: [], options: [] }; }
   }
 
   function buildMappingFromForm(){
@@ -306,8 +329,36 @@
     };
   }
 
+  function categoriesFromProfiles(profiles){
+    const out = [];
+    (profiles || []).forEach(p => {
+      const m = (p && (p.map || p.mapping)) || {};
+      ['kat_fpa_a','kat_fpa_b','kat_fpa_g','kat_fpa_d','kat_fpa_e'].forEach(k => {
+        const val = String(m[k] || '').trim();
+        if(val && !out.includes(val)) out.push(val);
+      });
+    });
+    return out;
+  }
+
+  function mergeTagSources(){
+    const merged = [];
+    for (let i = 0; i < arguments.length; i += 1) {
+      normalizeTags(arguments[i] || []).forEach(tag => {
+        if (!merged.includes(tag)) merged.push(tag);
+      });
+    }
+    return merged;
+  }
+
   async function loadData(){
-    const [j, profs] = await Promise.all([ fetchCharProfiles(), fetchCanonicalProfiles() ]);
+    const [j, canonical] = await Promise.all([
+      fetchCharProfiles(),
+      MODE === 'receipts' ? Promise.resolve({ profiles: [], options: [] }) : fetchCanonicalProfiles()
+    ]);
+    const profs = MODE === 'receipts'
+      ? ((j && Array.isArray(j.profiles)) ? j.profiles : [])
+      : ((canonical && Array.isArray(canonical.profiles)) ? canonical.profiles : []);
 
     if(j && j.vat_constraints){
       VAT_CONSTRAINTS = j.vat_constraints || {};
@@ -327,7 +378,12 @@
       const previous = sel.value;
       sel.innerHTML = '';
       sel.appendChild(new Option('-επιλέξτε-',''));
-      const tags = normalizeTags((j && (j.options || j.expense_tags)) || []);
+      const tags = mergeTagSources(
+        j && (j.expense_tags || j.options),
+        MODE === 'receipts' ? [] : (canonical && canonical.options),
+        SERVER_EXPENSE_TAGS,
+        categoriesFromProfiles(profs)
+      );
       const vatKey = VAT_KEY_BY_SFX[sfx] || '';
       const allowed = categoriesForVat(vatKey, tags);
       allowed.forEach(t=> sel.appendChild(opt(t)));
@@ -347,7 +403,7 @@
       row.dataset.name = p.name;
       row.dataset.id   = p.id || '';
       row.tabIndex = 0;
-      const mapping = p.map || {};
+      const mapping = p.map || p.mapping || {};
       row.dataset.mapping = JSON.stringify(mapping || {});
       row.innerHTML = `
         <div class="flex flex-col gap-2">
@@ -437,7 +493,14 @@
   delConfirm.addEventListener('click', async ()=>{
     if(!pendingDeleteName) return;
     try{
-      if(pendingDeleteId){
+      if(MODE === 'receipts'){
+        await fetch('/api/char_profiles/delete', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          credentials:'same-origin',
+          body: JSON.stringify({ vat: VAT, name: pendingDeleteName, mode: 'receipts' })
+        });
+      } else if(pendingDeleteId){
         await fetch('/api/profiles/delete', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ id: pendingDeleteId }) });
       }else{
         await fetch('/api/char_profiles/delete', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ vat: VAT, name: pendingDeleteName }) });
@@ -480,12 +543,21 @@
       return;
     }
     try{
-      const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping }
-                                        : { name, map: mapping };
-      const resp = await fetch('/api/profiles/save', {
-        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
-        body: JSON.stringify(payload)
-      });
+      let resp;
+      if (MODE === 'receipts') {
+        const payload = { vat: VAT, name, mapping, mode: 'receipts' };
+        resp = await fetch('/api/char_profiles/save', {
+          method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+          body: JSON.stringify(payload)
+        });
+      } else {
+        const payload = currentSelectedId ? { id: currentSelectedId, name, map: mapping, mode: MODE }
+                                          : { name, map: mapping, mode: MODE };
+        resp = await fetch('/api/profiles/save', {
+          method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+          body: JSON.stringify(payload)
+        });
+      }
       const j = await resp.json();
       if(j && j.ok){
         showBanner('Το προφίλ αποθηκεύτηκε επιτυχώς.', 'success', 6000);

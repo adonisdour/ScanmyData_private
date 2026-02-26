@@ -425,6 +425,13 @@
   color: #1a1a1a;
 }
 
+/* amounts should align right and wrap on break to keep debit/credit
+   values from running together */
+.summary-table .amount-col {
+  text-align: right;
+  white-space: pre-line;
+}
+
 [data-theme="dark"] .summary-table td {
   color: #e2e8f0;
 }

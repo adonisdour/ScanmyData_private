@@ -243,7 +243,24 @@ function labelCategory(cat){
   const key = (cat ?? '').toString().trim();
   if(!key) return '';
   const map = (CATEGORY_LABELS && typeof CATEGORY_LABELS === 'object') ? CATEGORY_LABELS : {};
-  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : key;
+  if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+
+  const normalized = key
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '_');
+
+  const FALLBACK_LABELS = {
+    'ταμειο': 'Ταμειακή',
+    'ταμειο_(auto)': 'Ταμειακή',
+    'cash': 'Ταμειακή',
+    'προμηθευτης': 'Προμηθευτής',
+    'προμηθευτης_χονδρικης': 'Προμηθευτής χονδρικής',
+    'supplier_wholesale': 'Προμηθευτής χονδρικής',
+  };
+
+  return FALLBACK_LABELS[normalized] || key;
 }
 
 function labelCharList(text){

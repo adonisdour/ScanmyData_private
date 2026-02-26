@@ -455,16 +455,26 @@ def api_delete_remote_backup():
 def api_restore_remote_backup():
     """Restore groups from a remote backup. JSON body: {'backup_path': '/backups/..', 'target_group_id': int, 'groups': [names]}"""
     try:
-        data = request.json or {}
+        # parse JSON safely; `request.json` may raise if malformed
+        data = request.get_json(force=True, silent=True) or {}
+        logger.debug("api_restore_remote_backup payload: %r", data)
         path = data.get('backup_path')
-        target_group_id = int(data.get('target_group_id', 0)) if data.get('target_group_id') else None
+        # allow target_group_id to be omitted; treat empty/zero as None
+        target_group_id = None
+        if data.get('target_group_id') not in (None, '', 0):
+            try:
+                target_group_id = int(data.get('target_group_id'))
+            except Exception:
+                target_group_id = None
         groups = data.get('groups')
         if not path:
+            logger.warning("remote restore called without path")
             return jsonify({'success': False, 'error': 'backup_path required'}), 400
-        res = admin_panel.admin_restore_remote_backup(path, target_group_id or 0, groups_to_restore=groups, current_admin=current_user)
+        res = admin_panel.admin_restore_remote_backup(path, target_group_id, groups_to_restore=groups, current_admin=current_user)
+        logger.info("remote restore result: %s", res)
         return jsonify({'success': res.get('ok', False), 'restored': res.get('restored', []), 'error': res.get('error')}), (200 if res.get('ok') else 400)
     except Exception as e:
-        logger.error(f"Error restoring remote backup: {e}")
+        logger.error(f"Error restoring remote backup: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1517,6 +1527,9 @@ def api_list_backups():
 @login_required
 @_require_admin
 def api_restore_backup_by_path(backup_path):
+    # ensure we strip any accidental leading slash – the JS client sometimes
+    # passes "/backups/..." strings, which would confuse downstream code.
+    backup_path = backup_path.lstrip('/')
     """Restore a backup by its path (handles both local and remote)"""
     try:
         data = request.json or {}
@@ -1543,6 +1556,12 @@ def api_restore_backup_by_path(backup_path):
                 target_group_id,
                 current_user
             )
+        
+        # log outcome so admin actions are recorded in server log too
+        if result.get('ok'):
+            logger.info("backup restore succeeded: %s -> group %s", backup_path, target_group_id)
+        else:
+            logger.error("backup restore failed: %s -> %s", backup_path, result.get('error'))
         
         return jsonify({
             'success': result.get('ok', False),
@@ -1631,8 +1650,12 @@ def api_list_remote_backups_only():
 def api_compare_backup():
     """Compare current state with backup for preview before restore"""
     try:
-        data = request.json or {}
+        data = request.get_json(force=True, silent=True) or {}
+        logger.debug("api_compare_backup payload: %r", data)
         backup_path = data.get('backup_path')
+        # strip possible leading slash
+        if isinstance(backup_path, str):
+            backup_path = backup_path.lstrip('/')
         backup_type = data.get('type', 'remote')  # 'local' or 'remote'
         
         if not backup_path:

@@ -42,7 +42,7 @@ from flask import (
 import tempfile
 import zipfile
 import shutil
-from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr
+from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
 import requests
 import pandas as pd
 from shutil import move
@@ -117,6 +117,26 @@ except ImportError:
         return f
 
 # --- end lock + current_app imports ---
+# global helpers -------------------------------------------------------------
+
+def float_from_comma(value):
+    """Convert numbers that may use comma as decimal separator and dots as
+    thousands separators into a float.  Examples:
+        "5.645,00" -> 5645.0
+        "56,45"    -> 56.45
+        "1.234.567" -> 1234567.0
+    Returns 0.0 on failure or when value is ``None``.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
 # --- Compatibility shim: unify invoice-scraper vs receipt-scraper usage ---
 # Αυτό το snippet προσπαθεί να χρησιμοποιήσει:
 # 1) scrape_receipt από module scraper (αν υπάρχει) ή
@@ -832,11 +852,25 @@ app.config["UPLOAD_FOLDER"] = UPLOADS_DIR
 
 # --- Initialize Logger ---
 logger = logging.getLogger(__name__)
+# configure both module-specific logger and the root logger so that
+# unrelated modules (admin_panel, firebase_config, etc.) propagate to the
+# same file.  previously only the logger for this module was wired,
+# which is why admin_panel messages were never written.
 logger.setLevel(logging.INFO)
+
 # Create a rotating file handler
 handler = RotatingFileHandler('firebed.log', maxBytes=10485760, backupCount=10)
 handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# attach to this module's logger
 logger.addHandler(handler)
+
+# also attach to root logger so all loggers propagate by default
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# avoid adding duplicate handlers if this code executed more than once
+if handler not in root_logger.handlers:
+    root_logger.addHandler(handler)
 # --- end logger init ---
 
 # --- Initialize DB and authentication ---
@@ -934,12 +968,19 @@ try:
     from flask_login import current_user
     @app.before_request
     def require_login_before_request():
+        # allow disabling login checks in tests (honour Flask-Login convention)
+        try:
+            if current_app.config.get('LOGIN_DISABLED'):
+                return None
+        except Exception:
+            pass
+
         # allow static, local auth and firebase auth endpoints
         endpoint = request.endpoint or ''
         if endpoint.startswith('auth.') or endpoint.startswith('static') or endpoint.startswith('firebase_auth.'):
             return None
         # allow public pages (terms, privacy, cookie consent)
-        if endpoint in ['terms_page', 'privacy_page']:
+        if endpoint in ['terms_page', 'privacy_page', '_debug_log']:
             return None
         # allow public API endpoints (if any) - keep a whitelist here if needed
         public = {'home', 'index', 'healthcheck', 'serve_icons'}
@@ -1513,6 +1554,61 @@ def _ensure_custom_categories_list(client: Dict[str, Any]) -> List[Dict[str, Any
     return client["custom_categories"]
 
 
+def _custom_category_receipts_enabled(item: Optional[Dict[str, Any]]) -> bool:
+    """Return True if the custom category is to be treated as available for receipts.
+
+    The priority order is:
+    1. explicit boolean flag (applies_to_receipts / receipt_enabled / receipts_enabled).
+       **If any such flag is present and False, the category is considered
+       *not* receipt-enabled, even if accounts are filled.** This allows the
+       user to deselect the checkbox and override any existing account codes.
+    2. metadata inside the ``accounts`` dictionary (``__applies_to_receipts``
+       or ``receipt_enabled``) when the explicit flag is absent.
+    3. if no flag at all was provided, the presence of any non‑empty account
+       code is treated as an implicit signal that the category should be
+       available for receipts.  This keeps the system compatible with older
+       data.
+    """
+    if not isinstance(item, dict):
+        return False
+
+    # explicit boolean flags first
+    raw = item.get("applies_to_receipts")
+    if raw is None:
+        raw = item.get("receipt_enabled")
+    if raw is None:
+        raw = item.get("receipts_enabled")
+
+    # fall back to metadata inside accounts if still undetermined
+    accounts = item.get("accounts") if isinstance(item.get("accounts"), dict) else {}
+    if raw is None:
+        raw = (
+            accounts.get("__applies_to_receipts")
+            if "__applies_to_receipts" in accounts
+            else accounts.get("receipt_enabled")
+        )
+
+    # if there was an explicit false, respect it and do not inspect accounts
+    if raw is False:
+        return False
+
+    if raw:
+        return True
+
+    # finally, if the category has any non-empty account codes we treat it
+    # as receipt-capable (user has effectively configured it)
+    try:
+        from . import _normalize_custom_accounts
+    except ImportError:
+        # should never happen but be safe
+        _normalize_custom_accounts = lambda x: x or {}
+    norm = _normalize_custom_accounts(accounts)
+    for code in norm.values():
+        if code and str(code).strip():
+            return True
+    return False
+
+
 def _category_labels_for_client(client: Optional[Dict[str, Any]]) -> Dict[str, str]:
     labels = dict(DEFAULT_INVOICE_CATEGORY_LABELS)
     if not isinstance(client, dict):
@@ -1547,6 +1643,42 @@ def _list_invoice_categories(client: Optional[Dict[str, Any]], include_receipts:
         slug = str(item.get("id") or item.get("slug") or "").strip()
         if slug and slug not in out:
             out.append(slug)
+    return out
+
+
+def _list_receipt_categories(client: Optional[Dict[str, Any]]) -> List[str]:
+    """Return categories usable for receipts.
+
+    Keep the default "αποδειξακια" tag and append only custom categories
+    that are explicitly flagged for receipts.
+    """
+    if not isinstance(client, dict):
+        return ["αποδειξακια"]
+    out: List[str] = ["αποδειξακια"]
+
+    def _explicit_receipts_enabled(item: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(item, dict):
+            return False
+        raw = item.get("applies_to_receipts")
+        if raw is None:
+            raw = item.get("receipt_enabled")
+        if raw is None:
+            raw = item.get("receipts_enabled")
+        accounts = item.get("accounts") if isinstance(item.get("accounts"), dict) else {}
+        if raw is None and isinstance(accounts, dict):
+            raw = accounts.get("__applies_to_receipts") if "__applies_to_receipts" in accounts else accounts.get("receipt_enabled")
+        return bool(raw)
+    # append receipt-enabled custom categories
+    for item in _ensure_custom_categories_list(client):
+        if not item:
+            continue
+        if not _explicit_receipts_enabled(item):
+            continue
+        slug = str(item.get("id") or item.get("slug") or "").strip()
+        if slug and slug not in out:
+            out.append(slug)
+    if "αποδειξακια" not in out:
+        out.insert(0, "αποδειξακια")
     return out
 
 
@@ -1590,10 +1722,114 @@ def _allowed_vat_keys_for_category(item: Optional[Dict[str, Any]]) -> List[str]:
     return allowed
 
 
-def _category_vat_constraints(client: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
+def _category_vat_constraints(client: Optional[Dict[str, Any]], book_category: Optional[str] = None) -> Dict[str, List[str]]:
     constraints: Dict[str, List[str]] = {}
     if not isinstance(client, dict):
         return constraints
+
+    category_raw = str(book_category if book_category is not None else client.get("book_category") or "Β").strip().upper()
+    is_g_category = category_raw in ("Γ", "G")
+
+    # 1) Built-in expense tags: derive allowed VAT keys from global accounts and settings
+    try:
+        global_accounts = get_global_accounts_from_credentials() or {}
+    except Exception:
+        global_accounts = {}
+
+    try:
+        settings = load_settings() or {}
+    except Exception:
+        settings = {}
+
+    # build a rate -> { tag: code } map from settings keys
+    settings_accounts: Dict[str, Dict[str, str]] = {}
+    for key, val in (settings or {}).items():
+        if not key.startswith('account_'):
+            continue
+        k = key[len('account_'):]
+        has_g_prefix = k.startswith('g_')
+        if is_g_category:
+            if not has_g_prefix:
+                continue
+            k = k[2:]
+        else:
+            if has_g_prefix:
+                continue
+        m = re.match(r'(?P<tag>.+?)_fpa_kat_(?P<rate>\d+)%$', k)
+        if not m:
+            m2 = re.match(r'(?P<tag>.+?)_(?P<rate>\d+)%$', k)
+            if m2:
+                tag = m2.group('tag')
+                rate = m2.group('rate')
+            else:
+                continue
+        else:
+            tag = m.group('tag')
+            rate = m.group('rate')
+        code = (val or '').strip()
+        if not code:
+            continue
+        tag_norm = str(tag).strip()
+        if tag_norm.endswith('_με_ΦΠΑ'):
+            tag_base = tag_norm[:-len('_με_ΦΠΑ')]
+        else:
+            tag_base = tag_norm
+        settings_accounts.setdefault(rate, {})[tag_norm] = code
+        if tag_base != tag_norm:
+            settings_accounts.setdefault(rate, {})[tag_base] = code
+
+    # merge settings_accounts into global_accounts shape
+    try:
+        if isinstance(global_accounts, dict):
+            for rate, tagsmap in settings_accounts.items():
+                if not tagsmap:
+                    continue
+                if isinstance(global_accounts.get(rate), dict):
+                    global_accounts[rate].update(tagsmap)
+                else:
+                    if isinstance(global_accounts.get(f"{rate}%"), dict):
+                        global_accounts[f"{rate}%"].update(tagsmap)
+                    else:
+                        global_accounts.setdefault(str(rate), {}).update(tagsmap)
+    except Exception:
+        pass
+
+    expense_tags = None
+    try:
+        # include_receipts=True so constraints are also computed for the
+        # special receipts category "αποδειξακια" when accounts exist.
+        expense_tags = _list_invoice_categories(client, include_receipts=True)
+    except Exception:
+        expense_tags = client.get('expense_tags') or []
+
+    for tag in expense_tags or []:
+        if not tag:
+            continue
+        tag_str = str(tag).strip()
+        if not tag_str:
+            continue
+        allowed: List[str] = []
+        for rate in VAT_RATE_NUMERIC:
+            found_for_rate = False
+            for gk, vat_bucket in (global_accounts.items() if isinstance(global_accounts, dict) else []):
+                try:
+                    if not gk:
+                        continue
+                    key_norm = str(gk).strip()
+                    key_norm = key_norm[:-1] if key_norm.endswith('%') else key_norm
+                    if key_norm == str(rate):
+                        if isinstance(vat_bucket, dict) and vat_bucket.get(tag_str):
+                            allowed.append(f"{rate}%")
+                            found_for_rate = True
+                            break
+                except Exception:
+                    continue
+            if found_for_rate:
+                continue
+        if allowed:
+            constraints[tag_str] = allowed
+
+    # 2) Custom categories: per-category accounts stored on the client object
     for item in _ensure_custom_categories_list(client):
         slug = str(item.get("id") or item.get("slug") or "").strip()
         if not slug:
@@ -1634,6 +1870,7 @@ def _custom_categories_payload(client: Optional[Dict[str, Any]]) -> List[Dict[st
             "id": slug,
             "label": str(item.get("label") or slug),
             "enabled": bool(item.get("enabled")),
+            "applies_to_receipts": _custom_category_receipts_enabled(item),
             "accounts": accounts,
             "allowed_vat_keys": _allowed_vat_keys_for_category(item),
         })
@@ -2290,6 +2527,26 @@ def save_receipt(afm: str, year: str, summary: dict, lines: list, active_years: 
     if int(year) not in active_years or issue_date.year != int(year):
         return {"ok": False, "error": "Απόδειξη εκτός ενεργής χρήσης"}
 
+    # Recompute totals for analysis receipts (UI may pass raw values)
+    try:
+        if summary.get("receipt_analysis_enabled") and isinstance(lines, list):
+            tot_net = 0.0
+            tot_vat = 0.0
+            for ln in lines:
+                try:
+                    tot_net += float_from_comma(ln.get("amount") or 0)
+                except Exception:
+                    pass
+                try:
+                    tot_vat += float_from_comma(ln.get("vat") or 0)
+                except Exception:
+                    pass
+            summary["totalNetValue"] = f"{tot_net:.2f}"
+            summary["totalVatAmount"] = f"{tot_vat:.2f}"
+            summary["totalValue"] = f"{(tot_net + tot_vat):.2f}"
+    except Exception:
+        log.exception("save_receipt: failed to recalc totals")
+
     # Προετοιμασία φακέλων/αρχειων
     invoices_file = f"data/{afm}_invoices.xlsx"
     epsilon_file = f"data/epsilon/{afm}_epsilon_invoices.json"
@@ -2465,6 +2722,31 @@ def append_receipt_to_excel(entry, excel_path=EPSILON_EXCEL_PATH):
     # Κάποια flows περνάνε "summary" μέσα στο entry· κάνε coalesce κι από εκεί
     raw   = (entry.get('raw') or {}) if isinstance(entry, dict) else {}
     summ  = (entry.get('summary') or {}) if isinstance(entry, dict) else {}
+    # if receipt has analysis and lines present, compute aggregated net/vat
+    try:
+        if summ.get('receipt_analysis_enabled') and isinstance(summ.get('lines'), list):
+            total_net = 0.0
+            total_vat = 0.0
+            for ln in summ.get('lines', []):
+                # use shared helper that strips thousands separators and
+                # converts comma to dot so "5.645,00" -> 5645.00 correctly
+                amt = float_from_comma(ln.get('amount') or 0)
+                vat_raw = ln.get('vat') or ''
+                vat_amt = 0.0
+                if isinstance(vat_raw, str) and '%' in vat_raw:
+                    try:
+                        pct = float_from_comma(vat_raw.replace('%', ''))
+                        vat_amt = amt * pct / 100.0
+                    except Exception:
+                        vat_amt = 0.0
+                else:
+                    vat_amt = float_from_comma(vat_raw)
+                total_net += amt
+                total_vat += vat_amt
+            summ['totalNetValue'] = f"{total_net:.2f}"
+            summ['totalVatAmount'] = f"{total_vat:.2f}"
+    except Exception:
+        pass
 
     aa = _first(
         entry.get('progressive_aa'), entry.get('AA'), entry.get('aa'), entry.get('receipt_aa'),
@@ -2499,6 +2781,9 @@ def append_receipt_to_excel(entry, excel_path=EPSILON_EXCEL_PATH):
             'είδος':           eidos,
             'ειδος':           eidos,
             'total_amount':    _first(entry.get('total_amount'), raw.get('total_amount'), summ.get('total_amount')),
+            # if receipt has analysis calculate net/vat from summary lines
+            'totalNetValue':   _first(entry.get('totalNetValue'), summ.get('totalNetValue'), None),
+            'totalVatAmount':  _first(entry.get('totalVatAmount'), summ.get('totalVatAmount'), None),
             # προαιρετικό: αποθήκευσε το raw για debugging
             'raw':             json.dumps(entry.get('raw', {}), ensure_ascii=False)
         }
@@ -2511,7 +2796,7 @@ def append_receipt_to_excel(entry, excel_path=EPSILON_EXCEL_PATH):
             'MARK','saved_at','url','issuer_vat','issuer_name','issue_date',
             'progressive_aa','Α/Α','Α/Α Παραστατικού',
             'τύπος','τυπος','είδος','ειδος',
-            'total_amount','raw'
+            'total_amount','totalNetValue','totalVatAmount','raw'
         ]
 
         if os.path.exists(excel_path):
@@ -2577,6 +2862,67 @@ def _repeat_state_get_enabled_for_vat(vat: str):
     except Exception:
         pass
     return False
+
+def _sync_repeat_entry_backend(vat: str, *, enabled=None, invoice_mtype=None, receipt_mtype=None):
+    """Best-effort sync of repeat_entry fields to credentials + session + repeat_state.json."""
+    v = str(vat or "").strip()
+    if not v:
+        return False
+
+    changed = False
+    try:
+        creds = read_credentials_list() or []
+        idx = find_active_client_index(creds, vat=v) if 'find_active_client_index' in globals() else None
+        if idx is None:
+            for i, c in enumerate(creds):
+                if not isinstance(c, dict):
+                    continue
+                cand = str(c.get("vat") or c.get("AFM") or c.get("tax_number") or "").strip()
+                if cand == v:
+                    idx = i
+                    break
+
+        if idx is not None and 0 <= idx < len(creds) and isinstance(creds[idx], dict):
+            client = creds[idx]
+            repeat = (client.get("repeat_entry") if isinstance(client, dict) else {}) or {}
+
+            if enabled is not None and bool(repeat.get("enabled")) != bool(enabled):
+                repeat["enabled"] = bool(enabled)
+                changed = True
+            if invoice_mtype is not None:
+                inv = str(invoice_mtype or "").strip()
+                if str(repeat.get("invoice_mtype") or "").strip() != inv:
+                    repeat["invoice_mtype"] = inv
+                    changed = True
+            if receipt_mtype is not None:
+                rec = str(receipt_mtype or "").strip()
+                if str(repeat.get("receipt_mtype") or "").strip() != rec:
+                    repeat["receipt_mtype"] = rec
+                    changed = True
+
+            if changed:
+                repeat["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                client["repeat_entry"] = repeat
+                creds[idx] = client
+                write_credentials_list(creds)
+    except Exception:
+        log.exception("_sync_repeat_entry_backend: failed credentials sync for VAT=%s", v)
+
+    if enabled is not None:
+        try:
+            session["repeat_enabled"] = bool(enabled)
+        except Exception:
+            pass
+        try:
+            data = _repeat_state_load()
+            if v not in data:
+                data[v] = {}
+            data[v]["enabled"] = bool(enabled)
+            _repeat_state_save(data)
+        except Exception:
+            log.exception("_sync_repeat_entry_backend: failed repeat_state sync for VAT=%s", v)
+
+    return True
 def get_existing_client_ids() -> set:
     """
     Return a set of existing client IDs (ΑΦΜ) from current client_db (if any).
@@ -2824,10 +3170,28 @@ def _safe_save_epsilon_cache(vat_code, epsilon_list):
         pass
 
     # Try to use json_write if defined; otherwise do atomic tmp write here
+    def _sync_legacy_epsilon_shadow(saved_list):
+        """Best-effort mirror to legacy group-level epsilon_invoices.json."""
+        try:
+            legacy_path = epsilon_json_path()
+            os.makedirs(os.path.dirname(legacy_path) or ".", exist_ok=True)
+            if 'json_write' in globals() and callable(globals().get('json_write')):
+                json_write(legacy_path, saved_list)
+            else:
+                with open(legacy_path, "w", encoding="utf-8") as lf:
+                    json.dump(saved_list, lf, ensure_ascii=False, indent=2)
+            try:
+                log.info("_safe_save_epsilon_cache: synced legacy epsilon to %s (vat=%s)", legacy_path, vat_code)
+            except Exception:
+                pass
+        except Exception:
+            log.exception("_safe_save_epsilon_cache: failed syncing legacy epsilon_invoices.json (vat=%s)", vat_code)
+
     try:
         # prefer json_write helper if present
         if 'json_write' in globals() and callable(globals().get('json_write')):
             json_write(epsilon_path, epsilon_list)
+            _sync_legacy_epsilon_shadow(epsilon_list)
             try:
                 log.info("_safe_save_epsilon_cache: saved epsilon to %s", epsilon_path)
             except Exception:
@@ -2849,6 +3213,7 @@ def _safe_save_epsilon_cache(vat_code, epsilon_list):
             except Exception:
                 pass
         os.replace(tmp, epsilon_path)
+        _sync_legacy_epsilon_shadow(epsilon_list)
         try:
             log.info("_safe_save_epsilon_cache: saved epsilon (fallback) to %s", epsilon_path)
         except Exception:
@@ -3112,7 +3477,7 @@ def _normalize_afm(raw):
 # --- νέο helper: update or append a summary row into excel ---
 def _normalize_summary_row_for_excel(summary):
     """Return dict with keys aligned to DEFAULT EXCEL columns used in your app."""
-    return {
+    out = {
         "MARK": str(summary.get("mark","") or ""),
         "AA": str(summary.get("AA","") or ""),
         "AFM": str(summary.get("AFM","") or ""),
@@ -3123,6 +3488,14 @@ def _normalize_summary_row_for_excel(summary):
         "note": str(summary.get("note","") or ""),
         "created_at": str(summary.get("created_at","") or ""),
     }
+    # include net/vat columns for receipts with analysis
+    try:
+        if summary.get("receipt_analysis_enabled"):
+            out["totalNetValue"] = str(summary.get("totalNetValue") or "")
+            out["totalVatAmount"] = str(summary.get("totalVatAmount") or "")
+    except Exception:
+        pass
+    return out
 
 def _ensure_excel_and_update_or_append(summary: dict, vat: Optional[str] = None, cred_name: Optional[str] = None):
     """
@@ -3180,6 +3553,23 @@ def _ensure_excel_and_update_or_append(summary: dict, vat: Optional[str] = None,
 
     is_receipt = (str(summary.get("category") or "").strip() == "αποδειξακια") or bool(summary.get("is_receipt"))
 
+    # if this is a receipt with line-by-line analysis the totals were kept as
+    # plain dot-decimal strings.  pandas/openpyxl will often convert those
+    # into numeric cells, and when a Greek locale opens the workbook they'll
+    # appear with **comma** as decimal separator and dot as thousands sep – in
+    # other words the values no longer match the JSON we just stored.  The
+    # bug only showed up for receipts that enable analysis, because invoices
+    # and non-analysed receipts are already force-formatted to Greek style
+    # earlier in the codepath.  To keep the sheet consistent and avoid
+    # automatic locale conversion we manually rewrite the header totals to
+    # use the same comma‑decimal format that the inline Excel logic uses.
+    # (this change is intentionally narrow so it doesn't touch other flows)
+    receipt_analysis = bool(summary.get("receipt_analysis_enabled"))
+    if is_receipt and receipt_analysis:
+        total_net = total_net.replace(".", ",")
+        total_vat = total_vat.replace(".", ",")
+        total_sum = total_sum.replace(".", ",")
+
     # Στήσε full row
     row_full = {
         "MARK": mark_val,
@@ -3204,11 +3594,28 @@ def _ensure_excel_and_update_or_append(summary: dict, vat: Optional[str] = None,
     if not mark_val:
         return  # χωρίς MARK δεν γράφουμε
 
-    # Update by MARK αν υπάρχει, αλλιώς append (ΧΩΡΙΣ .append της pandas)
+    # Update logic:
+    # - normal: by MARK
+    # - receipt fallback MARK: only update same receipt identity (AA + Date + AFM), else append
     if "MARK" in df.columns:
-        mask = df["MARK"].astype(str).fillna("").str.strip() == mark_val
+        base_mask = df["MARK"].astype(str).fillna("").str.strip() == mark_val
     else:
-        mask = pd.Series([False]*len(df), index=df.index)
+        base_mask = pd.Series([False] * len(df), index=df.index)
+
+    if is_receipt and mark_val == RECEIPT_FALLBACK_MARK:
+        aa_col = "Αριθμός" if "Αριθμός" in df.columns else ("Α/Α" if "Α/Α" in df.columns else "")
+        has_identity_cols = bool(aa_col and "Ημερομηνία" in df.columns and "ΑΦΜ" in df.columns)
+        if has_identity_cols and number and date_val and afm_val:
+            mask = (
+                base_mask
+                & (df[aa_col].astype(str).fillna("").str.strip() == number)
+                & (df["Ημερομηνία"].astype(str).fillna("").str.strip() == date_val)
+                & (df["ΑΦΜ"].astype(str).fillna("").str.strip() == afm_val)
+            )
+        else:
+            mask = pd.Series([False] * len(df), index=df.index)
+    else:
+        mask = base_mask
 
     if mask.any():
         idx = mask[mask].index[0]
@@ -3764,6 +4171,21 @@ def get_expected_mtype_for_payment(payment_method_type: str) -> dict:
         }
 
 
+def get_payment_method_label(payment_method_type: str) -> str:
+    pmt = str(payment_method_type or "").strip()
+    labels = {
+        "1": "Επαγγελματικός Λογαριασμός Πληρωμών Ημεδαπής",
+        "2": "Επαγγελματικός Λογαριασμός Πληρωμών Αλλοδαπής",
+        "3": "Μετρητά",
+        "4": "Επιταγή",
+        "5": "Επί Πιστώσει",
+        "6": "Web Banking",
+        "7": "POS / e-POS",
+        "8": "Άμεσες Πληρωμές IRIS",
+    }
+    return labels.get(pmt, "")
+
+
 def load_credentials():
     # use per-group credentials loader
     try:
@@ -3923,6 +4345,16 @@ def _series_settings_from_form(form) -> Dict[str, Any]:
 
 def _series_preference_keys(summary: Optional[Dict[str, Any]]) -> Tuple[str, Optional[str]]:
     data = summary if isinstance(summary, dict) else {}
+    is_receipt_flag = bool(data.get("is_receipt"))
+    if not is_receipt_flag:
+        try:
+            tname = str(data.get("type_name") or data.get("type") or "").strip().lower()
+            is_receipt_flag = ("αποδει" in tname) or ("receipt" in tname) or ("λιαν" in tname)
+        except Exception:
+            is_receipt_flag = False
+    if is_receipt_flag:
+        return "receipt_retail", None
+
     doc_type = str(data.get("type") or data.get("type_code") or "").strip()
     if doc_type.startswith("2."):
         return "invoice_services", SERIES_FALLBACK_MAP.get("invoice_services")
@@ -4938,6 +5370,16 @@ def api_repeat_entry_save():
 
     write_credentials_list(creds)
 
+    try:
+        _sync_repeat_entry_backend(
+            vat,
+            enabled=enabled,
+            invoice_mtype=invoice_mtype,
+            receipt_mtype=receipt_mtype,
+        )
+    except Exception:
+        log.exception("api_repeat_entry_save: backend sync failed for VAT=%s", vat)
+
     expense_tags = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
 
@@ -4996,9 +5438,60 @@ def api_validate_payment_mtype():
             # Δεν υπάρχει paymentMethodType - δεν μπορούμε να ελέγξουμε
             return jsonify({"ok": True, "warning": None})
         
+        # Ειδικός, ρυθμιζόμενος από settings: όταν paymentMethodType==3 (Μετρητά)
+        # και ο χρήστης έχει επιλέξει article-style MTYPE (π.χ. '14','16') διαφορετικό
+        # από τον ρυθμισμένο cash article-code → προτείνουμε την αλλαγή (special_case).
+        if payment_method_type == "3":
+            try:
+                settings = load_settings() or {}
+                cash_article_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                cash_article_label = (
+                    "Αγορών - Εξόδων Ταμειακή"
+                    if settings.get("article_movement_type_agoron_exodon_tameiaki")
+                    else "Ταμειακή"
+                )
+                if selected_mtype and "." not in selected_mtype and cash_article_code and selected_mtype != cash_article_code:
+                    return jsonify({
+                        "ok": True,
+                        "warning": (
+                            f"Προσοχή: Το παραστατικό έχει τρόπο πληρωμής Μετρητά αλλά επέλεξες κωδικό κίνησης '{selected_mtype}'. "
+                            f"Συνιστάται να χρησιμοποιήσεις τον κωδικό κίνησης '{cash_article_code}' ({cash_article_label}). Θέλεις να αλλάξετε?"
+                        ),
+                        "payment_method_type": payment_method_type,
+                        "expected_mtype": {"code": cash_article_code, "label": cash_article_label},
+                        "selected_mtype": selected_mtype,
+                        "special_case": True
+                    })
+            except Exception:
+                # non-fatal — πέφτουμε πίσω στο γενικό αποτέλεσμα
+                log.exception("validate_payment_mtype: special-case cash detection failed")
+
         # Ελεγξε αν ταιριάζει με το επιλεγμένο MTYPE
         expected = get_expected_mtype_for_payment(payment_method_type)
         
+        # Special handling: for cash (3) allow the user-configured article-style MTYPE
+        # (e.g. '42') to be treated as equivalent to the epsilon MTYPE ('3.4.2').
+        if payment_method_type == "3":
+            try:
+                settings = load_settings() or {}
+                cash_article_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                cash_article_label = (
+                    "Αγορών - Εξόδων Ταμειακή"
+                    if settings.get("article_movement_type_agoron_exodon_tameiaki")
+                    else "Ταμειακή"
+                )
+                if cash_article_code and selected_mtype and selected_mtype == cash_article_code:
+                    # treat configured article-code as a valid match for cash
+                    return jsonify({
+                        "ok": True,
+                        "warning": None,
+                        "payment_method_type": payment_method_type,
+                        "expected_mtype": {"code": cash_article_code, "label": cash_article_label, "matched": True},
+                        "selected_mtype": selected_mtype
+                    })
+            except Exception:
+                log.exception("validate_payment_mtype: post-expected matching check failed")
+
         if not expected["matched"]:
             # Άγνωστος τύπος πληρωμής
             return jsonify({
@@ -5023,21 +5516,7 @@ def api_validate_payment_mtype():
                 "selected_mtype": selected_mtype
             })
         
-        # Ειδικός έλεγχος για paymentMethodType 3 με MTYPE 15
-        if payment_method_type == "3" and selected_mtype == "15":
-            return jsonify({
-                "ok": True,
-                "warning": (
-                    f"Προσοχή: Το παραστατικό έχει τύπο πληρωμής {payment_method_type} "
-                    f"(μετρητά) και επέλεξες MTYPE '{selected_mtype}' (μετρητά). "
-                    f"Συνιστάται να χρησιμοποιήσεις MTYPE '3.4.2' (δαπάνη με μετρητά) "
-                    f"για σωστή ταξινόμηση. Θέλεις να αλλάξεις σε '3.4.2' ή να συνεχίσεις με '{selected_mtype}'?"
-                ),
-                "payment_method_type": payment_method_type,
-                "expected_mtype": {"code": "3.4.2", "label": "Δαπάνη με μετρητά"},
-                "selected_mtype": selected_mtype,
-                "special_case": True  # σηματοδοτεί ειδική περίπτωση
-            })
+
         
         # Όλα καλά
         return jsonify({
@@ -7126,13 +7605,46 @@ def append_summary_to_customer_file(summary, vat):
         return False
     summary_file = group_path(f"{vat}_summary.json")
     summaries = json_read(summary_file)
-    # avoid duplicate by MARK
     mark = str(summary.get("mark", "")).strip()
-    if any(str(s.get("mark", "")).strip() == mark for s in summaries):
+    for s in summaries:
+        if str(s.get("mark", "")).strip() != mark:
+            continue
+        # For fallback receipt MARK, dedupe only when it is the same actual receipt identity.
+        if mark == RECEIPT_FALLBACK_MARK:
+            if _same_receipt_identity(summary, s):
+                return False
+            continue
         return False
     summaries.append(summary)
     json_write(summary_file, summaries)
     return True
+
+
+RECEIPT_FALLBACK_MARK = "500000000000000"
+
+
+def _norm_id_value(v: Any) -> str:
+    try:
+        return str(v or "").strip()
+    except Exception:
+        return ""
+
+
+def _same_receipt_identity(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """
+    Robust identity check for receipts when MARK is shared fallback.
+    Requires AA + issueDate + issuer AFM to all match.
+    """
+    try:
+        a_aa = _norm_id_value(_first(a.get("number"), a.get("AA"), a.get("aa"), a.get("progressive_aa")))
+        b_aa = _norm_id_value(_first(b.get("number"), b.get("AA"), b.get("aa"), b.get("progressive_aa")))
+        a_date = _norm_id_value(_first(a.get("issueDate"), a.get("issue_date"), a.get("date")))
+        b_date = _norm_id_value(_first(b.get("issueDate"), b.get("issue_date"), b.get("date")))
+        a_afm = _norm_id_value(_first(a.get("AFM_issuer"), a.get("AFM"), a.get("issuer_vat"), a.get("issuer_afm")))
+        b_afm = _norm_id_value(_first(b.get("AFM_issuer"), b.get("AFM"), b.get("issuer_vat"), b.get("issuer_afm")))
+        return bool(a_aa and b_aa and a_date and b_date and a_afm and b_afm and a_aa == b_aa and a_date == b_date and a_afm == b_afm)
+    except Exception:
+        return False
 
 def get_customer_summary_file(vat):
     return group_path(f"{vat}_summary.json")
@@ -7419,6 +7931,27 @@ def api_update_epsilon_characteristic():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ---- simple debugging endpoint used by client JS ----
+@app.route('/_debug_log', methods=['GET','POST'])
+def _debug_log():
+    # write incoming message to a file in workspace root for live inspection
+    msg = request.args.get('msg') if request.method == 'GET' else request.form.get('msg')
+    if msg is None:
+        try:
+            data = request.get_json(silent=True)
+            msg = data.get('msg') if data else None
+        except Exception:
+            msg = None
+    if msg is None:
+        return ('', 204)
+    logpath = os.path.join(os.getcwd(), 'receipt_debug.log')
+    try:
+        with open(logpath, 'a', encoding='utf-8') as f:
+            f.write(f"{datetime.datetime.utcnow().isoformat()} {msg}\n")
+    except Exception:
+        pass
+    return ('', 204)
+
 # ---------------- MARK search ----------------
 @app.route("/search", methods=["GET", "POST"])
 def search():
@@ -7434,6 +7967,7 @@ def search():
     css_numcols = ""
     modal_warning = None
     fiscal_mismatch_block = False
+    scrape_url_is_receipt = False
 
     # active year for template (used by receipts fiscal check)
     try:
@@ -7575,13 +8109,54 @@ def search():
         return 0
 
     # ---------- active credential ----------
-    active_cred = get_active_credential_from_session()
-    vat = active_cred.get("vat") if active_cred else None
+    active_cred = get_active_credential_from_session() or {}
+    vat = str(active_cred.get("vat") or "").strip() if active_cred else ""
+
+    # testing hook: allow forcing a receipt summary via URL parameter
+    if request.args.get('test_receipt_summary'):
+        modal_summary = {"is_receipt": True, "lines": [{"id":"r0","amount":"","vat":"","category":""}]}
+
+    # IMPORTANT: session payload may be partial/stale. Resolve the full credential
+    # from credentials.json so custom_categories/applies_to_receipts are always present.
+    try:
+        creds_for_active = read_credentials_list_local() or []
+    except Exception:
+        creds_for_active = []
+
+    active_cred_full = None
+    if vat:
+        active_cred_full = next(
+            (c for c in creds_for_active if str(c.get("vat") or "").strip() == vat),
+            None,
+        )
+    if active_cred_full is None:
+        active_name = str(active_cred.get("name") or "").strip()
+        if active_name:
+            active_cred_full = next(
+                (c for c in creds_for_active if str(c.get("name") or "").strip() == active_name),
+                None,
+            )
+    if active_cred_full is not None:
+        active_cred = active_cred_full
+        vat = str(active_cred.get("vat") or vat).strip()
 
     # load customer_categories default from active_cred (used for invoices)
     customer_category_labels = dict(DEFAULT_INVOICE_CATEGORY_LABELS)
+    receipt_custom_categories: List[str] = []
+    has_receipt_custom_categories = False
     try:
         customer_categories = _list_invoice_categories(active_cred)
+        # compute only custom categories that are enabled for receipts
+        try:
+            for item in _ensure_custom_categories_list(active_cred):
+                if item and item.get("enabled") and _custom_category_receipts_enabled(item):
+                    slug = str(item.get("id") or item.get("slug") or "").strip()
+                    if slug and slug.lower() != "αποδειξακια":
+                        receipt_custom_categories.append(slug)
+            has_receipt_custom_categories = bool(receipt_custom_categories)
+        except Exception:
+            receipt_custom_categories = []
+            has_receipt_custom_categories = False
         if not customer_categories:
             customer_categories = [
                 "αγορες_εμπορευματων",
@@ -7599,7 +8174,20 @@ def search():
             "αμοιβες_τριτων",
             "δαπανες_χωρις_φπα"
         ]
+        receipt_custom_categories = []
+        has_receipt_custom_categories = False
     customer_vat_constraints = _category_vat_constraints(active_cred)
+    # -------- additional check: if there are ANY saved receipt-mode
+    # profiles with non-empty mappings, consider this customer as having
+    # receipt-custom categories.  Profiles may encode the accounts that the
+    # user filled out even if the credential itself lacks a flag.
+    if not has_receipt_custom_categories and isinstance(active_cred, dict):
+        for p in active_cred.get("char_profiles", []):
+            if str(p.get("mode", "invoices")).lower() == "receipts":
+                mapping = p.get("mapping") or p.get("map") or {}
+                if any(str(v or "").strip() for v in mapping.values()):
+                    has_receipt_custom_categories = True
+                    break
     
     # Γ Category: Filter categories to only those with MTYPE codes
     g_category_data = None
@@ -7659,7 +8247,7 @@ def search():
         import re
         from urllib.parse import urlparse
         # existing invoice scrapers
-        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr
+        from scraper import scrape_wedoconnect, scrape_mydatapi, scrape_einvoice, scrape_impact, scrape_epsilon, scrape_pegcloud, scrape_einvoicing_gr, scrape_vsgr, scrape_megasoft
         # safe import of receipt scraper
         try:
             from scraper_receipt import detect_and_scrape as detect_and_scrape_receipt
@@ -7728,10 +8316,29 @@ def search():
                         if not scraped_afm:
                             scraped_afm = scraped_afm_peg
                     elif "e-invoicing.gr" in domain:
-                        mark_val, scraped_afm_eg = scrape_einvoicing_gr(mark)
+                        eg_res = scrape_einvoicing_gr(mark, return_meta=True)
+                        eg_meta = {}
+                        if isinstance(eg_res, (tuple, list)) and len(eg_res) >= 3 and isinstance(eg_res[2], dict):
+                            mark_val, scraped_afm_eg, eg_meta = eg_res[0], eg_res[1], eg_res[2]
+                        elif isinstance(eg_res, (tuple, list)) and len(eg_res) >= 2:
+                            mark_val, scraped_afm_eg = eg_res[0], eg_res[1]
+                        else:
+                            mark_val, scraped_afm_eg = None, None
+
+                        scrape_url_is_receipt = bool((eg_meta or {}).get("is_receipt"))
                         scraped_marks = [mark_val] if mark_val and len(str(mark_val).strip()) == 15 else []
                         if not scraped_afm:
                             scraped_afm = scraped_afm_eg
+
+                        # Invoice flow guard: e-invoicing URL αντιστοιχεί σε απόδειξη λιανικής
+                        if scrape_url_is_receipt and not expect_receipt:
+                            modal_warning = (
+                                "Το URL αντιστοιχεί σε Απόδειξη Λιανικής, όχι σε Τιμολόγιο. "
+                                "Η εισαγωγή στο flow Τιμολογίων μπλοκάρεται — άλλαξε σε «Αποδείξεις»."
+                            )
+                            flash("Εντοπίστηκε απόδειξη λιανικής. Χρησιμοποίησε flow «Αποδείξεις».", "warning")
+                            scraped_afm = None
+                            scraped_marks = []
                     elif "vs.gr" in domain:
                         scraped_marks, scraped_afm_vs = scrape_vsgr(mark)
                         # Cleanup: ensure marks are valid 15-digit strings
@@ -7739,6 +8346,12 @@ def search():
                             scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
                         if not scraped_afm:
                             scraped_afm = scraped_afm_vs
+                    elif "megasoft" in domain or "invoicelink" in domain:
+                        scraped_marks, scraped_afm_mg = scrape_megasoft(mark)
+                        if scraped_marks:
+                            scraped_marks = [m.strip() for m in scraped_marks if m and len(str(m).strip()) == 15]
+                        if not scraped_afm:
+                            scraped_afm = scraped_afm_mg
                     else:
                         # fallback try receipt detector
                         if detect_and_scrape_receipt:
@@ -7999,6 +8612,11 @@ def search():
                                     # Enrich issuer name if missing
                                     issuer_afm = pick(docs_for_mark[0], "AFM_issuer", "AFM", default=vat)
                                     issuer_name = pick(docs_for_mark[0], "Name_issuer", "Name", default="")
+                                    payment_method_type = ""
+                                    for _doc in docs_for_mark:
+                                        payment_method_type = str(pick(_doc, "paymentMethodType", default="") or "").strip()
+                                        if payment_method_type:
+                                            break
                                     
                                     # Try to enrich issuer name from client_db or VAT validator
                                     enriched_flag = False
@@ -8033,6 +8651,8 @@ def search():
                                         "AA": pick(docs_for_mark[0], "AA", "aa", default=""),
                                         "AFM": issuer_afm,
                                         "Name": issuer_name,
+                                        "paymentMethodType": payment_method_type,
+                                        "paymentMethodLabel": get_payment_method_label(payment_method_type),
                                         "series": pick(docs_for_mark[0], "series", "Series", default=""),
                                         "number": pick(docs_for_mark[0], "number", "aa", "AA", default=""),
                                         "issueDate": pick(docs_for_mark[0], "issueDate", "issue_date", default=""),
@@ -8135,6 +8755,11 @@ def search():
                                     # Enrich issuer name if missing (for invoices)
                                     issuer_afm = pick(first, "AFM_issuer", "AFM_issuer", default=vat)
                                     issuer_name = pick(first, "Name", "Name_issuer", default="")
+                                    payment_method_type = ""
+                                    for _doc in docs_for_mark:
+                                        payment_method_type = str(pick(_doc, "paymentMethodType", default="") or "").strip()
+                                        if payment_method_type:
+                                            break
                                     
                                     # Try to enrich issuer name from client_db or VAT validator
                                     enriched_flag = False
@@ -8164,6 +8789,8 @@ def search():
                                         "AA": pick(first, "AA", "aa", default=""),
                                         "AFM": issuer_afm,
                                         "Name": issuer_name,
+                                        "paymentMethodType": payment_method_type,
+                                        "paymentMethodLabel": get_payment_method_label(payment_method_type),
                                         "series": pick(first, "series", "Series", "serie", default=""),
                                         "number": pick(first, "number", "aa", "AA", default=""),
                                         "issueDate": pick(first, "issueDate", "issue_date", default=pick(first, "issueDate", "issue_date", "")),
@@ -8379,25 +9006,54 @@ def search():
         file_exists=file_exists,
         css_numcols=css_numcols,
         modal_warning=modal_warning,
+        scrape_url_is_receipt=scrape_url_is_receipt,
         fiscal_mismatch_block=fiscal_mismatch_block,
         repeat_entry_conf=repeat_entry_conf,
         active_year=active_year_val,
         category_vat_constraints=customer_vat_constraints,
+        receipt_custom_categories=receipt_custom_categories,
+        has_receipt_custom_categories=has_receipt_custom_categories,
         g_category_data=g_category_data,
     )
 @app.get("/profiles")
 def profiles_page():
     vat = (request.args.get("vat") or "").strip()
+    mode = (request.args.get("mode") or "invoices").strip().lower()
+    if mode not in ("invoices", "receipts"):
+        mode = "invoices"
+
     creds = _load_credentials()
-    categories = _get_expense_tags(creds, vat)
-    client = _find_client(creds, vat=vat) or {}
+    client = None
+    if vat:
+        client = _find_client(creds, vat=vat)
+    if not client:
+        try:
+            active = get_active_credential_from_session() or {}
+        except Exception:
+            active = {}
+        active_vat = str((active or {}).get("vat") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and isinstance(active, dict) and active:
+            client = active
+    client = client or {}
+
+    # choose categories depending on mode
+    if mode == "receipts":
+        categories = _list_receipt_categories(client)
+    else:
+        categories = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
+    profiles = client.get("char_profiles", [])
     # δίνουμε πάντα λίστα (όχι Undefined)
     return render_template(
         "profiles.html",
-        vat=vat,
+        vat=client.get("vat", "") or vat,
+        mode=mode,
         customer_categories=categories,
+        expense_tags=categories,
+        profiles=profiles,
         category_labels=labels,
         vat_constraints=constraints,
     )
@@ -8454,6 +9110,7 @@ def custom_categories_save():
     label = str(request.form.get("label") or "").strip()
     slug = str(request.form.get("id") or "").strip()
     enabled = request.form.get("enabled") in ("on", "true", "1")
+    applies_to_receipts = request.form.get("applies_to_receipts") in ("on", "true", "1")
 
     if not vat:
         flash("Επιλογή πελάτη (VAT) απαιτείται.", "error")
@@ -8488,6 +9145,7 @@ def custom_categories_save():
     if label:
         target["label"] = label
     target["enabled"] = bool(enabled)
+    target["applies_to_receipts"] = bool(applies_to_receipts)
     
     # Get book_category for validation
     book_category = str(client.get("book_category") or "Β").strip().upper()
@@ -8547,7 +9205,11 @@ def custom_categories_save():
             current_app.logger.warning(f"Failed to validate against {chart_filename}: {e}")
             # Continue with save - chart validation is optional if file has issues
     
-    target["accounts"] = accounts
+    # Keep the receipts flag BOTH at top-level and inside accounts metadata,
+    # so it survives any flow that may persist only account blocks.
+    accounts_with_meta = dict(accounts)
+    accounts_with_meta["__applies_to_receipts"] = bool(applies_to_receipts)
+    target["accounts"] = accounts_with_meta
 
     save_credentials(creds)
     flash("Η κατηγορία αποθηκεύτηκε.", "success")
@@ -8603,25 +9265,76 @@ def custom_categories_delete():
 def api_char_profiles_get():
     """Επιστρέφει profiles + expense_tags για τον ενεργό πελάτη"""
     vat = request.args.get("vat","").strip()
+    mode = (request.args.get("mode") or request.args.get("flow") or "").strip().lower()
+    if mode not in ("invoices", "receipts"):
+        mode = "invoices"
+
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
+
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat) or None
-    # Fallback: use session active credential if explicit lookup failed
+    client = _find_client(creds, vat=vat) if vat else None
+    # Fallback: resolve active credential robustly (vat OR name), then fallback
+    # to session snapshot only if full record cannot be found.
     if not client:
         try:
-            active = get_active_credential_from_session() or None
-            if active:
-                client = active
+            active = get_active_credential_from_session() or {}
         except Exception:
-            client = None
+            active = {}
+        active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
+        active_name = str((active or {}).get("name") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and active_name:
+            client = _find_client(creds, name=active_name)
+        if not client and isinstance(active, dict) and active:
+            client = active
+        if not client and (vat or active_name):
+            group_client, _, _ = _find_client_in_group_files(vat, active_name)
+            if group_client:
+                client = group_client
     client = client or {}
-    profiles = client.get("char_profiles", [])
-    expense_tags = _list_invoice_categories(client)
+    raw_profiles = client.get("char_profiles", [])
+    normalized_profiles = []
+    for p in raw_profiles if isinstance(raw_profiles, list) else []:
+        if not isinstance(p, dict):
+            continue
+        p_mode = str(p.get("mode") or "").strip().lower()
+        mapping = p.get("mapping") if isinstance(p.get("mapping"), dict) else (p.get("map") if isinstance(p.get("map"), dict) else {})
+        prof = dict(p)
+        prof["mode"] = p_mode or "invoices"
+        prof["mapping"] = mapping
+        normalized_profiles.append(prof)
+
+    # filter profiles by mode flag.
+    # receipts also include legacy profiles with no explicit mode.
+    if mode == "receipts":
+        profiles = [p for p in normalized_profiles if str(p.get("mode") or "").strip().lower() in ("receipts", "") or "mode" not in p]
+    else:
+        profiles = [p for p in normalized_profiles if str(p.get("mode") or "invoices").strip().lower() == "invoices"]
+
+    expense_tags = _list_receipt_categories(client) if mode == "receipts" else _list_invoice_categories(client)
+    receipt_expense_tags = _list_receipt_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
     return jsonify(
         ok=True,
         profiles=profiles,
         expense_tags=expense_tags,
+        receipt_expense_tags=receipt_expense_tags,
+        options=expense_tags,
         category_labels=labels,
         vat_constraints=constraints,
     )
@@ -8636,23 +9349,54 @@ def api_char_profiles_save():
     vat = str(data.get("vat", "")).strip()
     name = (data.get("name") or "").strip()
     mapping = data.get("mapping") or {}
+    mode = (data.get("mode") or "invoices").strip().lower()
+    if mode not in ("invoices", "receipts"):
+        mode = "invoices"
 
     # If vat not provided, try to use session active credential
+    active_name = ""
     if not vat:
         try:
             active = get_active_credential_from_session() or {}
             vat = (active.get("vat") or "").strip()
+            active_name = (active.get("name") or "").strip()
         except Exception:
             vat = ""
+            active_name = ""
 
-    if not (
-        name
-        and all(mapping.get(k) for k in ("kat_fpa_a", "kat_fpa_b", "kat_fpa_g", "kat_fpa_d", "kat_fpa_e"))
-    ):
+    # allow empty name for receipts mode (generic profile)
+    if not all(mapping.get(k) for k in ("kat_fpa_a", "kat_fpa_b", "kat_fpa_g", "kat_fpa_d", "kat_fpa_e")):
         return jsonify(ok=False, error="Παράμετροι λείπουν"), 400
+    if not name and mode != 'receipts':
+        # invoices still require a named profile to avoid ambiguity
+        return jsonify(ok=False, error="Απαιτείται όνομα προφίλ για τιμολόγια"), 400
+
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
 
     creds = _load_credentials()
+    save_path = None
     client = _find_client(creds, vat=vat) if vat else None
+    if not client and active_name:
+        client = _find_client(creds, name=active_name)
+    if not client and (vat or active_name):
+        group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+        if group_client is not None and group_creds is not None and group_path is not None:
+            client = group_client
+            creds = group_creds
+            save_path = group_path
     # Fallback: if lookup by vat failed, use session active credential object
     if not client:
         try:
@@ -8684,19 +9428,34 @@ def api_char_profiles_save():
             ), 400
 
     arr = list(client.get("char_profiles", []))
-    # upsert
+    # upsert by name+mode, but also migrate legacy same-name profiles without mode
     hit = None
     for p in arr:
-        if str(p.get("name","")).strip().lower() == name.lower():
+        if not isinstance(p, dict):
+            continue
+        p_name = str(p.get("name","")).strip().lower()
+        p_mode = str(p.get("mode") or "").strip().lower()
+        if p_name != name.lower():
+            continue
+        if p_mode == mode or (mode == "receipts" and p_mode == ""):
             hit = p
             break
     if hit:
         hit["mapping"] = mapping
+        hit.pop("map", None)
+        hit["mode"] = mode
     else:
-        arr.append({"name": name, "mapping": mapping})
+        arr.append({"name": name, "mapping": mapping, "mode": mode})
     client["char_profiles"] = arr
-    _save_credentials(creds)
-    return jsonify(ok=True, profile={"name": name, "mapping": mapping})
+    if save_path is not None:
+        try:
+            with save_path.open('w', encoding='utf-8') as f:
+                json.dump(creds, f, ensure_ascii=False, indent=2)
+        except Exception:
+            _save_credentials(creds)
+    else:
+        _save_credentials(creds)
+    return jsonify(ok=True, profile={"name": name, "mapping": mapping, "mode": mode})
 # ------- repeat entry mapping (πάντα ποσοστά) -------
 
 
@@ -8706,14 +9465,69 @@ def api_char_profiles_delete():
     data = request.get_json(force=True, silent=True) or {}
     vat = str(data.get("vat","")).strip()
     name = (data.get("name") or "").strip()
+    mode = (data.get("mode") or "invoices").strip().lower()
+    if mode not in ("invoices", "receipts"):
+        mode = "invoices"
+    def _find_client_in_group_files(vat_value: str = "", name_value: str = ""):
+        try:
+            for cand in Path(DATA_DIR).glob('*/credentials.json'):
+                try:
+                    with cand.open('r', encoding='utf-8') as f:
+                        arr = json.load(f) or []
+                except Exception:
+                    continue
+                found = _find_client(arr, vat=vat_value or None, name=name_value or None)
+                if found:
+                    return found, arr, cand
+        except Exception:
+            pass
+        return None, None, None
+
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat)
+    save_path = None
+    client = _find_client(creds, vat=vat) if vat else None
+    if not client:
+        try:
+            active = get_active_credential_from_session() or {}
+        except Exception:
+            active = {}
+        active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
+        active_name = str((active or {}).get("name") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and active_name:
+            client = _find_client(creds, name=active_name)
+        if not client and (vat or active_name):
+            group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+            if group_client is not None and group_creds is not None and group_path is not None:
+                client = group_client
+                creds = group_creds
+                save_path = group_path
     if not client:
         return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
     arr = list(client.get("char_profiles", []))
-    arr = [p for p in arr if str(p.get("name","")).strip().lower() != name.lower()]
+    # remove matching name+mode; for receipts also remove legacy no-mode profile
+    def _keep_profile(p):
+        if not isinstance(p, dict):
+            return True
+        p_name = str(p.get("name","")).strip().lower()
+        p_mode = str(p.get("mode") or "").strip().lower()
+        if p_name != name.lower():
+            return True
+        if mode == "receipts":
+            return p_mode not in ("receipts", "")
+        return p_mode != "invoices"
+
+    arr = [p for p in arr if _keep_profile(p)]
     client["char_profiles"] = arr
-    _save_credentials(creds)
+    if save_path is not None:
+        try:
+            with save_path.open('w', encoding='utf-8') as f:
+                json.dump(creds, f, ensure_ascii=False, indent=2)
+        except Exception:
+            _save_credentials(creds)
+    else:
+        _save_credentials(creds)
     return jsonify(ok=True)
 
 @app.get("/profiles", endpoint="char_profiles_ui")
@@ -8721,14 +9535,18 @@ def char_profiles_ui():
     """Σελίδα δημιουργίας/επεξεργασίας Προφίλ"""
     vat = request.args.get("vat","").strip()
     creds = _load_credentials()
-    client = _find_client(creds, vat=vat) or {}
+    client = _find_client(creds, vat=vat) if vat else None
     if not client:
         try:
             active = get_active_credential_from_session() or {}
         except Exception:
             active = {}
-        if isinstance(active, dict) and active:
+        active_vat = str((active or {}).get("vat") or "").strip()
+        if active_vat:
+            client = _find_client(creds, vat=active_vat)
+        if not client and isinstance(active, dict) and active:
             client = active
+    client = client or {}
     expense_tags = _list_invoice_categories(client)
     labels = _category_labels_for_client(client)
     constraints = _category_vat_constraints(client)
@@ -8864,6 +9682,8 @@ def api_next_receipt_mark():
 
         if numeric_marks:
             next_num = max(numeric_marks) + 1
+            if next_num < DEFAULT_BASE_MARK:
+                next_num = DEFAULT_BASE_MARK
         else:
             # try to seed from AFM or other heuristic — keep it deterministic
             try:
@@ -8901,21 +9721,37 @@ def api_scrape_receipt():
     try:
         data = request.get_json(silent=True) or {}
         url = data.get("url") or data.get("mark") or data.get("q") or ""
+        mode = str(data.get("mode") or "mixed").strip().lower()
+        if mode not in ("analysis", "mixed"):
+            mode = "mixed"
         if not url:
             return jsonify({"ok": False, "error": "Missing 'url' in request"}), 400
 
-        log.info("api_scrape_receipt: incoming url=%s", url)
+        log.info("api_scrape_receipt: incoming url=%s mode=%s", url, mode)
 
-        # use scraper_receipt.detect_and_scrape (you said file scraper_receipt.py has it)
-        try:
-            from scraper_receipt import detect_and_scrape
-        except Exception:
-            # fallback to older function name if exists
+        # analysis -> scraper_receipt_analysis.py
+        # mixed    -> scraper_receipt.py
+        detect_and_scrape = None
+        if mode == "analysis":
             try:
-                from scraper_receipt import detect_and_scrape as detect_and_scrape  # re-raise if not present
-            except Exception as e:
-                log.exception("api_scrape_receipt: cannot import detect_and_scrape")
-                return jsonify({"ok": False, "error": "scraper_receipt detect_and_scrape not available"}), 500
+                from scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
+            except Exception:
+                log.exception("api_scrape_receipt: cannot import analysis scraper, fallback to legacy")
+                try:
+                    from scraper_receipt import detect_and_scrape as detect_and_scrape
+                except Exception:
+                    log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
+                    return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
+        else:
+            try:
+                from scraper_receipt import detect_and_scrape as detect_and_scrape
+            except Exception:
+                log.exception("api_scrape_receipt: cannot import mixed scraper, fallback to analysis")
+                try:
+                    from scraper_receipt_analysis import detect_and_scrape as detect_and_scrape
+                except Exception:
+                    log.exception("api_scrape_receipt: cannot import any detect_and_scrape")
+                    return jsonify({"ok": False, "error": "No receipt scraper available"}), 500
 
         scraped = detect_and_scrape(url)
         # normalize expected shape (best-effort)
@@ -8930,11 +9766,65 @@ def api_scrape_receipt():
         issuer_vat = scraped.get("issuer_vat") or scraped.get("issuer_vat") or scraped.get("issuerAfm") or scraped.get("ΑΦΜ") or scraped.get("AFM") or ""
         issuer_name = scraped.get("issuer_name") or scraped.get("issuerName") or scraped.get("Name") or ""
         progressive_aa = scraped.get("progressive_aa") or scraped.get("AA") or scraped.get("aa") or ""
+        vat_analysis = scraped.get("vat_analysis") if isinstance(scraped.get("vat_analysis"), dict) else {}
+        vat_analysis_inferred = bool(scraped.get("vat_analysis_inferred", False))
 
-        log.info("api_scrape_receipt: scraped url=%s is_invoice=%s mark=%s", url, is_invoice, mark)
+        receipt_analysis = scraped.get("receipt_analysis") if isinstance(scraped.get("receipt_analysis"), list) else []
+        if not receipt_analysis and vat_analysis:
+            def _rate_sort_key(rate_key):
+                try:
+                    return -float(str(rate_key).replace('%', '').replace(',', '.'))
+                except Exception:
+                    return 0.0
+
+            for idx, rate in enumerate(sorted([k for k in vat_analysis.keys() if k != "__inferred__"], key=_rate_sort_key)):
+                row = vat_analysis.get(rate) or {}
+                rate_text = str(rate)
+                if rate_text and '%' not in rate_text:
+                    rate_text = f"{rate_text}%"
+                receipt_analysis.append({
+                    "id": f"r{idx}",
+                    "vatCategory": rate_text,
+                    "amount": row.get("net_amount") or row.get("gross_amount") or "",
+                    "vat": row.get("vat_amount") or "",
+                    "description": "",
+                    "category": ""
+                })
+
+        # If scraper MARK is missing/invalid, assign unique pseudo-MARK for receipts.
+        if not re.fullmatch(r"\d{15}", mark or ""):
+            generated_mark = ""
+            try:
+                next_resp = api_next_receipt_mark()
+                next_http = next_resp[0] if isinstance(next_resp, tuple) else next_resp
+                next_payload = next_http.get_json(silent=True) if hasattr(next_http, "get_json") else None
+                candidate = str((next_payload or {}).get("mark") or "").strip()
+                if re.fullmatch(r"\d{15}", candidate):
+                    generated_mark = candidate
+            except Exception:
+                log.exception("api_scrape_receipt: fallback mark generation via api_next_receipt_mark failed")
+
+            if not generated_mark:
+                generated_mark = RECEIPT_FALLBACK_MARK
+
+            try:
+                last_generated = str(session.get("_last_generated_receipt_mark") or "").strip()
+                if re.fullmatch(r"\d{15}", last_generated) and re.fullmatch(r"\d{15}", generated_mark):
+                    next_num = max(int(generated_mark), int(last_generated) + 1)
+                    generated_mark = str(next_num).zfill(15)
+                    if len(generated_mark) > 15:
+                        generated_mark = generated_mark[-15:]
+                session["_last_generated_receipt_mark"] = generated_mark
+            except Exception:
+                log.exception("api_scrape_receipt: could not persist last generated fallback mark")
+
+            mark = generated_mark
+
+        log.info("api_scrape_receipt: scraped url=%s mode=%s is_invoice=%s mark=%s", url, mode, is_invoice, mark)
 
         return jsonify({
             "ok": True,
+            "mode": mode,
             "is_invoice": bool(is_invoice),
             "mark": mark,
             "issue_date": issue_date,
@@ -8942,6 +9832,9 @@ def api_scrape_receipt():
             "issuer_vat": issuer_vat,
             "issuer_name": issuer_name,
             "progressive_aa": progressive_aa,
+            "receipt_analysis": receipt_analysis,
+            "vat_analysis": vat_analysis,
+            "vat_analysis_inferred": vat_analysis_inferred,
             "raw": scraped
         })
     except Exception as e:
@@ -9005,6 +9898,7 @@ def save_accounts():
     """
     Αναμένει POST με πεδία:
       - account_<vat>__<expense_tag> = account_code
+      - account_g_cash = cash_account_code  (Γ-category specific)
     Παράδειγμα πεδίου: account_24__γενικες_δαπανες = "70.02"
     Επιπλέον μπορεί να στέλνεται JSON payload.
     """
@@ -9014,15 +9908,28 @@ def save_accounts():
             payload = request.get_json()
             accounts = payload.get("accounts", {})
             save_global_accounts_to_credentials(accounts)
+            
+            # Handle account_g_cash from JSON
+            cash_acct = payload.get("account_g_cash", "").strip()
+            if cash_acct:
+                settings = load_settings() or {}
+                settings["account_g_cash"] = cash_acct
+                save_settings(settings)
+            
             flash("Οι γενικοί λογαριασμοί αποθηκεύτηκαν", "success")
             return redirect(url_for("credentials"))
+        
         # αλλιώς form fields
         form = request.form
+        
         # Δομή: accounts[vat][expense_tag] = code
         accounts = {}
         # αναζητούμε πεδία που ξεκινούν με "account_"
         for key in form:
             if not key.startswith("account_"):
+                continue
+            # Skip account_g_cash (handle separately)
+            if key == "account_g_cash":
                 continue
             # key format: account_{vat}__{expense_tag}
             rest = key[len("account_"):]
@@ -9034,8 +9941,18 @@ def save_accounts():
             if vat_key not in accounts:
                 accounts[vat_key] = {}
             accounts[vat_key][expense_tag] = code
-        # αποθηκεύουμε
+        
+        # αποθηκεύουμε global accounts
         save_global_accounts_to_credentials(accounts)
+        
+        # Handle account_g_cash separately (Γ-category specific)
+        cash_acct = form.get("account_g_cash", "").strip()
+        if cash_acct:
+            settings = load_settings() or {}
+            settings["account_g_cash"] = cash_acct
+            save_settings(settings)
+            log.info("save_accounts: saved account_g_cash=%s", cash_acct)
+        
         flash("Οι γενικοί λογαριασμοί αποθηκεύτηκαν", "success")
     except Exception as e:
         log.exception("save_accounts failed")
@@ -9099,6 +10016,12 @@ def save_summary():
 
     def _is_receipt(summary: dict) -> bool:
         s = summary or {}
+        # explicit docType takes precedence over fuzzy heuristics
+        dt = str(s.get("docType") or s.get("doc_type") or "").strip().lower()
+        if dt.startswith("invoice"):
+            return False
+        if dt.startswith("receipt"):
+            return True
         if s.get("is_receipt"):
             return True
         t  = str(s.get("type","")).strip()
@@ -9113,6 +10036,15 @@ def save_summary():
         if not s.get("totalVatAmount") and not s.get("totalNetValue") and s.get("totalValue"):
             return True
         return False
+
+    def _receipt_analysis_enabled(summary: dict) -> bool:
+        s = summary or {}
+        return bool(
+            s.get("receipt_analysis_enabled")
+            or s.get("receipts_analysis_enabled")
+            or s.get("receiptAnalysisEnabled")
+            or s.get("analysis_receipts")
+        )
 
     
     def _hydrate_summary_for_excel(summary: dict, vat: str = "") -> dict:
@@ -9136,8 +10068,9 @@ def save_summary():
             if tv: s["totalValue"] = str(tv)
             if _is_receipt(s):
                 s["is_receipt"] = True
-                s["category"] = s.get("category") or "αποδειξακια"
-                s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or "αποδειξακια"
+                if not _receipt_analysis_enabled(s):
+                    s["category"] = s.get("category") or "αποδειξακια"
+                    s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or "αποδειξακια"
                 if not s.get("type_name"): s["type_name"] = "Απόδειξη"
             if not str(s.get("created_at") or "").strip():
                 s["created_at"] = _dt.utcnow().isoformat(timespec="seconds") if _dt else ""
@@ -9189,6 +10122,174 @@ def save_summary():
         except Exception:
             pass
         return {"enabled": False, "mapping": {}, "invoice_mtype": "", "receipt_mtype": ""}
+
+    def _normalize_book_category(value) -> str:
+        s = str(value or "").strip().upper()
+        if s in ("Γ", "G"):
+            return "G"
+        if s in ("Β", "B"):
+            return "B"
+        return s
+
+    def _resolve_mtype_fields(s: dict):
+        s = s or {}
+        settings = load_settings() or {}
+        code_to_label = {
+            str(settings.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip(): "Αγορών - Εξόδων Ταμειακή",
+            str(settings.get("article_movement_type_tameiaki", "") or "").strip(): "Ταμειακή",
+            str(settings.get("article_movement_type_agoron_exodon", "") or "").strip(): "Αγορών - Εξόδων Επί Πιστώσει",
+            str(settings.get("article_movement_type_symsifistiki", "") or "").strip(): "Συμψηφιστική",
+            str(settings.get("article_movement_type_agoron_exodon_opseos", "") or "").strip(): "Αγορών - Εξόδων Όψεως",
+        }
+        code_to_label = {k: v for k, v in code_to_label.items() if k}
+
+        def _norm_label(txt: str) -> str:
+            raw = str(txt or "").strip().lower()
+            if not raw:
+                return ""
+            try:
+                import unicodedata
+                raw = unicodedata.normalize("NFD", raw)
+                raw = "".join(ch for ch in raw if unicodedata.category(ch) != "Mn")
+            except Exception:
+                pass
+            raw = raw.replace("—", " ").replace("–", " ").replace("-", " ").replace("_", " ")
+            raw = re.sub(r"\s+", " ", raw).strip()
+            return raw
+
+        mtype_code = _first(
+            s.get("mtype"),
+            s.get("invoice_mtype"),
+            s.get("receipt_mtype"),
+            s.get("mType"),
+            s.get("invoiceMtype"),
+            s.get("receiptMtype"),
+        )
+
+        if not mtype_code:
+            raw_label = str(s.get("mtype_label") or s.get("movement_type_label") or "").strip().lower()
+            if raw_label:
+                for code_key, label_val in code_to_label.items():
+                    if raw_label == str(label_val).strip().lower():
+                        mtype_code = code_key
+                        break
+
+                if not mtype_code:
+                    raw_norm = _norm_label(raw_label)
+                    cash_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki") or settings.get("article_movement_type_tameiaki") or "").strip()
+                    credit_code = str(settings.get("article_movement_type_agoron_exodon") or "").strip()
+                    opseos_code = str(settings.get("article_movement_type_agoron_exodon_opseos") or "").strip()
+                    syms_code = str(settings.get("article_movement_type_symsifistiki") or "").strip()
+
+                    if "αγορ" in raw_norm and "εξοδ" in raw_norm and "ταμει" in raw_norm and cash_code:
+                        mtype_code = cash_code
+                    elif "ταμει" in raw_norm and cash_code:
+                        mtype_code = cash_code
+                    elif "συμψηφ" in raw_norm and syms_code:
+                        mtype_code = syms_code
+                    elif "οψε" in raw_norm and opseos_code:
+                        mtype_code = opseos_code
+                    elif "αγορ" in raw_norm and "εξοδ" in raw_norm and credit_code:
+                        mtype_code = credit_code
+
+        mtype_code = str(mtype_code or "").strip()
+        mtype_label = code_to_label.get(mtype_code, "")
+        if not mtype_label:
+            mtype_label = str(s.get("mtype_label") or "").strip()
+
+        return mtype_code, mtype_label
+
+    def _should_create_cash_mirror(base_entry: dict) -> bool:
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+            bcat = _normalize_book_category(base_entry.get("book_category"))
+            if bcat != "G":
+                return False
+
+            settings = load_settings() or {}
+            trigger_code = str(settings.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip()
+            entry_code = str(base_entry.get("mtype") or "").strip()
+            mtype_label_lower = str(base_entry.get("mtype_label") or "").lower()
+            return bool((trigger_code and entry_code == trigger_code) or ("αγορών" in mtype_label_lower and "ταμει" in mtype_label_lower))
+        except Exception:
+            return False
+
+    def _remove_cash_mirror_for_mark(epsilon_cache: list, mark: str) -> bool:
+        try:
+            removed = False
+            target = str(mark or "").strip()
+            for idx in range(len(epsilon_cache) - 1, -1, -1):
+                row = epsilon_cache[idx]
+                if str(row.get("mark") or "").strip() == target and bool(row.get("_auto_cash_payment")):
+                    epsilon_cache.pop(idx)
+                    removed = True
+            if removed:
+                log.info("save_summary: removed stale mirror cash-payment entries for MARK=%s", mark)
+            return removed
+        except Exception:
+            log.exception("save_summary: failed removing stale mirror entries for MARK=%s", mark)
+            return False
+
+    def _maybe_append_cash_mirror(epsilon_cache: list, base_entry: dict, mark: str):
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+
+            if not _should_create_cash_mirror(base_entry):
+                return False
+
+            settings = load_settings() or {}
+
+            tameiaki_mtype = str(settings.get("article_movement_type_tameiaki", "14") or "").strip()
+            cash_account = str(settings.get("account_g_cash", "") or "").strip()
+            is_receipt = bool(base_entry.get("is_receipt"))
+            supplier_account_key = "account_g_supplier_retail" if is_receipt else "account_g_supplier_wholesale"
+            supplier_account = str(settings.get(supplier_account_key, "") or "").strip()
+            if not (tameiaki_mtype and cash_account and supplier_account):
+                return False
+
+            # Avoid duplicate mirror entry for same MARK
+            for item in (epsilon_cache or []):
+                if str(item.get("mark") or "").strip() == str(mark or "").strip() and bool(item.get("_auto_cash_payment")):
+                    return False
+
+            from copy import deepcopy
+            mirror_entry = deepcopy(base_entry)
+            mirror_entry["mtype"] = tameiaki_mtype
+            mirror_entry["mtype_label"] = "Ταμειακή"
+            mirror_entry["_auto_cash_payment"] = True
+            mirror_entry["book_category"] = "G"
+            mirror_entry["is_receipt"] = is_receipt
+
+            supplier_desc = "Χρέωση - Προμηθευτής λιανικής (auto)" if is_receipt else "Χρέωση - Προμηθευτής χονδρικής (auto)"
+            supplier_category = "προμηθευτής_λιανικής" if is_receipt else "προμηθευτής_χονδρικής"
+            amt_str = str(base_entry.get("totalValue") or "0")
+            mirror_entry["lines"] = [
+                {
+                    "id": "mirror_debit",
+                    "description": supplier_desc,
+                    "amount": amt_str,
+                    "vat": "0",
+                    "category": supplier_category,
+                    "vat_category": ""
+                },
+                {
+                    "id": "mirror_credit",
+                    "description": "Πίστωση - Ταμείο (auto)",
+                    "amount": amt_str,
+                    "vat": "0",
+                    "category": "ταμείο",
+                    "vat_category": ""
+                }
+            ]
+
+            epsilon_cache.append(mirror_entry)
+            log.info("save_summary: created mirror cash-payment entry MARK=%s with mtype=%s", mark, tameiaki_mtype)
+            return True
+        except Exception:
+            log.exception("save_summary: mirror entry creation failed (non-blocking)")
+            return False
 
     # ---------------- parse payload ----------------
     try:
@@ -9272,6 +10373,10 @@ def save_summary():
         log.error("save_summary: missing vat - active=%s summary_afm=%s", bool(active), summary.get("AFM"))
         flash("Δεν έχει επιλεγεί ενεργός πελάτης (ΑΦΜ)", "error")
         return redirect(url_for("search"))
+    
+    # If active credential is not set (or missing book_category), try to load from vat
+    if not active or not active.get("book_category"):
+        active = get_cred_by_vat(vat) or {}
 
     # ---------------- ensure lines / normalize ----------------
     def float_from_comma(value):
@@ -9322,9 +10427,30 @@ def save_summary():
         })
     summary["lines"] = normalized_lines
 
+    # recalc header totals for receipt analysis
+    try:
+        if normalized_lines and _is_receipt(summary) and _receipt_analysis_enabled(summary):
+            total_net = 0.0
+            total_vat = 0.0
+            for ln in normalized_lines:
+                try:
+                    total_net += float_from_comma(ln.get("amount") or 0)
+                except Exception:
+                    pass
+                try:
+                    total_vat += float_from_comma(ln.get("vat") or 0)
+                except Exception:
+                    pass
+            summary["totalNetValue"] = f"{total_net:.2f}"
+            summary["totalVatAmount"] = f"{total_vat:.2f}"
+            summary["totalValue"] = f"{(total_net + total_vat):.2f}"
+    except Exception:
+        log.exception("save_summary: failed recomputing header totals for receipt analysis")
+
     # ---------------- HYDRATE & repeat-entry ----------------
     summary = _hydrate_summary_for_excel(summary, vat=str(vat or ""))
     is_receipt = _is_receipt(summary)
+    receipt_analysis_enabled = _receipt_analysis_enabled(summary)
 
     # If the client sent `receipt_mtype` or `invoice_mtype` explicitly, prefer that
     # over applying repeat-entry fallbacks later. This guards against clients
@@ -9336,10 +10462,55 @@ def save_summary():
         elif summary.get('invoice_mtype'):
             summary['mtype'] = summary.get('invoice_mtype')
 
+    try:
+        resolved_mtype_code, resolved_mtype_label = _resolve_mtype_fields(summary)
+        if resolved_mtype_code:
+            summary["mtype"] = resolved_mtype_code
+        if resolved_mtype_label and not summary.get("mtype_label"):
+            summary["mtype_label"] = resolved_mtype_label
+    except Exception:
+        log.exception("save_summary: mtype resolve failed")
+
     series_cred = _resolve_series_credential(summary, vat=vat)
     summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
 
     conf = _load_repeat_entry_for_vat(vat)
+    payment_method_type = str(
+        _first(
+            summary.get("paymentMethodType"),
+            summary.get("payment_method_type"),
+            summary.get("paymentMethod"),
+            summary.get("payment_method"),
+        )
+        or ""
+    ).strip()
+
+    try:
+        is_g_invoice = (not is_receipt) and (_normalize_book_category(active.get("book_category")) == "G")
+        if is_g_invoice and payment_method_type == "3":
+            settings_payment = load_settings() or {}
+            cash_mtype_code = str(
+                settings_payment.get("article_movement_type_agoron_exodon_tameiaki")
+                or settings_payment.get("article_movement_type_tameiaki")
+                or ""
+            ).strip()
+            selected_mtype = str(summary.get("mtype") or summary.get("invoice_mtype") or "").strip()
+            repeat_profile_mtype = str(conf.get("invoice_mtype") or "").strip() if conf.get("enabled") else ""
+            effective_mtype = selected_mtype or repeat_profile_mtype
+
+            if cash_mtype_code:
+                if effective_mtype and effective_mtype != cash_mtype_code:
+                    log.info(
+                        "save_summary: G-category cash payment mismatch (selected='%s', profile='%s', expected='%s') -> preserving user/profile selection",
+                        selected_mtype,
+                        repeat_profile_mtype,
+                        cash_mtype_code,
+                    )
+                # ΜΟΝΟ ενημερωτικό check: δεν κάνουμε forced override εδώ.
+                # Το UI warning αποφασίζει αν θα αλλάξει σε cash MTYPE ή θα συνεχίσει όπως επέλεξε ο χρήστης.
+    except Exception:
+        log.exception("save_summary: payment/mtype enforcement failed")
+
     # ΤΙΜΟΛΟΓΙΑ: mapping ανά VAT%
     if not is_receipt:
         if conf.get("enabled") and isinstance(conf.get("mapping"), dict) and summary.get("lines"):
@@ -9366,8 +10537,8 @@ def save_summary():
                 summary["mtype"] = conf["invoice_mtype"]
                 log.info("save_summary: Applied invoice_mtype='%s' from repeat_entry", conf["invoice_mtype"])
     else:
-        # ΑΠΟΔΕΙΞΕΙΣ: ΠΑΝΤΑ ανά γραμμή "αποδειξακια" (αν λείπει)
-        if summary.get("lines"):
+        # ΑΠΟΔΕΙΞΕΙΣ: όταν ΔΕΝ υπάρχει ανάλυση, fallback ανά γραμμή "αποδειξακια" (αν λείπει)
+        if (not receipt_analysis_enabled) and summary.get("lines"):
             for ln in summary["lines"]:
                 if ln is None: 
                     continue
@@ -9382,6 +10553,37 @@ def save_summary():
             # Fallback σε invoice_mtype αν δεν υπάρχει receipt_mtype (για backward compatibility)
             summary["mtype"] = conf["invoice_mtype"]
             log.info("save_summary (receipt): Applied invoice_mtype='%s' from repeat_entry (fallback)", conf["invoice_mtype"])
+
+    # Safety fallback: για Γ-category τιμολόγια, μην αφήνεις ποτέ κενό invoice mtype
+    try:
+        if (not is_receipt) and _normalize_book_category(active.get("book_category")) == "G" and not str(summary.get("mtype") or "").strip():
+            settings_for_fallback = load_settings() or {}
+            summary["mtype"] = str(settings_for_fallback.get("article_movement_type_agoron_exodon") or "12").strip()
+            log.info("save_summary: Applied fallback invoice mtype='%s' for Γ-category invoice", summary.get("mtype"))
+    except Exception:
+        log.exception("save_summary: failed applying fallback invoice mtype")
+
+    # Re-resolve mtype code/label after repeat-entry and fallbacks
+    try:
+        resolved_mtype_code, resolved_mtype_label = _resolve_mtype_fields(summary)
+        summary["mtype"] = str(resolved_mtype_code or "").strip()
+        if resolved_mtype_label:
+            summary["mtype_label"] = resolved_mtype_label
+    except Exception:
+        log.exception("save_summary: mtype re-resolve failed after repeat-entry")
+
+    # Persist repeat receipts preferences to backend (toggle + receipt_mtype) for mixed flow stability
+    try:
+        selected_receipt_mtype = str(
+            summary.get("receipt_mtype")
+            or summary.get("mtype")
+            or ""
+        ).strip()
+        if is_receipt and conf.get("enabled") and selected_receipt_mtype:
+            _sync_repeat_entry_backend(vat, enabled=True, receipt_mtype=selected_receipt_mtype)
+            conf["receipt_mtype"] = selected_receipt_mtype
+    except Exception:
+        log.exception("save_summary: failed to persist receipt repeat prefs for VAT=%s", vat)
 
     # --- GUARD: μπλοκάρουμε άδεια/άκυρα summaries ---
     try:
@@ -9438,6 +10640,9 @@ def save_summary():
             d_mark = _first(d.get("mark"), d.get("MARK"), d.get("invoice_id"), d.get("Αριθμός Μητρώου"), d.get("id"))
             if not d_mark or d_mark != mark: 
                 continue
+            # For fallback receipt MARK, only match/update same actual receipt identity.
+            if is_receipt and mark == RECEIPT_FALLBACK_MARK and not _same_receipt_identity(summary, d):
+                continue
             if not epsilon_item_has_detail(d): 
                 placeholder_indices.append(i); 
                 continue
@@ -9487,12 +10692,36 @@ def save_summary():
                     }); updated = True
 
             # Ενημέρωση MTYPE στο top-level του παραστατικού (αν υπάρχει στο summary)
-            new_mtype = summary.get("mtype","") or ""
+            new_mtype, new_mtype_label = _resolve_mtype_fields(summary)
             if new_mtype and str(existing.get("mtype","")) != new_mtype:
                 existing["mtype"] = new_mtype
                 updated = True
+            if new_mtype_label and str(existing.get("mtype_label", "")) != new_mtype_label:
+                existing["mtype_label"] = new_mtype_label
+                updated = True
+
+            new_book_category = "G" if _normalize_book_category(active.get("book_category")) == "G" else ""
+            if new_book_category and str(existing.get("book_category", "")) != new_book_category:
+                existing["book_category"] = new_book_category
+                updated = True
+            if bool(existing.get("is_receipt")) != bool(is_receipt):
+                existing["is_receipt"] = bool(is_receipt)
+                updated = True
+            if bool(existing.get("receipt_analysis_enabled")) != bool(receipt_analysis_enabled):
+                existing["receipt_analysis_enabled"] = bool(receipt_analysis_enabled)
+                updated = True
+
+            should_have_mirror = _should_create_cash_mirror(existing)
+            mirror_created = False
+            mirror_removed = False
+            if should_have_mirror:
+                mirror_created = _maybe_append_cash_mirror(epsilon_cache, existing, mark)
+            else:
+                mirror_removed = _remove_cash_mirror_for_mark(epsilon_cache, mark)
+                if mirror_removed:
+                    updated = True
             
-            if updated:
+            if updated or mirror_created or mirror_removed:
                 try:
                     if _dt and _tz: 
                         existing["_updated_at"] = _dt.now(_tz.utc).isoformat()
@@ -9535,7 +10764,12 @@ def save_summary():
                 except Exception:
                     log.exception("save_summary: ensure/create excel failed")
 
-                flash("Ενημερώθηκε ο χαρακτηρισμός στο cache (epsilon).", "success")
+                if mirror_created:
+                    flash("Ενημερώθηκε το epsilon και δημιουργήθηκε ταμειακή εγγραφή.", "success")
+                elif mirror_removed:
+                    flash("Ενημερώθηκε το epsilon και αφαιρέθηκε παλιά ταμειακή εγγραφή.", "success")
+                else:
+                    flash("Ενημερώθηκε ο χαρακτηρισμός στο cache (epsilon).", "success")
                 return redirect(url_for("search"))
             else:
                 flash("Δεν υπήρξε αλλαγή στις κατηγορίες.", "info")
@@ -9633,6 +10867,9 @@ def save_summary():
 
     # ---------------- Build epsilon entry & append ----------------
     try:
+        # Resolve mtype code/label robustly from summary payload
+        mtype_code, mtype_label = _resolve_mtype_fields(summary)
+        
         epsilon_entry = {
             "mark": mark,
             "issueDate": summary.get("issueDate",""),
@@ -9645,10 +10882,23 @@ def save_summary():
             "totalVatAmount": summary.get("totalVatAmount",""),
             "totalValue": summary.get("totalValue",""),
             "classification": summary.get("classification",""),
-            "category": ("αποδειξακια" if is_receipt else (summary.get("category") or "")),
-            "χαρακτηρισμός": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
-            "characteristic": (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else "")),
-            "mtype": summary.get("mtype","") or "",  # Είδος Κίνησης για Γ Category (invoice-level)
+            "category": (
+                (summary.get("category") or "") if (is_receipt and receipt_analysis_enabled)
+                else ("αποδειξακια" if is_receipt else (summary.get("category") or ""))
+            ),
+            "χαρακτηρισμός": (
+                (summary.get("χαρακτηρισμός") or summary.get("characteristic") or "") if (is_receipt and receipt_analysis_enabled)
+                else (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else ""))
+            ),
+            "characteristic": (
+                (summary.get("χαρακτηρισμός") or summary.get("characteristic") or "") if (is_receipt and receipt_analysis_enabled)
+                else (summary.get("χαρακτηρισμός") or summary.get("characteristic") or ("αποδειξακια" if is_receipt else ""))
+            ),
+            "mtype": mtype_code,  # Είδος Κίνησης code για Γ Category (invoice-level)
+            "mtype_label": mtype_label,  # Είδος Κίνησης label (για mirror detection)
+            "book_category": "G" if _normalize_book_category(active.get("book_category")) == "G" else "",  # Γ-category flag
+            "is_receipt": is_receipt,  # Flag: True για αποδείξεις, False για τιμολόγια
+            "receipt_analysis_enabled": bool(receipt_analysis_enabled),
             "AFM_issuer": summary.get("AFM_issuer","") or summary.get("AFM",""),
             "Name_issuer": summary.get("Name_issuer") or summary.get("Name",""),
             "AFM": summary.get("AFM","") or vat,
@@ -9660,22 +10910,54 @@ def save_summary():
                 "description": ln.get("description",""),
                 "amount": ln.get("amount",""),
                 "vat": ln.get("vat",""),
-                "category": (ln.get("category","") or ("αποδειξακια" if is_receipt else "")),
+                "category": (
+                    ln.get("category","")
+                    or ("" if (is_receipt and receipt_analysis_enabled) else ("αποδειξακια" if is_receipt else ""))
+                ),
                 "vat_category": ln.get("vatCategory","") or ""
             })
 
-        # skip append αν δεν υπάρχει 15ψήφιο mark ή καθόλου ουσιαστικές lines
+        # skip append αν δεν υπάρχει 15ψήφιο mark ή καθόλου ουσιαστικές lines.
+        # Για αποδείξεις (ιδίως mixed mode), επιτρέπουμε append και με header-only
+        # στοιχεία όταν υπάρχουν βασικά πεδία (AA/date/issuer/totals).
         _mk_ok = bool(re.fullmatch(r"\d{15}", str(mark or "").strip()))
         _has_lines = bool(summary["lines"]) and any(
             (str(x.get("description") or x.get("amount") or x.get("vat") or "").strip())
             for x in summary["lines"]
         )
-        if not _mk_ok or not _has_lines:
-            log.info("save_summary: skip epsilon append due to empty mark/lines (mk_ok=%s, has_lines=%s)", _mk_ok, _has_lines)
+        _receipt_header_ok = False
+        if is_receipt:
+            _receipt_header_ok = (
+                str(
+                    _first(
+                        summary.get("AA"),
+                        summary.get("aa"),
+                        summary.get("number"),
+                        summary.get("progressive_aa"),
+                        summary.get("issueDate"),
+                        summary.get("AFM_issuer"),
+                        summary.get("AFM"),
+                        summary.get("totalValue"),
+                        summary.get("totalNetValue"),
+                        summary.get("totalVatAmount"),
+                    )
+                    or ""
+                ).strip()
+                != ""
+            )
+
+        _has_payload_for_append = _has_lines or (is_receipt and _receipt_header_ok)
+        if not _mk_ok or not _has_payload_for_append:
+            log.info(
+                "save_summary: skip epsilon append due to empty payload (mk_ok=%s, has_lines=%s, receipt_header_ok=%s, is_receipt=%s)",
+                _mk_ok, _has_lines, _receipt_header_ok, is_receipt
+            )
             return redirect(url_for("search"))
 
         try:
             epsilon_cache.append(epsilon_entry)
+            _maybe_append_cash_mirror(epsilon_cache, epsilon_entry, mark)
+            
             _safe_save_epsilon_cache(vat, epsilon_cache)
             flash("Η περίληψη αποθηκεύτηκε και προστέθηκε νέα εγγραφή epsilon.", "success")
             try:
@@ -9805,7 +11087,7 @@ def api_repeat_state_set():
         enabled = bool(payload.get("enabled", False))
 
         active = get_active_credential_from_session() or {}
-        vat = active.get("vat") or ""
+        vat = str(payload.get("vat") or active.get("vat") or "").strip()
 
         # ενημέρωσε session
         try:
@@ -9820,15 +11102,11 @@ def api_repeat_state_set():
         data[vat]["enabled"] = enabled
         _repeat_state_save(data)
 
-        # optional: ενημέρωσε και το credentials repeat_entry.enabled αν θες να συμβαδίζει
+        # Sync και στο credentials repeat_entry.enabled για σταθερό reload state
         try:
-            if active.get("repeat_entry") is None:
-                active["repeat_entry"] = {}
-            active["repeat_entry"]["enabled"] = enabled
-            # αν έχεις helper για persist credentials, κάλεσέ τον εδώ (π.χ. save_credentials(active))
-            # αλλιώς άστο έτσι — το session + repeat_state.json αρκούν για receipts.
+            _sync_repeat_entry_backend(vat, enabled=enabled)
         except Exception:
-            pass
+            log.exception("repeat_state/set: credentials sync failed for VAT=%s", vat)
 
         return jsonify({"ok": True, "enabled": enabled, "vat": vat})
     except Exception as e:
@@ -9840,7 +11118,7 @@ def api_confirm_receipt():
     """
     Επιβεβαίωση/Αποθήκευση ΑΠΟΔΕΙΞΗΣ:
       - Normalizes summary σε μορφή 'ΑΠΟΔΕΙΞΗ' + 1 γραμμή αν δεν υπάρχουν lines.
-      - Θέτει category 'αποδειξακια' ανά γραμμή (αν λείπει).
+    - Θέτει category 'αποδειξακια' ανά γραμμή (αν λείπει), μόνο όταν δεν είναι ενεργή ανάλυση αποδείξεων.
       - Idempotent ενημέρωση epsilon cache (update-by-mark).
       - Γράφει/ενημερώνει Excel (μία φορά).
     Επιστρέφει JSON: { ok, saved, mark, excel_written, updated_existing }
@@ -9858,9 +11136,19 @@ def api_confirm_receipt():
         payload = {}
     summary = payload.get("summary") or payload
 
+    def _receipt_analysis_enabled(summary_obj: dict) -> bool:
+        s = summary_obj or {}
+        return bool(
+            s.get("receipt_analysis_enabled")
+            or s.get("receipts_analysis_enabled")
+            or s.get("receiptAnalysisEnabled")
+            or s.get("analysis_receipts")
+        )
+
     # --- unify/normalize receipt shape ---
     def _norm_receipt(s: dict) -> dict:
         s = dict(s or {})
+        analysis_enabled = _receipt_analysis_enabled(s)
         s["type"] = s.get("type") or "ΑΠΟΔΕΙΞΗ"
         s["type_name"] = s.get("type_name") or "ΑΠΟΔΕΙΞΗ"
         s["is_receipt"] = True
@@ -9886,7 +11174,9 @@ def api_confirm_receipt():
         for idx, ln in enumerate(lines):
             if not isinstance(ln, dict):
                 continue
-            cat = (ln.get("category") or "").strip() or "αποδειξακια"
+            cat = (ln.get("category") or "").strip()
+            if not cat and not analysis_enabled:
+                cat = "αποδειξακια"
             fixed.append({
                 "id": ln.get("id") or f"r{idx}",
                 "description": ln.get("description") or "",
@@ -9904,12 +11194,17 @@ def api_confirm_receipt():
             except Exception:
                 pass
         # set top-level receipt category
-        s["category"] = s.get("category") or "αποδειξακια"
-        s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or "αποδειξακια"
+        if not analysis_enabled:
+            s["category"] = s.get("category") or "αποδειξακια"
+            s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or "αποδειξακια"
+        else:
+            s["category"] = s.get("category") or ""
+            s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or ""
         s["characteristic"] = s["χαρακτηρισμός"]
         return s
 
     summary = _norm_receipt(summary)
+    receipt_analysis_enabled = _receipt_analysis_enabled(summary)
 
     # --- guard: απαιτούμε τουλάχιστον mark 15ψήφιο ή “ουσιαστικές” γραμμές/σύνολο ---
     if not _meaningful_summary(summary):
@@ -9922,14 +11217,110 @@ def api_confirm_receipt():
     if not vat:
         return jsonify({"ok": False, "error": "No active VAT"}), 400
 
+    # Resolve custom series settings for receipt flows as well (including analysis mode)
+    try:
+        series_cred = active if isinstance(active, dict) else _resolve_series_credential(summary, vat=vat)
+        summary["series"] = _resolved_series_for_summary(summary, vat=vat, cred=series_cred)
+    except Exception:
+        log.exception("api_confirm_receipt: failed resolving series")
+
     # Ανάκτηση MTYPE από repeat_entry (αν είναι Γ Κατηγορία)
     invoice_mtype = summary.get("mtype", "")
     if not invoice_mtype and active:
         try:
             repeat_entry = active.get("repeat_entry") or {}
-            invoice_mtype = repeat_entry.get("invoice_mtype", "")
+            invoice_mtype = (
+                repeat_entry.get("receipt_mtype", "")
+                or repeat_entry.get("invoice_mtype", "")
+            )
         except Exception:
             pass
+
+    book_category = str((active or {}).get("book_category") or "").strip().upper()
+    is_g_category = book_category in ("Γ", "G")
+
+    def _should_create_cash_mirror_local(base_entry: dict) -> bool:
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+            if str(base_entry.get("book_category") or "").strip().upper() != "G":
+                return False
+            settings_local = load_settings() or {}
+            trigger_code = str(settings_local.get("article_movement_type_agoron_exodon_tameiaki", "") or "").strip()
+            entry_code = str(base_entry.get("mtype") or "").strip()
+            mtype_label_lower = str(base_entry.get("mtype_label") or "").lower()
+            return bool((trigger_code and entry_code == trigger_code) or ("αγορών" in mtype_label_lower and "ταμει" in mtype_label_lower))
+        except Exception:
+            return False
+
+    def _remove_cash_mirror_for_mark_local(epsilon_cache_local: list, mark_local: str) -> bool:
+        try:
+            removed = False
+            target = str(mark_local or "").strip()
+            for idx_local in range(len(epsilon_cache_local) - 1, -1, -1):
+                row_local = epsilon_cache_local[idx_local]
+                if str(row_local.get("mark") or "").strip() == target and bool(row_local.get("_auto_cash_payment")):
+                    epsilon_cache_local.pop(idx_local)
+                    removed = True
+            return removed
+        except Exception:
+            log.exception("api_confirm_receipt: failed removing mirror entries for MARK=%s", mark_local)
+            return False
+
+    def _maybe_append_cash_mirror_local(epsilon_cache_local: list, base_entry: dict, mark_local: str) -> bool:
+        try:
+            if not isinstance(base_entry, dict):
+                return False
+            if not _should_create_cash_mirror_local(base_entry):
+                return False
+
+            settings_local = load_settings() or {}
+            tameiaki_mtype = str(settings_local.get("article_movement_type_tameiaki", "14") or "").strip()
+            cash_account = str(settings_local.get("account_g_cash", "") or "").strip()
+            is_receipt_local = bool(base_entry.get("is_receipt"))
+            supplier_key = "account_g_supplier_retail" if is_receipt_local else "account_g_supplier_wholesale"
+            supplier_account = str(settings_local.get(supplier_key, "") or "").strip()
+            if not (tameiaki_mtype and cash_account and supplier_account):
+                return False
+
+            for row_local in (epsilon_cache_local or []):
+                if str(row_local.get("mark") or "").strip() == str(mark_local or "").strip() and bool(row_local.get("_auto_cash_payment")):
+                    return False
+
+            from copy import deepcopy
+            mirror_entry = deepcopy(base_entry)
+            mirror_entry["mtype"] = tameiaki_mtype
+            mirror_entry["mtype_label"] = "Ταμειακή"
+            mirror_entry["_auto_cash_payment"] = True
+            mirror_entry["book_category"] = "G"
+            mirror_entry["is_receipt"] = is_receipt_local
+
+            supplier_desc = "Χρέωση - Προμηθευτής λιανικής (auto)" if is_receipt_local else "Χρέωση - Προμηθευτής χονδρικής (auto)"
+            supplier_category = "προμηθευτής_λιανικής" if is_receipt_local else "προμηθευτής_χονδρικής"
+            amount_str = str(base_entry.get("totalValue") or "0")
+            mirror_entry["lines"] = [
+                {
+                    "id": "mirror_debit",
+                    "description": supplier_desc,
+                    "amount": amount_str,
+                    "vat": "0",
+                    "category": supplier_category,
+                    "vat_category": ""
+                },
+                {
+                    "id": "mirror_credit",
+                    "description": "Πίστωση - Ταμείο (auto)",
+                    "amount": amount_str,
+                    "vat": "0",
+                    "category": "ταμείο",
+                    "vat_category": ""
+                }
+            ]
+            epsilon_cache_local.append(mirror_entry)
+            return True
+        except Exception:
+            log.exception("api_confirm_receipt: failed creating cash mirror for MARK=%s", mark_local)
+            return False
 
     # φόρτωσε epsilon cache χωρίς auto-build
     try:
@@ -9940,12 +11331,14 @@ def api_confirm_receipt():
 
     mark = str(summary.get("mark") or "").strip()
 
-    # index by mark
+    # index by mark (fallback receipt MARK requires same receipt identity)
     existing_idx = None
     for i, it in enumerate(epsilon_cache):
         try:
             m = str(it.get("mark") or it.get("MARK") or "").strip()
             if m == mark:
+                if mark == RECEIPT_FALLBACK_MARK and not _same_receipt_identity(summary, it):
+                    continue
                 existing_idx = i
                 break
         except Exception:
@@ -9966,24 +11359,30 @@ def api_confirm_receipt():
         "totalVatAmount": summary.get("totalVatAmount", ""),
         "totalValue": summary.get("totalValue", ""),
         "classification": summary.get("classification", ""),
-        "category": "αποδειξακια",
-        "χαρακτηρισμός": "αποδειξακια",
-        "characteristic": "αποδειξακια",
+        "category": (summary.get("category", "") if receipt_analysis_enabled else "αποδειξακια"),
+        "χαρακτηρισμός": ((summary.get("χαρακτηρισμός") or summary.get("characteristic") or "") if receipt_analysis_enabled else "αποδειξακια"),
+        "characteristic": ((summary.get("χαρακτηρισμός") or summary.get("characteristic") or "") if receipt_analysis_enabled else "αποδειξακια"),
         "AFM_issuer": summary.get("AFM_issuer", "") or summary.get("AFM", ""),
         "Name_issuer": summary.get("Name_issuer", "") or summary.get("Name", ""),
         "AFM": summary.get("AFM", "") or vat,
+        "receipt_analysis_enabled": bool(receipt_analysis_enabled),
+        "book_category": "G" if is_g_category else "",
+        "is_receipt": True,
         "lines": [{
             "id": ln.get("id", ""),
             "description": ln.get("description", ""),
             "amount": ln.get("amount", ""),
             "vat": ln.get("vat", ""),
-            "category": (ln.get("category") or "αποδειξακια"),
+            "category": (ln.get("category") or ("" if receipt_analysis_enabled else "αποδειξακια")),
             "vat_category": ln.get("vat_category", "") or ""
         } for ln in (summary.get("lines") or [])]
     }
     # Προσθήκη MTYPE στο root level (μόνο για Γ Κατηγορία)
     if invoice_mtype:
         epsilon_item["mtype"] = invoice_mtype
+
+    mirror_created = False
+    mirror_removed = False
 
     # idempotent update
     if existing_idx is not None:
@@ -10012,11 +11411,32 @@ def api_confirm_receipt():
                 existing_lines.append(ln)
                 changed = True
 
-        if changed:
+        if invoice_mtype and str(existing.get("mtype") or "").strip() != str(invoice_mtype).strip():
+            existing["mtype"] = invoice_mtype
+            changed = True
+        if str(existing.get("book_category") or "").strip().upper() != ("G" if is_g_category else ""):
+            existing["book_category"] = "G" if is_g_category else ""
+            changed = True
+        if bool(existing.get("is_receipt")) != True:
+            existing["is_receipt"] = True
+            changed = True
+        if bool(existing.get("receipt_analysis_enabled")) != bool(receipt_analysis_enabled):
+            existing["receipt_analysis_enabled"] = bool(receipt_analysis_enabled)
+            changed = True
+
+        if _should_create_cash_mirror_local(existing):
+            mirror_created = _maybe_append_cash_mirror_local(epsilon_cache, existing, mark)
+        else:
+            mirror_removed = _remove_cash_mirror_for_mark_local(epsilon_cache, mark)
+            if mirror_removed:
+                changed = True
+
+        if changed or mirror_created or mirror_removed:
             epsilon_cache[existing_idx] = existing
             updated_existing = True
     else:
         epsilon_cache.append(epsilon_item)
+        mirror_created = _maybe_append_cash_mirror_local(epsilon_cache, epsilon_item, mark)
 
     # save epsilon atomically
     try:
@@ -12470,19 +13890,60 @@ def admin_backup_download(backup_name):
         return redirect(url_for('admin_backups'))
 
 
-@app.route("/admin/backups/restore/<backup_name>", methods=['POST'])
+@app.route("/admin/backups/restore/<path:backup_name>", methods=['POST'])
 @login_required
 @_require_admin
 def admin_backup_restore(backup_name):
+    # the legacy endpoint accepted bare filenames; we now also allow full
+    # paths with leading slash (e.g. "/backups/tony/…") coming from the
+    # remote-backup list.  strip any leading slash to avoid routing issues.
+    backup_name = backup_name.lstrip('/')
     """Restore group from backup (supports AJAX)"""
-    group_id = request.form.get('group_id', type=int) or request.json.get('group_id', type=int) if request.is_json else None
+
+    # parse group_id from either form-encoded or JSON payload; the
+    # earlier implementation used ``request.json.get(..., type=int)`` which
+    # failed because ``request.json`` returns a plain dict.
+    group_id = None
+    if request.is_json:
+        try:
+            payload = request.get_json(force=True, silent=True) or {}
+        except Exception:
+            payload = {}
+        group_id = payload.get('group_id')
+    else:
+        group_id = request.form.get('group_id', type=int)
+
+    try:
+        if group_id is not None:
+            group_id = int(group_id)
+    except Exception:
+        group_id = None
+
+    # if this looks like a remote backup and we still lack a group,
+    # attempt to guess from the path (second segment is usually folder name)
+    if not group_id:
+        if backup_name.startswith('backups/') or '/backups/' in backup_name:
+            parts = backup_name.strip('/').split('/')
+            if len(parts) >= 2:
+                candidate = parts[1]
+                from models import Group
+                grp = Group.query.filter_by(data_folder=candidate).first()
+                if grp:
+                    group_id = grp.id
+    # fallback: pick first group if available
+    if not group_id:
+        from models import Group
+        first = Group.query.first()
+        if first:
+            group_id = first.id
+
     if not group_id:
         result = {'ok': False, 'error': 'Group ID required'}
         if request.is_json or request.headers.get('Accept') == 'application/json':
             return jsonify(result)
         flash('Group ID required', 'danger')
         return redirect(url_for('admin_backups'))
-    
+
     result = admin_panel.admin_restore_backup(backup_name, group_id, current_user)
     if request.is_json or request.headers.get('Accept') == 'application/json':
         return jsonify(result)
@@ -12490,7 +13951,7 @@ def admin_backup_restore(backup_name):
         flash(result['message'], 'success')
     else:
         flash(result['error'], 'danger')
-    
+
     return redirect(url_for('admin_backups'))
 
 
@@ -12581,6 +14042,141 @@ def api_admin_activity_logs():
     return jsonify({'logs': logs})
 
 
+@app.route("/api/admin/firebase-usage", methods=["GET"])
+@login_required
+def api_admin_firebase_usage():
+    """Return aggregated firebase.read bytes from activity.log for graphing.
+    Query params:
+      start (ISO8601) optional filter start time (UTC)
+      end   (ISO8601) optional filter end time (UTC)
+    Bundles points by hour.
+    """
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'error': 'Admin access required'}), 403
+
+    start_raw = request.args.get('start')
+    end_raw = request.args.get('end')
+    start_ts = None
+    end_ts = None
+    try:
+        if start_raw:
+            start_ts = datetime.datetime.fromisoformat(start_raw)
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.replace(tzinfo=timezone.utc)
+            start_ts = start_ts.astimezone(timezone.utc)
+        if end_raw:
+            end_ts = datetime.datetime.fromisoformat(end_raw)
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.replace(tzinfo=timezone.utc)
+            end_ts = end_ts.astimezone(timezone.utc)
+    except Exception:
+        return jsonify({'error': 'Invalid start/end timestamps'}), 400
+
+    log_path = os.path.join(os.getcwd(), 'data', 'activity.log')
+    buckets = {}
+    if os.path.exists(log_path):
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if 'firebase.read' not in line:
+                    continue
+                # parse timestamp at beginning ISO format
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                ts_str = parts[0] + ' ' + parts[1]
+                try:
+                    dt = datetime.datetime.fromisoformat(ts_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.astimezone(timezone.utc)
+                except Exception:
+                    continue
+                if start_ts and dt < start_ts:
+                    continue
+                if end_ts and dt > end_ts:
+                    continue
+                m = re.search(r'size=(\d+)', line)
+                if not m:
+                    continue
+                size = int(m.group(1))
+                bucket = dt.strftime('%Y-%m-%d %H:00')
+                buckets[bucket] = buckets.get(bucket, 0) + size
+    # convert to sorted list for charting
+    data = [{'ts': k, 'bytes': v} for k, v in sorted(buckets.items())]
+    return jsonify({'success': True, 'data': data})
+
+
+@app.route('/api/admin/firebase-sync-settings', methods=['GET', 'POST'])
+@login_required
+def api_admin_firebase_sync_settings():
+    """Get or update Firebase sync settings."""
+    if not admin_panel.is_admin(current_user):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    if request.method == 'GET':
+        # Return current settings
+        enabled = os.getenv('FIREBASE_SYNC_ENABLED', '0') == '1'
+        interval = int(os.getenv('FIREBASE_SYNC_INTERVAL', '60'))
+        smart_sync = os.getenv('FIREBASE_SMART_SYNC', '1') == '1'
+        return jsonify({
+            'success': True,
+            'data': {
+                'enabled': enabled,
+                'interval': interval,
+                'smart_sync': smart_sync
+            }
+        })
+
+    # POST: update settings
+    try:
+        payload = request.get_json()
+        enabled = bool(payload.get('enabled'))
+        interval = max(10, min(3600, int(payload.get('interval', 60))))
+        smart_sync = bool(payload.get('smart_sync', True))
+        
+        # Update environment (in-memory and .env file)
+        os.environ['FIREBASE_SYNC_ENABLED'] = '1' if enabled else '0'
+        os.environ['FIREBASE_SYNC_INTERVAL'] = str(interval)
+        os.environ['FIREBASE_SMART_SYNC'] = '1' if smart_sync else '0'
+        
+        # Update .env file
+        env_file = os.path.join(os.getcwd(), '.env')
+        env_content = []
+        if os.path.exists(env_file):
+            with open(env_file, 'r') as f:
+                for line in f:
+                    if not any(line.startswith(k) for k in ['FIREBASE_SYNC_ENABLED=', 'FIREBASE_SYNC_INTERVAL=', 'FIREBASE_SMART_SYNC=']):
+                        env_content.append(line.rstrip('\n'))
+        
+        # Add/update settings
+        env_content.append(f'FIREBASE_SYNC_ENABLED={"1" if enabled else "0"}')
+        env_content.append(f'FIREBASE_SYNC_INTERVAL={interval}')
+        env_content.append(f'FIREBASE_SMART_SYNC={"1" if smart_sync else "0"}')
+        
+        with open(env_file, 'w') as f:
+            f.write('\n'.join(env_content) + '\n')
+        
+        logger.info(f'Firebase sync settings updated: enabled={enabled}, interval={interval}s, smart_sync={smart_sync}')
+        # record activity for admin panel
+        try:
+            from utils import log_user_activity
+            log_user_activity(
+                user_id=current_user.id,
+                group_name='system',
+                action='firebase_sync_settings_updated',
+                details={'enabled': enabled, 'interval': interval, 'smart_sync': smart_sync},
+                user_email=getattr(current_user, 'email', None),
+                user_username=getattr(current_user, 'username', None)
+            )
+        except Exception:
+            pass
+        
+        return jsonify({'success': True, 'message': 'Settings saved'})
+    except Exception as e:
+        logger.error(f'Error saving firebase sync settings: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
 @app.route('/api/admin/activity-logs/clear', methods=['POST'])
 @login_required
 def api_admin_activity_logs_clear():
@@ -12592,7 +14188,7 @@ def api_admin_activity_logs_clear():
     start_date = str(payload.get('start_date') or '').strip()
     end_date = str(payload.get('end_date') or '').strip()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.datetime.now(timezone.utc)
     cutoff_start = None
     cutoff_end = None
 
@@ -12612,8 +14208,8 @@ def api_admin_activity_logs_clear():
         elif period == 'custom':
             if not start_date or not end_date:
                 return jsonify({'ok': False, 'error': 'Απαιτούνται start_date και end_date για custom διάστημα.'}), 400
-            cutoff_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-            cutoff_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            cutoff_start = datetime.datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            cutoff_end = datetime.datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
             cutoff_end = cutoff_end.replace(hour=23, minute=59, second=59)
         else:
             return jsonify({'ok': False, 'error': 'Μη έγκυρο period. Επιτρεπτά: 1m, 2m, 3m, custom'}), 400
@@ -12626,7 +14222,7 @@ def api_admin_activity_logs_clear():
         variants = [str(ts).strip(), str(ts).strip().replace('Z', '+00:00')]
         for v in variants:
             try:
-                dt = datetime.fromisoformat(v)
+                dt = datetime.datetime.fromisoformat(v)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 return dt.astimezone(timezone.utc)
