@@ -7214,7 +7214,8 @@ def api_coa_search():
 @app.route("/api/profiles", methods=["GET"])
 def api_profiles_list():
     profs, options = _profiles_get_for_active()
-    return jsonify({"ok": True, "profiles": profs, "options": options})
+    invoice_profiles = _filter_char_profiles_by_mode(profs or [], "invoices")
+    return jsonify({"ok": True, "profiles": invoice_profiles, "options": options})
 
 
 @app.route("/api/profiles/save", methods=["POST"])
@@ -9394,6 +9395,9 @@ def api_char_profiles_save():
     invoice_mtype = str(data.get("invoice_mtype") or "").strip()
     receipt_mtype = str(data.get("receipt_mtype") or "").strip()
 
+    if mode == "receipts" and not receipt_mtype and invoice_mtype:
+        receipt_mtype = invoice_mtype
+
     # If vat not provided, try to use session active credential
     active_name = ""
     if not vat:
@@ -11218,6 +11222,17 @@ def api_confirm_receipt():
                 "vat_category": ln.get("vat_category") or ln.get("vatCategory") or ""
             })
         s["lines"] = fixed
+
+        inferred_line_category = ""
+        if analysis_enabled:
+            for ln in fixed:
+                if not isinstance(ln, dict):
+                    continue
+                c = str(ln.get("category") or "").strip()
+                if c:
+                    inferred_line_category = c
+                    break
+
         # totals (συμπλήρωσε αν λείπουν)
         if not str(s.get("totalValue") or "").strip():
             try:
@@ -11230,8 +11245,8 @@ def api_confirm_receipt():
             s["category"] = s.get("category") or "αποδειξακια"
             s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or "αποδειξακια"
         else:
-            s["category"] = s.get("category") or ""
-            s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or ""
+            s["category"] = s.get("category") or inferred_line_category or ""
+            s["χαρακτηρισμός"] = s.get("χαρακτηρισμός") or s.get("characteristic") or inferred_line_category or ""
         s["characteristic"] = s["χαρακτηρισμός"]
         return s
 

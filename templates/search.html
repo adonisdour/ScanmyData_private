@@ -460,6 +460,10 @@ function rcRepeatModalShouldUseReceiptsMode(){
     const saved = String(localStorage.getItem('UI:useReceipts') || '').trim();
     if (saved === '1' || saved.toLowerCase() === 'true') return true;
   } catch(_) {}
+  try {
+    const legacySaved = String(localStorage.getItem('rc:useReceipts') || '').trim();
+    if (legacySaved === '1' || legacySaved.toLowerCase() === 'true') return true;
+  } catch(_) {}
   return false;
 }
 
@@ -531,8 +535,7 @@ function setActiveProfileHint(name){
   const sw = document.getElementById('repeatEntrySwitch');
   if(!el || !sw) return;
 
-  // Δείξε μόνο όταν: επαναληψιμη ON ΚΑΙ ΔΕΝ είμαστε σε Αποδείξεις
-  if (sw.checked && !isReceiptsOn()) {
+  if (sw.checked) {
     el.style.display = '';
     el.textContent = "Ενεργό προφίλ επαναληψιμης: " + (name || "Γενικό");
   } else {
@@ -919,6 +922,28 @@ function katToPercent(k){
     return { out, missing };
   }
 
+  function repeatProfileStorageKey(vat, mode){
+    const normVat = String(vat || '').trim();
+    const normMode = String(mode || 'invoices').trim().toLowerCase();
+    return 'repeat:selected_profile:' + normMode + ':' + normVat;
+  }
+
+  function rememberRepeatSelectedProfile(vat, mode, profileName){
+    try {
+      const key = repeatProfileStorageKey(vat, mode);
+      localStorage.setItem(key, String(profileName || '').trim());
+    } catch(_) {}
+  }
+
+  function loadRememberedRepeatProfile(vat, mode){
+    try {
+      const key = repeatProfileStorageKey(vat, mode);
+      return String(localStorage.getItem(key) || '').trim();
+    } catch(_) {
+      return '';
+    }
+  }
+
   // Global override ώστε άλλο code-path να ανοίγει το modal με έτοιμο mapping
   window._repeatMappingOverride = null;
 
@@ -934,11 +959,11 @@ function katToPercent(k){
     o0.dataset.receiptMtype = '';
     selProfile.appendChild(o0);
 
-    profiles.forEach(p => {
+    profiles.forEach((p, idx) => {
       const o = document.createElement('option');
       const profileName = String((p && p.name) || '').trim();
       const profileId = String((p && p.id) || '').trim();
-      o.value = profileName || profileId || '';
+      o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
       o.textContent = profileName || '(χωρίς όνομα)';
       o.dataset.mapping = JSON.stringify(normalizeMapping(p.mapping || {}));
       o.dataset.profileName = profileName;
@@ -970,6 +995,11 @@ function katToPercent(k){
     try {
       window.__repeat_invoice_mtype = invoiceVal;
       window.__repeat_receipt_mtype = receiptVal;
+    } catch(_) {}
+    try {
+      const mode = (typeof rcRepeatModalShouldUseReceiptsMode === 'function' && rcRepeatModalShouldUseReceiptsMode()) ? 'receipts' : 'invoices';
+      const selectedName = String((opt && opt.dataset && opt.dataset.profileName) || selProfile.value || '').trim();
+      rememberRepeatSelectedProfile(window._repeatModalVAT || "{{ vat or '' }}", mode, selectedName);
     } catch(_) {}
     setHint('');
   });
@@ -1043,6 +1073,16 @@ function katToPercent(k){
 
     // Ενημέρωσε την ένδειξη πάνω από το toggle
     setActiveProfileHint(profileName);
+    try {
+      const mode = (typeof rcRepeatModalShouldUseReceiptsMode === 'function' && rcRepeatModalShouldUseReceiptsMode()) ? 'receipts' : 'invoices';
+      rememberRepeatSelectedProfile(vatToUse, mode, profileName);
+      window.__RC_REPEAT_ENTRY_LAST = {
+        mapping: out,
+        profile_name: profileName,
+        invoice_mtype: invoiceMtype,
+        receipt_mtype: (selectedReceiptMtype || existingReceiptMtype)
+      };
+    } catch(_) {}
 
     // Βάλε checked το switch & κάνε sync το repeat state για να μείνει ON και μετά από reload
     try {
@@ -1112,6 +1152,7 @@ function katToPercent(k){
 
   const useReceiptsMode = rcRepeatModalShouldUseReceiptsMode();
   const charProfilesModeParam = useReceiptsMode ? '&mode=receipts' : '&mode=invoices';
+  const modeKey = useReceiptsMode ? 'receipts' : 'invoices';
 
   const addProfileLink = document.getElementById('addProfileLink');
   if (addProfileLink) {
@@ -1130,6 +1171,20 @@ function katToPercent(k){
   const [profiles, defaultFromGet, state] = await Promise.all([
     (async () => {
       try {
+        let profilesOut = [];
+
+        if (!useReceiptsMode) {
+          try {
+            const rp = await fetch('/api/profiles', {credentials:'same-origin'});
+            const jp = await rp.json();
+            if (jp && Array.isArray(jp.profiles)) {
+              profilesOut = jp.profiles
+                .filter(p => String((p && p.mode) || 'invoices').trim().toLowerCase() !== 'receipts')
+                .map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+            }
+          } catch (_) {}
+        }
+
         let j = null;
         try {
           const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || '') + charProfilesModeParam, {credentials:'same-origin'});
@@ -1143,32 +1198,28 @@ function katToPercent(k){
           } catch (_) { j = null; }
         }
 
-        if (!j || !j.ok) return [];
+        if (j && j.ok) {
+          if (j.category_labels) {
+            Object.assign(CATEGORY_LABELS, j.category_labels);
+            if (typeof window !== 'undefined') {
+              window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
+              Object.assign(window.CATEGORY_LABELS, j.category_labels);
+            }
+          }
+          if (j.vat_constraints) setCategoryConstraints(j.vat_constraints);
 
-        if (j && j.category_labels) {
-          Object.assign(CATEGORY_LABELS, j.category_labels);
-          if (typeof window !== 'undefined') {
-            window.CATEGORY_LABELS = window.CATEGORY_LABELS || {};
-            Object.assign(window.CATEGORY_LABELS, j.category_labels);
+          if (Array.isArray(j.expense_tags)) {
+            CUSTOMER_CATEGORIES = normalizeCategoryList(j.expense_tags);
+            if (typeof window !== 'undefined') window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
+          }
+
+          if (useReceiptsMode) {
+            profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+          } else if (!profilesOut.length) {
+            profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
           }
         }
-        if (j && j.vat_constraints) setCategoryConstraints(j.vat_constraints);
 
-        if (Array.isArray(j.expense_tags)) {
-          CUSTOMER_CATEGORIES = normalizeCategoryList(j.expense_tags);
-          if (typeof window !== 'undefined') window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
-        }
-
-        let profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-        if (!profilesOut.length) {
-          try {
-            const rp = await fetch('/api/profiles', {credentials:'same-origin'});
-            const jp = await rp.json();
-            if (jp && Array.isArray(jp.profiles) && jp.profiles.length) {
-              profilesOut = jp.profiles.map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-            }
-          } catch (_) {}
-        }
         return profilesOut;
       } catch (_e) { return []; }
     })(),
@@ -1196,20 +1247,35 @@ function katToPercent(k){
       ? state.defaultMap
       : (Object.keys((cachedRepeat.mapping || {})).length ? (cachedRepeat.mapping || {}) : defaultFromGet));
 
-  const savedName  = state.savedName || cachedRepeat.profile_name || "";
+  const savedName = String(state.savedName || cachedRepeat.profile_name || '').trim();
+  const rememberedName = loadRememberedRepeatProfile(VAT, modeKey);
+  const profileToSelect = savedName || rememberedName;
   const invoiceMtype = state.invoiceMtype || cachedRepeat.invoice_mtype || window.__repeat_invoice_mtype || "";
   const receiptMtype = state.receiptMtype || cachedRepeat.receipt_mtype || window.__repeat_receipt_mtype || "";
 
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
   if(sel){
+    const receiptsGeneralProfile = useReceiptsMode
+      ? (Array.isArray(profiles) ? profiles.find(p => !String((p && p.name) || '').trim() && String((p && p.mode) || '').trim().toLowerCase() === 'receipts') : null)
+      : null;
+    const generalMap = receiptsGeneralProfile && receiptsGeneralProfile.mapping
+      ? normalizeMapping(receiptsGeneralProfile.mapping)
+      : defaultMap;
+    const generalInvoiceMtype = receiptsGeneralProfile
+      ? String(receiptsGeneralProfile.invoice_mtype || receiptsGeneralProfile.invoiceMtype || '').trim()
+      : String(invoiceMtype || '').trim();
+    const generalReceiptMtype = receiptsGeneralProfile
+      ? String(receiptsGeneralProfile.receipt_mtype || receiptsGeneralProfile.receiptMtype || '').trim()
+      : String(receiptMtype || '').trim();
+
     sel.innerHTML = "";
     const o0 = document.createElement('option');
     o0.value = "";
     o0.textContent = "Γενικό";
-    o0.dataset.mapping = JSON.stringify(normalizeMapping(defaultMap || {}));
-    o0.dataset.invoiceMtype = String(invoiceMtype || '');
-    o0.dataset.receiptMtype = String(receiptMtype || '');
+    o0.dataset.mapping = JSON.stringify(normalizeMapping(generalMap || {}));
+    o0.dataset.invoiceMtype = generalInvoiceMtype;
+    o0.dataset.receiptMtype = generalReceiptMtype;
     o0.dataset.profileName = '';
     o0.dataset.profileId = '';
     sel.appendChild(o0);
@@ -1221,7 +1287,7 @@ function katToPercent(k){
       return true;
     });
 
-    filteredProfiles.forEach(p=>{
+    filteredProfiles.forEach((p, idx)=>{
       const o = document.createElement('option');
       const profileName = String(p.name || '').trim();
       const profileId = String(p.id || '').trim();
@@ -1229,7 +1295,7 @@ function katToPercent(k){
       const profileInvoiceMtype = String(p.invoice_mtype || p.invoiceMtype || '').trim();
       const profileReceiptMtype = String(p.receipt_mtype || p.receiptMtype || '').trim();
 
-      o.value = profileName || profileId || "";
+      o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
       o.textContent = profileName || "(χωρίς όνομα)";
       o.dataset.id = profileId;
       o.dataset.profileId = profileId;
@@ -1328,20 +1394,31 @@ function katToPercent(k){
     };
 
     // 3) αν έχει αποθηκευτεί ενεργό προφίλ, επίλεξέ το και προ-συμπλήρωσε
-    const selectedBySavedName = Array.from(sel.options).find(o =>
-      o.value === savedName ||
-      (o.dataset && o.dataset.id && o.dataset.id === savedName) ||
-      (o.textContent && o.textContent.trim() === savedName)
-    );
+    const selectedBySavedName = Array.from(sel.options).find(o => {
+      const optionValue = String(o.value || '').trim();
+      const optionId = String((o.dataset && (o.dataset.profileId || o.dataset.id)) || '').trim();
+      const optionName = String((o.dataset && o.dataset.profileName) || o.textContent || '').trim();
+      const target = String(profileToSelect || '').trim();
+      if (!target) return false;
+      return (
+        optionValue === target ||
+        optionId === target ||
+        optionName === target ||
+        optionValue.toLowerCase() === target.toLowerCase() ||
+        optionName.toLowerCase() === target.toLowerCase()
+      );
+    });
 
-    if (savedName && selectedBySavedName){
+    if (profileToSelect && selectedBySavedName){
       sel.value = selectedBySavedName.value;
       try{
         const selected = sel.selectedOptions[0];
         const selectedPayload = resolveProfilePayloadFromOption(selected);
         renderMapping(selectedPayload.mapping || {});
         applyMtypesFromSelection(selected, selectedPayload);
-        setActiveProfileHint(selectedPayload.name || savedName);
+        const selectedName = selectedPayload.name || profileToSelect;
+        setActiveProfileHint(selectedName);
+        rememberRepeatSelectedProfile(VAT, modeKey, selectedName);
 
       } catch (_e) {
         renderMapping(defaultMap);
@@ -1358,9 +1435,11 @@ function katToPercent(k){
     sel.onchange = () => {
       const opt = sel.selectedOptions[0];
       const selectedPayload = resolveProfilePayloadFromOption(opt);
+      const selectedName = (selectedPayload && selectedPayload.name) || String(sel.value || '').trim();
       renderMapping((selectedPayload && selectedPayload.mapping) || defaultMap);
       applyMtypesFromSelection(opt, selectedPayload);
-      setActiveProfileHint((selectedPayload && selectedPayload.name) || "");
+      setActiveProfileHint(selectedName);
+      rememberRepeatSelectedProfile(VAT, modeKey, selectedName);
 
       hint && (hint.style.display='none', hint.textContent='');
     };
@@ -1381,7 +1460,18 @@ function katToPercent(k){
   });
   document.getElementById('editReceiptClassBtn')?.addEventListener('click', ()=>{
     try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = true; } catch(_) {}
-    openModal();
+    try {
+      const summaryInput = document.getElementById('summaryJsonInput');
+      const summaryObj = summaryInput && summaryInput.value ? JSON.parse(summaryInput.value) : (window._lastSummaryObj || {});
+      if (typeof openReceiptClassModal === 'function') {
+        openReceiptClassModal(summaryObj || {});
+      } else {
+        openModal();
+      }
+    } catch(_) {
+      if (typeof openReceiptClassModal === 'function') openReceiptClassModal(window._lastSummaryObj || {});
+      else openModal();
+    }
   });
   
 
@@ -1390,7 +1480,56 @@ function katToPercent(k){
   // auto-open του modal όταν έρχομαι από profiles με ?open_repeat=1
 try {
   const p = new URLSearchParams(location.search);
-  if (p.get('open_repeat') === '1') {
+  if (p.get('open_receipt_class') === '1') {
+    try {
+      localStorage.setItem('UI:useReceipts', '1');
+      const sw = document.getElementById('useReceiptsSwitch');
+      if (sw && !sw.checked) {
+        sw.checked = true;
+        sw.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      try { localStorage.setItem('rc:receiptMode', 'analysis'); } catch(_) {}
+      try {
+        if (typeof window.applyReceiptMode === 'function') window.applyReceiptMode('analysis', false, true);
+      } catch(_) {}
+    } catch(_) {}
+
+    const openReceiptClassWhenReady = () => {
+      let tries = 0;
+      const maxTries = 60;
+      const attempt = () => {
+        tries += 1;
+        const opener = (typeof window.openReceiptClassModal === 'function') ? window.openReceiptClassModal : null;
+        if (opener) {
+          try {
+            const input = document.getElementById('summaryJsonInput');
+            const obj = input && input.value ? JSON.parse(input.value) : (window._lastSummaryObj || {});
+            opener(obj || {});
+          } catch(_) {
+            try { opener(window._lastSummaryObj || {}); } catch(__) {}
+          }
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('open_receipt_class');
+            url.searchParams.delete('open_repeat');
+            url.searchParams.delete('repeat_mode');
+            history.replaceState({}, '', url.toString());
+          } catch(_){ }
+          return;
+        }
+        if (tries < maxTries) {
+          setTimeout(attempt, 100);
+        }
+      };
+      setTimeout(attempt, 0);
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', openReceiptClassWhenReady, { once: true });
+    } else {
+      openReceiptClassWhenReady();
+    }
+  } else if (p.get('open_repeat') === '1') {
     const repeatMode = String(p.get('repeat_mode') || '').trim().toLowerCase();
     if (repeatMode === 'receipts') {
       try { window.__RC_REPEAT_MODAL_FORCE_RECEIPTS = true; } catch(_) {}
@@ -1458,6 +1597,7 @@ try {
         const receiptsMode = (typeof rcRepeatModalShouldUseReceiptsMode === 'function')
           ? !!rcRepeatModalShouldUseReceiptsMode()
           : ((typeof isReceiptsOn === 'function') ? !!isReceiptsOn() : false);
+        const vatForSave = (window._repeatModalVAT || VAT || '').trim();
 
         const profileId = (opt && opt.dataset && opt.dataset.id) ? opt.dataset.id : "";
         const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
@@ -1469,24 +1609,29 @@ try {
         const pctMap = readPercentMappingFromUI();      // 0/6/13/17/24
         const katMap = percentToKat(pctMap);            // kat_fpa_*
 
+        const syncCharProfileWithMtypes = async (modeValue) => {
+          if (!profileName) return;
+          await fetch('/api/char_profiles/save', {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json' },
+            credentials:'same-origin',
+            body: JSON.stringify({
+              vat: vatForSave,
+              name: profileName,
+              mode: modeValue,
+              mapping: katMap,
+              invoice_mtype: invoiceMtype,
+              receipt_mtype: receiptMtype,
+            })
+          });
+        };
+
         if (receiptsMode) {
           // Receipts flow: υποστηρίζει και Γενικό (κενό name) + mtype fields
           // Για Γενικό profile (κενό όνομα) δεν γράφουμε σε char_profiles,
           // γιατί δημιουργεί "(χωρίς όνομα)" εγγραφές στο dropdown.
           if (profileName) {
-            await fetch('/api/char_profiles/save', {
-              method:'POST',
-              headers:{ 'Content-Type':'application/json' },
-              credentials:'same-origin',
-              body: JSON.stringify({
-                vat: VAT,
-                name: profileName,
-                mode: 'receipts',
-                mapping: katMap,
-                invoice_mtype: invoiceMtype,
-                receipt_mtype: receiptMtype,
-              })
-            });
+            await syncCharProfileWithMtypes('receipts');
           }
         } else {
           // Invoices flow: κράτα την υπάρχουσα κύρια οδό για named profiles.
@@ -1502,31 +1647,11 @@ try {
             const j = await r.json().catch(()=>null);
             if (!(j && j.ok)) {
               console.warn('profiles/save failed:', j);
-              await fetch('/api/char_profiles/save', {
-                method:'POST',
-                headers:{ 'Content-Type':'application/json' },
-                credentials:'same-origin',
-                body: JSON.stringify({
-                  vat: VAT,
-                  name: profileName,
-                  mode: 'invoices',
-                  mapping: katMap,
-                })
-              });
             }
+            await syncCharProfileWithMtypes('invoices');
           } else {
             // legacy χωρίς id -> αποθήκευση μέσω char_profiles
-            await fetch('/api/char_profiles/save', {
-              method:'POST',
-              headers:{ 'Content-Type':'application/json' },
-              credentials:'same-origin',
-              body: JSON.stringify({
-                vat: VAT,
-                name: profileName,
-                mode: 'invoices',
-                mapping: katMap,
-              })
-            });
+            await syncCharProfileWithMtypes('invoices');
           }
         }
         // Δεν κάνουμε preventDefault: η δική σου αποθήκευση repeat_entry συνεχίζει κανονικά
@@ -4443,7 +4568,7 @@ function prefillSummaryModal(){
       if (isReceiptsMode && receiptMtypeSelect && receiptMtypeSelect.value) {
         // Include MTYPE for receipts mode
         data.mtype = receiptMtypeSelect.value;
-        data.invoice_mtype = receiptMtypeSelect.value; // also set invoice_mtype for consistency
+        data.receipt_mtype = receiptMtypeSelect.value;
       }
 
       const analysisUiActive = !!document.querySelector(
@@ -5230,7 +5355,13 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
       const url = document.getElementById('scrapeUrlInput')?.value || '';
       (async () => {
         try {
-          await RC.confirmReceiptOnce(RC.normalizeReceiptSummary(sobj), url);
+          const normalized = RC.normalizeReceiptSummary(sobj);
+          try {
+            if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+              await RC.applySavedReceiptAnalysisMapping(normalized);
+            }
+          } catch(_) {}
+          await RC.confirmReceiptOnce(normalized, url);
           // κράτα το mode σε receipts και κάνε hard redirect για καθαρή κατάσταση
           try { localStorage.setItem('useReceiptsSwitch','1'); } catch(_){}
           const base = location.pathname + '?use_receipts=1';
@@ -8926,7 +9057,8 @@ document.addEventListener('submit', function(ev){
 <script>
 /* === Persist Receipts/Invoices toggle across refresh (v2) === */
 (function persistReceiptsToggle(){
-  const KEY = 'rc:useReceipts';
+  const KEY = 'UI:useReceipts';
+  const LEGACY_KEY = 'rc:useReceipts';
   const ANALYSIS_KEY = 'rc:receiptAnalysisEnabled';
   const ACTIVE_VAT = "{{ vat or '' }}";
   const sw  = document.getElementById('useReceiptsSwitch');
@@ -9163,7 +9295,9 @@ document.addEventListener('submit', function(ev){
   if (!sw) return;
   // restore saved value
   const saved = localStorage.getItem(KEY);
+  const legacySaved = localStorage.getItem(LEGACY_KEY);
   if (saved !== null) sw.checked = (saved === '1');
+  else if (legacySaved !== null) sw.checked = (legacySaved === '1');
 
   try {
     const savedMode = localStorage.getItem('rc:receiptMode');
@@ -9193,6 +9327,7 @@ document.addEventListener('submit', function(ev){
     logDebug('switch_change:' + sw.checked);
     updateReceiptClassEditButton();
     localStorage.setItem(KEY, sw.checked ? '1' : '0');
+    localStorage.setItem(LEGACY_KEY, sw.checked ? '1' : '0');
     if (sw.checked && !receiptCustomCheckDone) {
       await refreshReceiptCustomAvailability();
     }
@@ -9345,10 +9480,26 @@ function openReceiptClassModal(summaryObj){
     const list = document.getElementById('receiptClassList');
     const selProf = document.getElementById('charProfileSelectClass');
     const activeVat = "{{ vat or '' }}";
-    const isRepeatEnabled = !!document.getElementById('repeatEntrySwitch')?.checked;
-    const isAnalysisMode = isReceiptAnalysisOn();
+    const repeatSwitchEl = document.getElementById('repeatEntrySwitch');
+    let repeatEntryEnabled = !!(repeatSwitchEl && repeatSwitchEl.checked);
+    if (!repeatEntryEnabled) {
+      try { repeatEntryEnabled = localStorage.getItem('REPEAT:enabled') === '1'; } catch(_) {}
+    }
+    if (!repeatEntryEnabled) {
+      try { repeatEntryEnabled = (new URLSearchParams(location.search).get('open_receipt_class') === '1'); } catch(_) {}
+    }
     const hasGCategoryMtype = !!(window.G_CATEGORY_DATA && Array.isArray(window.G_CATEGORY_DATA.mtype_options) && window.G_CATEGORY_DATA.mtype_options.length);
-    const showCombinedMtype = isRepeatEnabled && isAnalysisMode && hasGCategoryMtype;
+    const shouldShowCombinedMtype = () => {
+      let analysisOn = false;
+      try { analysisOn = !!isReceiptAnalysisOn(); } catch(_) { analysisOn = false; }
+      if (!analysisOn) {
+        try { analysisOn = !!(summaryObj && (summaryObj.receipt_analysis_enabled === true || summaryObj.receipts_analysis_enabled === true)); } catch(_) {}
+      }
+      if (!analysisOn) {
+        try { analysisOn = (new URLSearchParams(location.search).get('open_receipt_class') === '1'); } catch(_) {}
+      }
+      return !!(hasGCategoryMtype && repeatEntryEnabled && analysisOn);
+    };
     const VAT_ROWS = [
       { key: 'kat_fpa_a', vat: '0%', label: 'ΦΠΑ 0%' },
       { key: 'kat_fpa_b', vat: '6%', label: 'ΦΠΑ 6%' },
@@ -9358,6 +9509,8 @@ function openReceiptClassModal(summaryObj){
     ];
     let receiptConstraints = {};
     let receiptCategories = [];
+    let receiptProfilesCache = [];
+    let repeatEntryReceiptMtype = '';
 
     let mtypeWrap = document.getElementById('receiptClassMtypeWrap');
     if (!mtypeWrap && list && list.parentElement) {
@@ -9374,7 +9527,7 @@ function openReceiptClassModal(summaryObj){
 
     async function setupCombinedMtype(){
       if(!mtypeWrap) return;
-      if(!showCombinedMtype){
+      if(!shouldShowCombinedMtype()){
         mtypeWrap.style.display = 'none';
         return;
       }
@@ -9384,7 +9537,22 @@ function openReceiptClassModal(summaryObj){
       mtypeWrap.style.display = '';
 
       let savedReceiptMtype = '';
-      try { savedReceiptMtype = String((summaryObj && (summaryObj.receipt_mtype || summaryObj.mtype)) || '').trim(); } catch(_) { savedReceiptMtype = ''; }
+      try {
+        const selectedProfileName = String(selProf?.value || '').trim();
+        const selectedProfile = selectedProfileName
+          ? receiptProfilesCache.find(p => String((p && p.name) || '').trim() === selectedProfileName)
+          : null;
+        const generalProfile = receiptProfilesCache.find(p => !String((p && p.name) || '').trim()) || null;
+        savedReceiptMtype = String(
+          (selectedProfile && (selectedProfile.receipt_mtype || selectedProfile.receiptMtype))
+          || (generalProfile && (generalProfile.receipt_mtype || generalProfile.receiptMtype))
+          || repeatEntryReceiptMtype
+          || (summaryObj && (summaryObj.receipt_mtype || summaryObj.mtype))
+          || localStorage.getItem('saved_receipt_mtype')
+          || localStorage.getItem('receipt_mtype')
+          || ''
+        ).trim();
+      } catch(_) { savedReceiptMtype = ''; }
 
       mtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
       (window.G_CATEGORY_DATA.mtype_options || []).forEach(mt => {
@@ -9446,6 +9614,8 @@ function openReceiptClassModal(summaryObj){
         const resp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
         const j = await resp.json().catch(()=>null);
         const rep = (j && j.repeat_entry) ? j.repeat_entry : {};
+        repeatEntryEnabled = repeatEntryEnabled || !!rep.enabled;
+        repeatEntryReceiptMtype = String(rep.receipt_mtype || '').trim();
         const invoiceSel = document.getElementById('repeatMtypeSelect');
         const receiptSel = document.getElementById('repeatReceiptMtypeSelect');
         if (invoiceSel) invoiceSel.value = rep.invoice_mtype || '';
@@ -9460,12 +9630,17 @@ function openReceiptClassModal(summaryObj){
         q.set('mode', 'receipts');
         const r = await fetch('/api/char_profiles?' + q.toString(), {credentials:'same-origin'});
             const j = await r.json();
-            const profs = Array.isArray(j.profiles)? j.profiles : [];
+            const profsRaw = Array.isArray(j.profiles)? j.profiles : [];
+            const profs = profsRaw.filter(p => String((p && p.mode) || '').trim().toLowerCase() === 'receipts');
+            receiptProfilesCache = profs.slice();
             receiptConstraints = (j && j.vat_constraints && typeof j.vat_constraints === 'object') ? j.vat_constraints : {};
             receiptCategories = Array.isArray(j.receipt_expense_tags)
               ? j.receipt_expense_tags.slice()
               : (Array.isArray(j.expense_tags) ? j.expense_tags.slice() : []);
-            const defMap = (summaryObj && summaryObj.mapping)? normalizeMapping(summaryObj.mapping):{};
+            const generalProfile = profs.find(p => !String((p && p.name) || '').trim()) || null;
+            const defMap = generalProfile && generalProfile.mapping
+              ? normalizeMapping(generalProfile.mapping)
+              : ((summaryObj && summaryObj.mapping) ? normalizeMapping(summaryObj.mapping) : {});
             if(selProf){
                 selProf.innerHTML='';
                 const o0=document.createElement('option'); o0.value=''; o0.textContent='Γενικό'; o0.dataset.mapping=JSON.stringify(defMap); selProf.appendChild(o0);
@@ -9477,68 +9652,48 @@ function openReceiptClassModal(summaryObj){
                     o.dataset.mapping=JSON.stringify(normalizeMapping(p.mapping||{}));
                     selProf.appendChild(o);
                 });
+
+                try {
+                  let activeName = '';
+                  try {
+                    const repResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials:'same-origin' });
+                    const repJson = await repResp.json().catch(() => null);
+                    activeName = String(repJson?.repeat_entry?.profile_name || '').trim();
+                  } catch(_) {}
+                  if (!activeName) {
+                    activeName = String(loadRememberedRepeatProfile(activeVat, 'receipts') || '').trim();
+                  }
+                  if (activeName) {
+                    const activeOpt = Array.from(selProf.options).find(o => String(o.value || '').trim() === activeName);
+                    if (activeOpt) selProf.value = activeOpt.value;
+                  }
+                } catch(_) {}
             }
-            renderRows(defMap);
+            let initialMap = defMap;
+            try {
+              const selected = selProf?.selectedOptions?.[0];
+              if (selected && selected.dataset && selected.dataset.mapping) {
+                initialMap = normalizeMapping(JSON.parse(selected.dataset.mapping || '{}'));
+              }
+            } catch(_) {}
+            renderRows(initialMap);
             // after profiles loaded, refresh the mtype selects too
             try{ await refreshRepeatMtypes(); }catch(_){/*ignore*/}
+            try{ await setupCombinedMtype(); }catch(_){/*ignore*/}
         }catch(e){ console.warn('loadProfiles failed', e); }
     }
 
     if(selProf){
-        selProf.addEventListener('change', ()=>{
+      selProf.addEventListener('change', async ()=>{
             const opt=selProf.selectedOptions[0];
             const map=(opt&&opt.dataset.mapping)?JSON.parse(opt.dataset.mapping):{};
             renderRows(map);
-        });
-    }
+        try {
+          const selectedName = String(selProf.value || '').trim();
+          rememberRepeatSelectedProfile(activeVat, 'receipts', selectedName);
+          setActiveProfileHint(selectedName);
 
-    renderRows(summaryObj && summaryObj.mapping?normalizeMapping(summaryObj.mapping):{});
-    loadProfiles();
-    setupCombinedMtype();
-
-    const closeBtnX = modal.querySelector('#receiptClassCloseX');
-    const cancelBtn = modal.querySelector('#receiptClassCancel');
-    const saveBtn = modal.querySelector('#receiptClassSave');
-    if (closeBtnX) closeBtnX.onclick = closeReceiptClassModal;
-    if (cancelBtn) cancelBtn.onclick = closeReceiptClassModal;
-    if (saveBtn) saveBtn.onclick = async ()=>{
-      const out={ kat_fpa_a:'', kat_fpa_b:'', kat_fpa_g:'', kat_fpa_d:'', kat_fpa_e:'' };
-        list.querySelectorAll('div.flex.items-center').forEach(row=>{
-        const mapKey = row.dataset.key || '';
-            const sel=row.querySelector('select');
-        if(mapKey && sel){ out[mapKey]=sel.value || ''; }
-        });
-        let receiptMtypeValue = '';
-        if (showCombinedMtype) {
-          const mtypeSelect = document.getElementById('receiptClassMtypeSelect');
-          receiptMtypeValue = String(mtypeSelect?.value || '').trim();
-          if (!receiptMtypeValue) {
-            showFlash('Επίλεξε Κωδικό Κίνησης Αποδείξεων.', 'error', 3500);
-            return;
-          }
-        }
-        // profile name may be empty (Γενικό). any non-empty name is fine.
-        const profName=(selProf?.value||'').trim();
-        // Previously we refused blank name; remove that check so "Γενικό" can be saved.
-      if(!out.kat_fpa_a || !out.kat_fpa_b || !out.kat_fpa_g || !out.kat_fpa_d || !out.kat_fpa_e){
-        showFlash('Συμπλήρωσε κατηγορία για όλα τα ποσοστά ΦΠΑ.', 'error', 3500);
-        return;
-      }
-        try{
-          const r = await fetch('/api/char_profiles/save', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({vat:activeVat,name:profName,mapping:out,mode:'receipts'})});
-            const j=await r.json();
-            if(j && j.ok) {
-              showFlash('Το προφίλ αποθηκεύτηκε.', 'success', 3000);
-              // close modal on success (prevent reopen loop)
-              try { document.getElementById('repeatMappingModal').style.display = 'none'; } catch(_){ }
-            } else {
-              const err = (j && j.error) ? j.error : 'Σφάλμα αποθήκευσης.';
-              showFlash(err, 'error', 3500);
-            }
-        }catch(e){ showFlash('Σφάλμα αποθήκευσης.', 'error', 3000); }
-
-        if (showCombinedMtype && activeVat) {
-          try {
+          if (activeVat) {
             const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
             const getData = await getResp.json().catch(() => null);
             const rep = getData?.repeat_entry || {};
@@ -9550,22 +9705,107 @@ function openReceiptClassModal(summaryObj){
                 vat: activeVat,
                 enabled: !!rep.enabled,
                 mapping: rep.mapping || {},
-                profile_name: rep.profile_name || profName || '',
+                profile_name: selectedName,
                 invoice_mtype: rep.invoice_mtype || '',
-                receipt_mtype: receiptMtypeValue
+                receipt_mtype: rep.receipt_mtype || ''
+              })
+            });
+          }
+        } catch(_) {}
+        try { await setupCombinedMtype(); } catch(_) {}
+        });
+    }
+
+    renderRows(summaryObj && summaryObj.mapping?normalizeMapping(summaryObj.mapping):{});
+    loadProfiles();
+
+    const closeBtnX = modal.querySelector('#receiptClassCloseX');
+    const cancelBtn = modal.querySelector('#receiptClassCancel');
+    const saveBtn = modal.querySelector('#receiptClassSave');
+    if (closeBtnX) closeBtnX.onclick = closeReceiptClassModal;
+    if (cancelBtn) cancelBtn.onclick = closeReceiptClassModal;
+    if (saveBtn) saveBtn.onclick = async ()=>{
+      const out={ '0%':'', '6%':'', '13%':'', '17%':'', '24%':'' };
+        list.querySelectorAll('div.flex.items-center').forEach(row=>{
+        const mapKey = row.dataset.vat || '';
+            const sel=row.querySelector('select');
+        if(mapKey && sel){ out[mapKey]=sel.value || ''; }
+        });
+        let receiptMtypeValue = '';
+        if (shouldShowCombinedMtype()) {
+          const mtypeSelect = document.getElementById('receiptClassMtypeSelect');
+          receiptMtypeValue = String(mtypeSelect?.value || '').trim();
+          if (!receiptMtypeValue) {
+            showFlash('Επίλεξε Κωδικό Κίνησης Αποδείξεων.', 'error', 3500);
+            return;
+          }
+        }
+        // profile name may be empty (Γενικό). any non-empty name is fine.
+        const profName=(selProf?.value||'').trim();
+        // Previously we refused blank name; remove that check so "Γενικό" can be saved.
+      if(!out['0%'] || !out['6%'] || !out['13%'] || !out['17%'] || !out['24%']){
+        showFlash('Συμπλήρωσε κατηγορία για όλα τα ποσοστά ΦΠΑ.', 'error', 3500);
+        return;
+      }
+        try{
+          const r = await fetch('/api/char_profiles/save', {
+            method:'POST',
+            credentials:'same-origin',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+              vat:activeVat,
+              name:profName,
+              mapping:out,
+              mode:'receipts',
+              invoice_mtype:'',
+              receipt_mtype:receiptMtypeValue || ''
+            })
+          });
+            const j=await r.json();
+            if(j && j.ok) {
+              showFlash('Το προφίλ αποθηκεύτηκε.', 'success', 3000);
+              // close modal on success (prevent reopen loop)
+              try { document.getElementById('repeatMappingModal').style.display = 'none'; } catch(_){ }
+            } else {
+              const err = (j && j.error) ? j.error : 'Σφάλμα αποθήκευσης.';
+              showFlash(err, 'error', 3500);
+            }
+        }catch(e){ showFlash('Σφάλμα αποθήκευσης.', 'error', 3000); }
+
+        if (activeVat) {
+          try {
+            const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
+            const getData = await getResp.json().catch(() => null);
+            const rep = getData?.repeat_entry || {};
+            const effectiveReceiptMtype = String(receiptMtypeValue || rep.receipt_mtype || '').trim();
+            await fetch('/api/repeat_entry/save', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              credentials: 'same-origin',
+              body: JSON.stringify({
+                vat: activeVat,
+                enabled: !!rep.enabled,
+                mapping: rep.mapping || {},
+                profile_name: profName || rep.profile_name || '',
+                invoice_mtype: rep.invoice_mtype || '',
+                receipt_mtype: effectiveReceiptMtype
               })
             });
             try {
-              localStorage.setItem('receipt_mtype', receiptMtypeValue);
-              localStorage.setItem('saved_receipt_mtype', receiptMtypeValue);
+              rememberRepeatSelectedProfile(activeVat, 'receipts', profName || '');
+              setActiveProfileHint(profName || rep.profile_name || '');
             } catch(_) {}
-            window.__cachedReceiptMtype = receiptMtypeValue;
-            window.__repeat_receipt_mtype = receiptMtypeValue;
+            try {
+              localStorage.setItem('receipt_mtype', effectiveReceiptMtype);
+              localStorage.setItem('saved_receipt_mtype', effectiveReceiptMtype);
+            } catch(_) {}
+            window.__cachedReceiptMtype = effectiveReceiptMtype;
+            window.__repeat_receipt_mtype = effectiveReceiptMtype;
             // after saving we also want to refresh selects to keep mtype visible
             try{ await refreshRepeatMtypes(); } catch(_){ }
           } catch(e) {
             console.warn('Failed to save combined receipt mtype', e);
-            showFlash('Το προφίλ αποθηκεύτηκε, αλλά ο Κωδικός Κίνησης δεν αποθηκεύτηκε.', 'warning', 4000);
+            showFlash('Το προφίλ αποθηκεύτηκε, αλλά δεν έγινε πλήρες sync με την επαναληψιμη εισαγωγή.', 'warning', 4000);
           }
         }
 
@@ -9587,6 +9827,106 @@ function openReceiptClassModal(summaryObj){
         } catch(_){/* ignore */}
     });
 })();
+
+RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
+  try {
+    const s = (summaryObj && typeof summaryObj === 'object') ? summaryObj : {};
+    const lines = Array.isArray(s.lines) ? s.lines : [];
+    if (!lines.length) return { applied:false, complete:false };
+
+    const vat = String(
+      "{{ vat or '' }}"
+      || s.AFM_issuer
+      || s.AFM
+      || (s.raw && s.raw.issuer_vat)
+      || ''
+    ).trim();
+
+    const normalizeMap = (src) => {
+      const out = {};
+      const mapObj = (src && typeof src === 'object') ? src : {};
+      const legacyKeyToVat = {
+        kat_fpa_a: '0%',
+        kat_fpa_b: '6%',
+        kat_fpa_g: '13%',
+        kat_fpa_d: '17%',
+        kat_fpa_e: '24%'
+      };
+      Object.entries(mapObj).forEach(([k, v]) => {
+        const rawKey = String(k || '').trim();
+        const baseKey = legacyKeyToVat[rawKey] || rawKey;
+        const nk = (typeof __rcNormalizeVatCategory === 'function') ? __rcNormalizeVatCategory(baseKey) : String(baseKey || '').trim();
+        const cv = String(v || '').trim();
+        if (nk && cv) out[nk] = cv;
+      });
+      return out;
+    };
+
+    let profileName = '';
+    let mapping = {};
+
+    if (vat) {
+      try {
+        const resp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(vat), { credentials:'same-origin' });
+        const data = await resp.json().catch(() => null);
+        const rep = data?.repeat_entry || {};
+        profileName = String(rep.profile_name || '').trim();
+        mapping = normalizeMap(rep.mapping || {});
+      } catch(_) {}
+
+      if (!profileName) {
+        try { profileName = String(loadRememberedRepeatProfile(vat, 'receipts') || '').trim(); } catch(_) {}
+      }
+      if (!profileName) {
+        try { profileName = String(document.getElementById('charProfileSelectClass')?.value || '').trim(); } catch(_) {}
+      }
+
+      if (!Object.keys(mapping).length) {
+        try {
+          const q = new URLSearchParams({ vat, mode: 'receipts' });
+          const r = await fetch('/api/char_profiles?' + q.toString(), { credentials:'same-origin' });
+          const j = await r.json().catch(() => null);
+          const profiles = Array.isArray(j?.profiles) ? j.profiles : [];
+          const byName = profileName ? profiles.find(p => String(p?.name || '').trim() === profileName) : null;
+          const general = profiles.find(p => String(p?.name || '').trim() === '');
+          const chosen = byName || general || profiles[0] || null;
+          if (chosen && typeof chosen.mapping === 'object') {
+            mapping = normalizeMap(chosen.mapping || {});
+          }
+        } catch(_) {}
+      }
+    }
+
+    if (!Object.keys(mapping).length) return { applied:false, complete:false };
+
+    let changed = 0;
+    let missing = 0;
+    lines.forEach((ln) => {
+      if (!ln || typeof ln !== 'object') return;
+      const vatKey = (typeof __rcNormalizeVatCategory === 'function')
+        ? __rcNormalizeVatCategory(ln.vatCategory || ln.vat_category || ln.vat || '')
+        : String(ln.vatCategory || ln.vat_category || ln.vat || '').trim();
+      const current = String(ln.category || '').trim();
+      const mapped = String(mapping[vatKey] || '').trim();
+      if (!current && mapped) {
+        ln.category = mapped;
+        changed += 1;
+      }
+      if (!String(ln.category || '').trim()) missing += 1;
+    });
+
+    const firstCategory = String(lines.find(ln => ln && String(ln.category || '').trim())?.category || '').trim();
+    if (firstCategory) {
+      if (!String(s.category || '').trim()) s.category = firstCategory;
+      if (!String(s['χαρακτηρισμός'] || '').trim()) s['χαρακτηρισμός'] = firstCategory;
+      if (!String(s.characteristic || '').trim()) s.characteristic = firstCategory;
+    }
+
+    return { applied: changed > 0, complete: missing === 0 };
+  } catch(_) {
+    return { applied:false, complete:false };
+  }
+};
 
 RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
   window.__RC_LOCKS = window.__RC_LOCKS || {};
@@ -9614,6 +9954,18 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
       yearVal = m ? m[0] : String((new Date()).getUTCFullYear());
     }
 
+    try {
+      const isReceiptFlow = !!(
+        summaryObj && (
+          summaryObj.is_receipt === true
+          || /αποδει|receipt/i.test(String(summaryObj.type_name || '') + ' ' + String(summaryObj.type || ''))
+        )
+      );
+      if (isReceiptFlow && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+        await RC.applySavedReceiptAnalysisMapping(summaryObj);
+      }
+    } catch(_) {}
+
     const payload = {
       url: (scrapeUrl||'').trim(),
       summary_json: JSON.stringify(summaryObj),
@@ -9631,7 +9983,7 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
       const mtype = window._getReceiptMtypeForConfirm();
       if(mtype){
         payload.mtype = mtype;
-        payload.invoice_mtype = mtype;
+        payload.receipt_mtype = mtype;
       }
     }
 
@@ -9657,6 +10009,11 @@ RC.handleReceiptAfterScrape = async function(summaryObj, scrapeUrl){
     if (!repeatOn || forceEdit || RC.hasWarnings()) return false;
 
     RC.normalizeReceiptSummary(summaryObj);
+    try {
+      if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+        await RC.applySavedReceiptAnalysisMapping(summaryObj);
+      }
+    } catch(_) {}
     const summaryInput = document.getElementById('summaryJsonInput');
     if (summaryInput) summaryInput.value = JSON.stringify(summaryObj);
 
@@ -10134,7 +10491,10 @@ document.addEventListener('DOMContentLoaded', () => {
     return fallback; } }
 
   function receiptsSwitchOn(){ try{ return !!document.getElementById('useReceiptsSwitch')?.checked; }catch(_){
-    return !!lsget('rc:useReceipts','receipts')==='receipts'; } }
+    const ui = lsget('UI:useReceipts', null);
+    if (ui !== null) return !!ui;
+    return !!lsget('rc:useReceipts', false);
+  } }
 
   function autoSubmitOn(){ return !!lsget('rc:autoSubmitEnabled', true); }
   function repeatSwitchOn(){ try{ return !!document.getElementById('repeatEntrySwitch')?.checked; }catch(_){ return !!lsget('rc:repeat_enabled', false); } }
@@ -10290,10 +10650,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const s = readSummaryObject();
     if (!s || !isReceiptSummary(s) || !hasMeaningfulLines(s)) return;
 
-    // avoid double firing for the same mark
+    // avoid double firing for the same payload (mark may be empty before confirm assigns one)
     const mk = String(s.mark || s.MARK || '').trim();
-    if (!mk || mk === lastMarkTried) return;
-    lastMarkTried = mk;
+    const payloadFingerprint = mk || [
+      String(s.issueDate || s.issue_date || ''),
+      String(s.AFM_issuer || s.AFM || ''),
+      String(s.totalValue || s.total_amount || ''),
+      String((Array.isArray(s.lines) ? s.lines.length : 0) || 0)
+    ].join('|');
+    if (!payloadFingerprint || payloadFingerprint === lastMarkTried) return;
+    lastMarkTried = payloadFingerprint;
 
     // hide modal pre-emptively to avoid flicker
     try { hideSummaryModal(); } catch(_){}
@@ -10305,7 +10671,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     busy = true;
     try {
-      await RC.confirmReceiptOnce(RC.normalizeReceiptSummary(s), getScrapeUrl());
+      const normalized = RC.normalizeReceiptSummary(s);
+      try {
+        if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+          await RC.applySavedReceiptAnalysisMapping(normalized);
+        }
+      } catch(_) {}
+      await RC.confirmReceiptOnce(normalized, getScrapeUrl());
       // keep receipts mode sticky on refresh
       setLS('UI:useReceipts', '1');
       // also persist repeat-enabled locally (just in case)
@@ -10361,8 +10733,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, true);
 
-  // One-time bootstrap from server state (if available via endpoint)
-  // This is best-effort; if it fails, user toggles or previous LS values will be used.
   (async function bootstrapRepeatOnce(){
     try {
       const r = await fetch('/api/repeat_entry/get', { credentials: 'same-origin' });

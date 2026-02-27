@@ -114,7 +114,7 @@
 
         <!-- ΕΠΙΣΤΡΟΦΗ: πάνω-δεξιά, ανοίγει το modal στο /search -->
         <a id="backToRepeat"
-            href="{{ url_for('search', vat=vat, open_repeat='1', use_receipts='1' if mode=='receipts' else '0', repeat_mode=mode) }}"
+          href="{{ url_for('search', vat=vat, open_receipt_class='1', use_receipts='1', repeat_mode='receipts') if mode=='receipts' else url_for('search', vat=vat, open_repeat='1', use_receipts='0', repeat_mode=mode) }}"
            class="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded-md border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition">
           <!-- βελάκι -->
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
