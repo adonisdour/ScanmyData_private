@@ -49,7 +49,7 @@ $(document).ready(function(){
   });
 
   // Modal buttons
-  modal.find('.cancel').on('click', function(){ modal.hide(); });
+  modal.find('.cancel, #deleteModalClose').on('click', function(){ modal.hide(); });
   modal.find('.confirm').on('click', function(){
     const form = $('<form method="POST" action="{{ url_for("delete_invoices") }}"></form>');
     marksToDelete.forEach(function(s){
