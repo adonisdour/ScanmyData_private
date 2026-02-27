@@ -481,6 +481,32 @@ function isReceiptAnalysisOn(){
   return false;
 }
 
+function rcRepeatReceiptsFlowActive(){
+  try {
+    const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
+    if (!repeatOn) return false;
+    return !!isReceiptsOn();
+  } catch(_) { return false; }
+}
+
+function rcShouldApplyReceiptProfile(summary){
+  try { if (isReceiptAnalysisOn()) return true; } catch(_) {}
+  try { if (rcRepeatReceiptsFlowActive()) return true; } catch(_) {}
+  try {
+    if (summary && (summary.receipt_analysis_enabled === true || summary.receipts_analysis_enabled === true || summary.receiptAnalysisEnabled === true)) return true;
+  } catch(_) {}
+  try {
+    if (!summary) {
+      const raw = document.getElementById('summaryJsonInput')?.value || '';
+      if (raw && raw !== '{}' && raw !== 'null') summary = JSON.parse(raw);
+    }
+  } catch(_) {}
+  try {
+    if (typeof __rcIsReceiptAnalysisContext === 'function' && __rcIsReceiptAnalysisContext(summary)) return true;
+  } catch(_) {}
+  return false;
+}
+
 // Broader check: treat as analysis when either chooser is set to analysis OR the
 // current summary payload clearly indicates receipt-analysis flow (e.g. when the
 // receipts toggle/chooser is absent in this partial render).
@@ -530,17 +556,33 @@ function rcShouldSuppressModalSwitch(){
   } catch(_) { return false; }
 }
 
+function receiptModeAllowsProfileHint(){
+  try {
+    const chooserExists = !!document.querySelector('[data-receipt-mode]');
+    const stored = (localStorage.getItem('rc:receiptMode') || '').trim().toLowerCase();
+    if (chooserExists) {
+      return stored === 'analysis';
+    }
+    if (stored === 'analysis') return true;
+  } catch(_) {}
+  try {
+    if (typeof isReceiptAnalysisOn === 'function' && isReceiptAnalysisOn()) return true;
+  } catch(_) {}
+  return false;
+}
+
 function setActiveProfileHint(name){
   const el = document.getElementById('activeRepeatProfileHint');
   const sw = document.getElementById('repeatEntrySwitch');
   if(!el || !sw) return;
+  try { window.__LAST_REPEAT_PROFILE_NAME = name || ''; } catch(_) { window.__LAST_REPEAT_PROFILE_NAME = name || ''; }
 
-  if (sw.checked) {
+  if (sw.checked && receiptModeAllowsProfileHint()) {
     el.style.display = '';
     el.textContent = "Ενεργό προφίλ επαναληψιμης: " + (name || "Γενικό");
   } else {
     el.style.display = 'none';
-    el.textContent = "";
+    el.textContent = '';
   }
 }
 
@@ -4548,6 +4590,7 @@ function prefillSummaryModal(){
       } else {
         data.lines = [];
       }
+      const manualOverride = !!window.__RC_RECEIPT_PROFILE_OVERRIDE;
 
       // For every element that has data-line-id inside the modal container, read category and mtype
       const container = document.getElementById('summaryLinesContainer') || document;
@@ -4624,7 +4667,14 @@ function prefillSummaryModal(){
         } catch(_) {}
       }
 
+      if (manualOverride) {
+        data.receipt_profile_applied = '__manual__';
+      }
+
       input.value = JSON.stringify(data);
+      if (manualOverride) {
+        try { window.__RC_RECEIPT_PROFILE_OVERRIDE = false; } catch(_) {}
+      }
       window.__RC_LAST_SUMMARY_EDIT = Date.now();
       // Mirror legacy -> component input so both hidden inputs stay in sync. This
       // prevents cases where the template-based handlers update only the legacy
@@ -4681,6 +4731,10 @@ function prefillSummaryModal(){
         if(sel) sel.value = isActive ? (btn.dataset.cat || '') : '';
       }
 
+      // mark manual override so auto-mapper won't overwrite
+      if (e?.isTrusted) {
+        try { window.__RC_RECEIPT_PROFILE_OVERRIDE = true; } catch(_) {}
+      }
       // update hidden JSON immediately
       updateSummaryFromDom();
       return;
@@ -4708,6 +4762,9 @@ function prefillSummaryModal(){
         // clear buttons for that line
         const group = (container || document).querySelectorAll('.category-btn[data-line-id="'+lid+'"]');
         group.forEach(b => b.classList.remove('bg-sky-600','text-white'));
+      }
+      if (e?.isTrusted) {
+        try { window.__RC_RECEIPT_PROFILE_OVERRIDE = true; } catch(_) {}
       }
       updateSummaryFromDom();
     }
@@ -5394,7 +5451,7 @@ async function applyMappingToSummaryAndSubmitUsingMapping(mapping){
         try {
           const normalized = RC.normalizeReceiptSummary(sobj);
           try {
-            if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+            if (rcShouldApplyReceiptProfile(normalized) && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
               await RC.applySavedReceiptAnalysisMapping(normalized);
             }
           } catch(_) {}
@@ -6322,7 +6379,13 @@ function __rcIsReceiptAnalysisContext(summary){
       return 'mixed';
     } catch(_) { return ''; }
   })();
-  if (isReceipt && explicitReceiptMode) return explicitReceiptMode === 'analysis';
+  if (isReceipt) {
+    try {
+      const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
+      if (repeatOn && isReceiptsOn()) return true;
+    } catch(_) {}
+    if (explicitReceiptMode) return explicitReceiptMode === 'analysis';
+  }
   return isReceipt && (analysisUiActive || analysisFlag || hasUrlBaseline || !!window.__RC_FORCE_RECEIPT_ANALYSIS || !!window.__RC_RECEIPT_ANALYSIS_LOCK || !!isReceiptAnalysisOn());
 }
 
@@ -7126,16 +7189,18 @@ document.getElementById('saveSummaryForm')?.addEventListener('submit', async fun
     return;
   }
 
+  const shouldApplyProfile = rcShouldApplyReceiptProfile(summary);
+
   const payload = {
     url: scrapeUrl,
     summary: summary,
     force: (document.getElementById('scrapeForceField')?.value === 'true'),
-    category: (isReceiptAnalysisOn() ? '' : 'αποδειξακια'),
+    category: (shouldApplyProfile ? '' : 'αποδειξακια'),
     afm: afmVal,
     year: String(yearVal),
     mark: (summary.mark || markVal || '')
   };
-  payload.receipt_analysis_enabled = isReceiptAnalysisOn();
+  payload.receipt_analysis_enabled = shouldApplyProfile;
 
   console.log('[RC-DEBUG] FETCH -> /api/confirm_receipt called', '/api/confirm_receipt', payload);
 
@@ -9317,6 +9382,10 @@ document.addEventListener('submit', function(ev){
     applyUI(!!(sw && sw.checked));
     // after switching receipt mode the edit button may need updating
     updateReceiptClassEditButton();
+    try {
+      const remembered = window.__LAST_REPEAT_PROFILE_NAME || '';
+      setActiveProfileHint(remembered);
+    } catch(_) {}
 
     if (normalized === 'analysis' && !rcShouldSuppressModalSwitch()) {
       const repeatOn = !!document.getElementById('repeatEntrySwitch')?.checked;
@@ -9753,8 +9822,13 @@ function openReceiptClassModal(summaryObj){
             return;
           }
         }
-        // profile name may be empty (Γενικό). any non-empty name is fine.
-        const profName=(selProf?.value||'').trim();
+        // profile name may be empty (Γενικό). Capture the explicitly selected option.
+        const selectedProfileOpt = selProf?.selectedOptions?.[0] || null;
+        const optPayloadName = selectedProfileOpt && selectedProfileOpt.dataset
+          ? (selectedProfileOpt.dataset.profileName || selectedProfileOpt.value || '')
+          : (selectedProfileOpt ? (selectedProfileOpt.value || '') : '');
+        const profName = String(optPayloadName || '').trim();
+        const hasExplicitProfileSelection = !!selectedProfileOpt;
         // Previously we refused blank name; remove that check so "Γενικό" can be saved.
       if(!out.kat_fpa_a || !out.kat_fpa_b || !out.kat_fpa_g || !out.kat_fpa_d || !out.kat_fpa_e){
         showFlash('Συμπλήρωσε κατηγορία για όλα τα ποσοστά ΦΠΑ.', 'error', 3500);
@@ -9791,6 +9865,7 @@ function openReceiptClassModal(summaryObj){
             const getData = await getResp.json().catch(() => null);
             const rep = getData?.repeat_entry || {};
             const effectiveReceiptMtype = String(receiptMtypeValue || rep.receipt_mtype || '').trim();
+            const profileNameToPersist = hasExplicitProfileSelection ? profName : (rep.profile_name || '');
             await fetch('/api/repeat_entry/save', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
@@ -9799,14 +9874,15 @@ function openReceiptClassModal(summaryObj){
                 vat: activeVat,
                 enabled: !!rep.enabled,
                 mapping: rep.mapping || {},
-                profile_name: profName || rep.profile_name || '',
+                profile_name: profileNameToPersist,
                 invoice_mtype: rep.invoice_mtype || '',
                 receipt_mtype: effectiveReceiptMtype
               })
             });
             try {
-              rememberRepeatSelectedProfile(activeVat, 'receipts', profName || '');
-              setActiveProfileHint(profName || rep.profile_name || '');
+              const hintName = profileNameToPersist || '';
+              rememberRepeatSelectedProfile(activeVat, 'receipts', hintName);
+              setActiveProfileHint(hintName);
             } catch(_) {}
             try {
               localStorage.setItem('receipt_mtype', effectiveReceiptMtype);
@@ -9857,9 +9933,13 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
 
     const normalizeMap = (src) => {
       const out = {};
-      const mapObj = (src && typeof src === 'object') ? src : {};
-      Object.entries(mapObj).forEach(([k, v]) => {
-        const nk = (typeof __rcNormalizeVatCategory === 'function') ? __rcNormalizeVatCategory(k) : String(k || '').trim();
+      const normalized = (typeof normalizeMapping === 'function')
+        ? normalizeMapping(src)
+        : ((src && typeof src === 'object') ? src : {});
+      Object.entries(normalized || {}).forEach(([k, v]) => {
+        const nk = (typeof __rcNormalizeVatCategory === 'function')
+          ? __rcNormalizeVatCategory(k)
+          : String(k || '').trim();
         const cv = String(v || '').trim();
         if (nk && cv) out[nk] = cv;
       });
@@ -9868,6 +9948,49 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
 
     let profileName = '';
     let mapping = {};
+    let repeatEntryMapping = {};
+    let cachedReceiptProfiles = null;
+    let cachedProfileMapping = null;
+    let cachedProfileKey = null;
+
+    const fetchReceiptProfiles = async () => {
+      if (cachedReceiptProfiles !== null) return cachedReceiptProfiles;
+      if (!vat) {
+        cachedReceiptProfiles = [];
+        return cachedReceiptProfiles;
+      }
+      try {
+        const q = new URLSearchParams({ vat, mode: 'receipts' });
+        const r = await fetch('/api/char_profiles?' + q.toString(), { credentials:'same-origin' });
+        const j = await r.json().catch(() => null);
+        cachedReceiptProfiles = Array.isArray(j?.profiles) ? j.profiles : [];
+      } catch(_) {
+        cachedReceiptProfiles = [];
+      }
+      return cachedReceiptProfiles;
+    };
+
+    const resolveProfileMapping = async () => {
+      const normalizedName = String(profileName || '').trim();
+      const key = normalizedName || '__general__';
+      if (cachedProfileMapping !== null && cachedProfileKey === key) return cachedProfileMapping;
+      const profiles = await fetchReceiptProfiles();
+      if (!profiles.length) {
+        cachedProfileMapping = {};
+        cachedProfileKey = key;
+        return cachedProfileMapping;
+      }
+      const byName = key !== '__general__'
+        ? profiles.find(p => String(p?.name || '').trim() === normalizedName)
+        : null;
+      const general = profiles.find(p => String(p?.name || '').trim() === '');
+      const chosen = byName || general || profiles[0] || null;
+      cachedProfileMapping = (chosen && typeof chosen.mapping === 'object')
+        ? normalizeMap(chosen.mapping || {})
+        : {};
+      cachedProfileKey = key;
+      return cachedProfileMapping;
+    };
 
     if (vat) {
       try {
@@ -9875,7 +9998,7 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
         const data = await resp.json().catch(() => null);
         const rep = data?.repeat_entry || {};
         profileName = String(rep.profile_name || '').trim();
-        mapping = normalizeMap(rep.mapping || {});
+        repeatEntryMapping = normalizeMap(rep.mapping || {});
       } catch(_) {}
 
       if (!profileName) {
@@ -9884,24 +10007,53 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
       if (!profileName) {
         try { profileName = String(document.getElementById('charProfileSelectClass')?.value || '').trim(); } catch(_) {}
       }
+    }
 
-      if (!Object.keys(mapping).length) {
-        try {
-          const q = new URLSearchParams({ vat, mode: 'receipts' });
-          const r = await fetch('/api/char_profiles?' + q.toString(), { credentials:'same-origin' });
-          const j = await r.json().catch(() => null);
-          const profiles = Array.isArray(j?.profiles) ? j.profiles : [];
-          const byName = profileName ? profiles.find(p => String(p?.name || '').trim() === profileName) : null;
-          const general = profiles.find(p => String(p?.name || '').trim() === '');
-          const chosen = byName || general || profiles[0] || null;
-          if (chosen && typeof chosen.mapping === 'object') {
-            mapping = normalizeMap(chosen.mapping || {});
-          }
-        } catch(_) {}
+    const preferReceiptProfiles = (() => {
+      const summaryFlag = !!(s && (
+        s.receipt_analysis_enabled === true
+        || s.receipts_analysis_enabled === true
+        || s.receiptAnalysisEnabled === true
+      ));
+      if (summaryFlag) return true;
+      try {
+        if (typeof __rcIsReceiptAnalysisContext === 'function' && __rcIsReceiptAnalysisContext(s)) {
+          return true;
+        }
+      } catch(_) {}
+      try {
+        if ((typeof window !== 'undefined') && (window.__RC_FORCE_RECEIPT_ANALYSIS || window.__RC_RECEIPT_ANALYSIS_LOCK)) {
+          return true;
+        }
+      } catch(_) {}
+      try {
+        if (typeof isReceiptAnalysisOn === 'function' && isReceiptAnalysisOn()) return true;
+      } catch(_) {}
+      return false;
+    })();
+
+    if (preferReceiptProfiles) {
+      mapping = await resolveProfileMapping();
+    }
+
+    if (!Object.keys(mapping).length) {
+      if (Object.keys(repeatEntryMapping).length) {
+        mapping = repeatEntryMapping;
+      } else {
+        mapping = await resolveProfileMapping();
       }
     }
 
     if (!Object.keys(mapping).length) return { applied:false, complete:false };
+
+    const appliedKey = profileName ? `name:${profileName}` : '__general__';
+    const previousKeyRaw = String(s.receipt_profile_applied || '').trim();
+    const manualLocked = previousKeyRaw.toLowerCase() === '__manual__';
+    if (manualLocked) {
+      const missingManual = lines.some(ln => !String(ln?.category || '').trim());
+      return { applied:false, complete:!missingManual };
+    }
+    const allowOverwriteExisting = !previousKeyRaw || previousKeyRaw !== appliedKey;
 
     let changed = 0;
     let missing = 0;
@@ -9912,7 +10064,7 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
         : String(ln.vatCategory || ln.vat_category || ln.vat || '').trim();
       const current = String(ln.category || '').trim();
       const mapped = String(mapping[vatKey] || '').trim();
-      if (!current && mapped) {
+      if (mapped && (!current || allowOverwriteExisting) && current !== mapped) {
         ln.category = mapped;
         changed += 1;
       }
@@ -9925,6 +10077,10 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
       if (!String(s['χαρακτηρισμός'] || '').trim()) s['χαρακτηρισμός'] = firstCategory;
       if (!String(s.characteristic || '').trim()) s.characteristic = firstCategory;
     }
+
+    s.receipt_profile_applied = appliedKey;
+    s.receipt_profile_name = profileName;
+    try { window.__RC_LAST_APPLIED_PROFILE = appliedKey; } catch(_) {}
 
     return { applied: changed > 0, complete: missing === 0 };
   } catch(_) {
@@ -9958,6 +10114,7 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
       yearVal = m ? m[0] : String((new Date()).getUTCFullYear());
     }
 
+    const shouldApplyProfile = rcShouldApplyReceiptProfile(summaryObj);
     try {
       const isReceiptFlow = !!(
         summaryObj && (
@@ -9965,7 +10122,7 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
           || /αποδει|receipt/i.test(String(summaryObj.type_name || '') + ' ' + String(summaryObj.type || ''))
         )
       );
-      if (isReceiptFlow && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+      if (isReceiptFlow && shouldApplyProfile && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
         await RC.applySavedReceiptAnalysisMapping(summaryObj);
       }
     } catch(_) {}
@@ -9974,12 +10131,12 @@ RC.confirmReceiptOnce = async function(summaryObj, scrapeUrl){
       url: (scrapeUrl||'').trim(),
       summary_json: JSON.stringify(summaryObj),
       force: false,
-      category: (isReceiptAnalysisOn() ? '' : 'αποδειξακια'),
+      category: (shouldApplyProfile ? '' : 'αποδειξακια'),
       afm: afmVal,
       year: String(yearVal),
       mark: String(summaryObj.mark||'')
     };
-    payload.receipt_analysis_enabled = isReceiptAnalysisOn();
+    payload.receipt_analysis_enabled = shouldApplyProfile;
 
     // Add MTYPE if available (for receipts in repeat mode)
     const isRepeat = !!document.getElementById('repeatEntrySwitch')?.checked;
@@ -10014,7 +10171,7 @@ RC.handleReceiptAfterScrape = async function(summaryObj, scrapeUrl){
 
     RC.normalizeReceiptSummary(summaryObj);
     try {
-      if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+      if (rcShouldApplyReceiptProfile(summaryObj) && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
         await RC.applySavedReceiptAnalysisMapping(summaryObj);
       }
     } catch(_) {}
@@ -10671,7 +10828,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const normalized = RC.normalizeReceiptSummary(s);
       try {
-        if (isReceiptAnalysisOn() && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
+        if (rcShouldApplyReceiptProfile(normalized) && typeof RC.applySavedReceiptAnalysisMapping === 'function') {
           await RC.applySavedReceiptAnalysisMapping(normalized);
         }
       } catch(_) {}

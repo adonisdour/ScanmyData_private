@@ -20,15 +20,26 @@
       return 'rc-direct:' + String((s && (s.mark || s.MARK)) || '').trim();
     }
   }
-  function isReceipts(){ try{var sw=$id('useReceiptsSwitch'); if(sw) return !!sw.checked;}catch(_){}
+  function isReceipts(){ try{var sw=$id('useReceiptsSwitch'); if(sw) return !!sw.checked;}catch(_){ }
                          return lsGet('UI:useReceipts','0')==='1'; }
-  function isRepeat(){   try{var rs=$id('repeatEntrySwitch'); if(rs) return !!rs.checked;}catch(_){}
+  function isRepeat(){   try{var rs=$id('repeatEntrySwitch'); if(rs) return !!rs.checked;}catch(_){ }
                          return lsGet('REPEAT:enabled','0')==='1'; }
+  function receiptMode(){
+    try{
+      var mode = localStorage.getItem('rc:receiptMode');
+      return String(mode || 'mixed').trim().toLowerCase();
+    }catch(_){ return 'mixed'; }
+  }
   function isMixedMode(){
     try{
-      var mode = localStorage.getItem('rc:receiptMode') || 'mixed';
-      return String(mode || '').toLowerCase() !== 'analysis';
+      var mode = receiptMode();
+      if(!mode) return true;
+      if(mode === 'manual' || mode === 'off') return false;
+      return true; // allow both mixed and analysis flows
     }catch(_){ return true; }
+  }
+  function isAnalysisMode(){
+    return receiptMode() === 'analysis';
   }
   function parseSummary(){
     var el=$id('summaryJsonInput');
@@ -100,6 +111,16 @@
 
   function isReceiptAnalysisContext(summary){
     try {
+      if (typeof isReceiptModeAnalysisStrict === 'function' && isReceiptModeAnalysisStrict()) return true;
+    } catch(_) {}
+    try {
+      if (typeof isReceipts === 'function' && typeof isRepeat === 'function' && isReceipts() && isRepeat()) return true;
+    } catch(_) {}
+    try {
+      var mode = receiptMode();
+      if (mode === 'analysis') return true;
+    } catch(_) {}
+    try {
       if (typeof isReceiptAnalysisOn === 'function' && isReceiptAnalysisOn()) return true;
     } catch(_) {}
     try {
@@ -162,6 +183,32 @@
       if (!summary.characteristic) summary.characteristic = cat;
       if (!summary['χαρακτηρισμός']) summary['χαρακτηρισμός'] = cat;
     }
+  }
+
+  function summaryHasCompleteCategories(summary){
+    if(!summary || typeof summary !== 'object') return false;
+    var lines = Array.isArray(summary.lines) ? summary.lines : [];
+    if(!lines.length){
+      var headCat = String(summary.category || summary.characteristic || summary['χαρακτηρισμός'] || '').trim();
+      var hasMtype = String(summary.mtype || summary.receipt_mtype || summary.receiptMtype || '').trim();
+      var analysisFlag = !!(summary.receipt_analysis_enabled === true || summary.receiptAnalysisEnabled === true || summary.receipts_analysis_enabled === true);
+      return !!(headCat || hasMtype || analysisFlag);
+    }
+    for(var i=0;i<lines.length;i++){
+      var ln = lines[i] || {};
+      if(!String(ln.category || '').trim()) return false;
+    }
+    var headCat = String(summary.category || summary.characteristic || summary['χαρακτηρισμός'] || '').trim();
+    return !!headCat;
+  }
+
+  function hasBlockingWarnings(){
+    try{
+      if(window.RC && typeof window.RC.hasWarnings === 'function'){
+        return !!window.RC.hasWarnings();
+      }
+    }catch(_){ }
+    return false;
   }
 
   function detectActiveVat(){
@@ -372,6 +419,7 @@
     if(trying) return;
     if(!isReceipts()||!isRepeat()) return;
     if(!isMixedMode()) return;
+    if(hasBlockingWarnings()) return;
 
     var s=parseSummary();
     if(!s||!isReceiptSummary(s)||!hasLines(s)) return;
@@ -386,7 +434,13 @@
     ssSet(k, String(nowTs));
     trying=true;
 
+    function abortAttempt(){
+      trying = false;
+      ssDel(k);
+    }
+
     s = normalizeReceipt(s);
+    var analysisActive = isAnalysisMode() || isReceiptAnalysisContext(s);
 
     // Merge live component state (`summaryDataInput`) so MTYPE set in the component is not lost
     try {
@@ -423,6 +477,23 @@
       await applyReceiptAnalysisProfile(s);
     } catch(errApply) {
       console.warn('receipt analysis apply failed', errApply);
+    }
+
+    analysisActive = isAnalysisMode() || isReceiptAnalysisContext(s);
+    if(!summaryHasCompleteCategories(s)){
+      abortAttempt();
+      return;
+    }
+    if(analysisActive){
+      var activeMtype = String(s.mtype || s.receipt_mtype || '').trim();
+      if(!activeMtype){
+        abortAttempt();
+        return;
+      }
+    }
+    if(hasBlockingWarnings()){
+      abortAttempt();
+      return;
     }
 
     try {

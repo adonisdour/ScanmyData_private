@@ -129,12 +129,16 @@ def _merge_custom_accounts(settings: Dict[str, Any], credential: Optional[Dict[s
     for item in custom_cats:
         if not isinstance(item, dict):
             continue
-        if not item.get("enabled"):
+        accounts = item.get("accounts") or {}
+        applies_receipts = bool(item.get("applies_to_receipts"))
+        if isinstance(accounts, dict) and not applies_receipts:
+            applies_receipts = bool(accounts.get("__applies_to_receipts"))
+        enabled = bool(item.get("enabled"))
+        if not (enabled or applies_receipts):
             continue
         slug = str(item.get("id") or item.get("slug") or "").strip()
         if not slug:
             continue
-        accounts = item.get("accounts") or {}
         for rate_key, code in accounts.items():
             code_str = str(code).strip()
             if not code_str:
