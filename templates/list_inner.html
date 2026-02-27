@@ -17,7 +17,7 @@
         </div>
       </div>
       {% endif %}
-      <a class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
+      <a class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition hidden" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
     </div>
   </div>
 
@@ -153,6 +153,7 @@
       const btn = document.getElementById('deleteBtn');
       if(!btn) return;
       btn.addEventListener('click', function fallbackDeleteOpen(e){
+        console.log('list_inner fallback: deleteBtn click');
         try{
           // prefer Tabulator helper if available
           let marks = [];
@@ -178,13 +179,26 @@
 
           if(!marks || !marks.length){
             // keep behavior consistent with other UI: show a quick alert
-            try{ if(typeof showModalAlert === 'function') { showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.'); return; } }catch(_){ }
+            try{ if(typeof showModalAlert === 'function') { showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.');
+                  if(e && typeof e.stopImmediatePropagation==='function') e.stopImmediatePropagation();
+                  return;
+                } }catch(_){ }
             uiAlert('Επίλεξε πρώτα γραμμές για διαγραφή.');
+            if(e && typeof e.stopImmediatePropagation==='function') e.stopImmediatePropagation();
           }
           const modal = document.getElementById('deleteModal');
           const modalMsg = document.getElementById('deleteModalMessage');
           if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;
-          if(modal) modal.classList.remove('hidden');
+          if(modal) {
+            // force display in case other CSS rules conflict
+            modal.style.display = 'flex';
+            modal.classList.remove('hidden').classList.add('flex');
+            const closeBtn = document.getElementById('deleteModalClose');
+            if(closeBtn) closeBtn.addEventListener('click', ()=> {
+              modal.style.display = 'none';
+              modal.classList.add('hidden').classList.remove('flex');
+            });
+          }
 
           const confirmBtn = document.getElementById('deleteConfirm');
           if(!confirmBtn) return;
@@ -194,7 +208,7 @@
               confirmBtn.disabled = true;
               const spinner = document.getElementById('deleteSpinner'); if(spinner) spinner.classList.remove('hidden');
               const tdelete = (function(){ try{ return Array.isArray(marks)?marks.slice() : []; }catch(_){ return []; } })();
-              if(!tdelete.length){ if(modal) modal.classList.add('hidden'); confirmBtn.disabled=false; if(spinner) spinner.classList.add('hidden'); return; }
+              if(!tdelete.length){ if(modal) modal.classList.add('hidden').classList.remove('flex'); confirmBtn.disabled=false; if(spinner) spinner.classList.add('hidden'); return; }
               const form = document.createElement('form'); form.method='POST'; form.action = (window.DELETE_ENDPOINT || "{{ url_for('delete_invoices') }}");
               const existingCsrf = document.querySelector('input[name="csrf_token"]');
               if(existingCsrf){ const t = document.createElement('input'); t.type='hidden'; t.name='csrf_token'; t.value=existingCsrf.value; form.appendChild(t); }
@@ -210,6 +224,49 @@
     </script>
   </div>
 
+<script>
+// capture-phase listener: ensure delete modal opens even if other handlers block
+// also close modal when × clicked
+document.addEventListener('click', function(e){
+  if(e.target && e.target.id==='deleteBtn'){
+    // collect marks same way as fallback
+    let marks = [];
+    try{ if(window && typeof window._fbp_collect_marks_from_tabulator === 'function') marks = window._fbp_collect_marks_from_tabulator() || []; }catch(_){ }
+    if(!marks || !marks.length){
+      Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
+        try{
+          const v = (cb.value||'').toString().trim();
+          if(v && v.toLowerCase() !== 'on') { marks.push(v); return; }
+          if(cb.dataset && cb.dataset.mark){ marks.push(String(cb.dataset.mark).trim()); return; }
+          const tr = cb.closest && cb.closest('tr');
+          if(tr && typeof window.parseRowToData === 'function'){
+            const thead = document.querySelector('.summary-table thead');
+            const colCount = thead? thead.querySelectorAll('th').length||0 : 0;
+            const markColIndex = thead? (typeof window.findMarkCol === 'function' ? window.findMarkCol(thead) : -1) : -1;
+            const d = window.parseRowToData ? window.parseRowToData(tr, colCount, markColIndex) : null;
+            if(d && d._mark) marks.push(String(d._mark).trim());
+          }
+        }catch(_){ }
+      });
+    }
+    if(!marks || !marks.length){
+      try{ if(typeof showModalAlert==='function') showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.'); }
+      catch(_){ }
+      return;
+    }
+    const modal = document.getElementById('deleteModal');
+    const modalMsg = document.getElementById('deleteModalMessage');
+    if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;
+    if(modal){ modal.style.display='flex'; modal.classList.remove('hidden'); modal.classList.add('flex'); }
+  }
+  // close button handler
+  if(e.target && e.target.id==='deleteModalClose'){
+    console.log('capture close clicked');
+    const m = document.getElementById('deleteModal');
+    if(m){ m.style.display='none'; m.classList.add('hidden'); m.classList.remove('flex'); }
+  }
+}, true);
+</script>
   <div id="summary-container" class="overflow-x-auto">
     {% if table_html %}
       {{ table_html | safe }}
@@ -219,18 +276,23 @@
   </div>
 </div>
 
-<!-- Delete modal -->
-<div id="deleteModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-black bg-opacity-30">
-  <div class="bg-white p-6 rounded-lg w-80 shadow-lg text-center">
-    <div id="deleteModalMessage" class="mb-4 font-semibold text-gray-800"></div>
-    <div class="flex gap-3 justify-center">
-      <button id="deleteCancel" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 transition">Ακύρωση</button>
-      <button id="deleteConfirm" class="px-4 py-2 bg-red-600 text-white rounded-lg shadow hover:bg-red-700 transition">Διαγραφή</button>
+<!-- Delete modal styled like other warning modals -->
+<div id="deleteModal" data-role="modal-warning" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/40">
+  <div class="modal-warning-panel w-80">
+    <button type="button" class="modal-warning-close" id="deleteModalClose" onclick="console.log('inline close clicked'); var m=document.getElementById('deleteModal'); if(m){ m.style.display='none'; m.classList.add('hidden'); m.classList.remove('flex'); }">×</button>
+    <div class="modal-warning-title"><span class="warning-icon" style="color:#fbbf24;">⚠</span> Διαγραφή εγγραφών</div>
+    <div class="modal-warning-body" id="deleteModalMessage"></div>
+    <div class="modal-warning-actions">
+      <button type="button" class="modal-warning-btn modal-warning-btn--muted" id="deleteCancel">Ακύρωση</button>
+      <button type="button" class="modal-warning-btn modal-warning-btn--danger" id="deleteConfirm">Διαγραφή</button>
     </div>
   </div>
 </div>
 
 <style>
+/* ensure warning-icon stays yellow in both modes */
+.modal-warning-title .warning-icon { color:#fbbf24 !important; }
+[data-theme="dark"] .modal-warning-title .warning-icon { color:#facc15 !important; }
 /* Light mode - explicit colors for table */
 .summary-table th {
   background-color: #0d6efd !important;
@@ -806,6 +868,7 @@
       const spinner=qs('#deleteSpinner');
       let toDelete=[];
       deleteBtn.addEventListener('click', async ()=>{
+        console.log('inline list_inner: deleteBtn clicked');
         // Prefer Tabulator selection if available
         try{
           if(window && typeof window._fbp_collect_marks_from_tabulator === 'function'){
@@ -813,12 +876,17 @@
           }
         }catch(_){ }
         if(!toDelete || !toDelete.length){ toDelete = qsa('input[name="delete_mark"]:checked').map(cb=>cb.value).filter(v=>v.trim()!==''); }
+        console.log('inline list_inner: toDelete after fallback', toDelete);
         if(!toDelete.length){ await showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.'); return; }
         modalMsg.textContent=`Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
-        modal.classList.remove('hidden');
+        if(modal){ modal.style.display='flex'; }
+        modal.classList.remove('hidden').classList.add('flex');
       });
       
-      cancelBtn?.addEventListener('click', ()=>modal.classList.add('hidden'));
+      cancelBtn?.addEventListener('click', ()=>{
+        if(modal){ modal.style.display='none'; }
+        modal.classList.add('hidden').classList.remove('flex');
+      });
       // The actual submit is handled by the consolidated delete handler below.
       // Keep this confirmBtn listener inert to avoid duplicate submissions.
       confirmBtn?.addEventListener('click', ()=>{ /* noop - handled elsewhere */ });
@@ -875,13 +943,13 @@
       const toDelete = collectCheckedMarks();
       if (!toDelete.length){  return; }
       if (modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
-      modal.classList.remove('hidden');
+      modal.classList.remove('hidden').classList.add('flex');
 
       // override τυχόν προηγούμενα handlers για να μη διπλοστέλνει
       confirmBtn.onclick = ()=>{
         // Re-collect marks at confirmation time (in case selection changed)
         const tdelete = collectCheckedMarks() || [];
-        if(!tdelete.length){ modal.classList.add('hidden'); return; }
+        if(!tdelete.length){ if(modal){ modal.style.display='none'; } modal.classList.add('hidden').classList.remove('flex'); return; }
         confirmBtn.disabled = true;
         if (spinner) spinner.classList.remove('hidden');
 
@@ -920,7 +988,7 @@
     });
 
     if (cancelBtn){
-      cancelBtn.addEventListener('click', ()=> modal.classList.add('hidden'));
+      cancelBtn.addEventListener('click', ()=> modal.classList.add('hidden').classList.remove('flex'));
     }
   });
 })();

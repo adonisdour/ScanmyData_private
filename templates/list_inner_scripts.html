@@ -38,26 +38,19 @@ $(document).ready(function(){
   // Delete button -> open modal
   const modal = $('#deleteModal');
   let marksToDelete = [];
-  $('#deleteBtn').on('click', function(){
+  $('#deleteBtn').on('click', function(e){
+    e.stopImmediatePropagation();
     marksToDelete = $('input[type="checkbox"][name="delete_mark"]:checked').map(function(){ return $(this).val(); }).get();
     if(!marksToDelete.length){
       showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.');
       return;
     }
     $('#deleteModalMessage').text(`Θες σίγουρα να διαγράψεις ${marksToDelete.length} εγγραφή(ες);`);
-    modal.show();
+    modal.css('display','flex').removeClass('hidden').addClass('flex');
   });
-
-  // Modal buttons
-  modal.find('.cancel').on('click', function(){ modal.hide(); });
-  modal.find('.confirm').on('click', function(){
-    const form = $('<form method="POST" action="{{ url_for("delete_invoices") }}"></form>');
-    marksToDelete.forEach(function(s){
-      form.append($('<input>').attr('type','hidden').attr('name','delete_mark').val(s));
-    });
-    $('body').append(form);
-    form.submit();
-  });
+  // close handlers
+  $('#deleteCancel').on('click', function(){ modal.css('display','none').addClass('hidden').removeClass('flex'); });
+  $('#deleteModalClose').on('click', function(){ modal.css('display','none').addClass('hidden').removeClass('flex'); });
 
   // Auto fade-out flash banners
   document.querySelectorAll('.flash-banner').forEach(b => {
