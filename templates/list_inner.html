@@ -152,6 +152,8 @@
     (function(){
       const btn = document.getElementById('deleteBtn');
       if(!btn) return;
+      // if standardized modal helpers exist, our jQuery script handles clicks
+      if (typeof showModalConfirm === 'function') return;
       btn.addEventListener('click', function fallbackDeleteOpen(e){
         try{
           // prefer Tabulator helper if available
