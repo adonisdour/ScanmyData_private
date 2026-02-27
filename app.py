@@ -1513,6 +1513,33 @@ CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH", DEFAULT_CRED_PATH))
 VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
 VAT_RATE_NUMERIC = ["0", "6", "13", "17", "24"]
 
+
+def _normalize_repeat_mapping(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    source = raw or {}
+    for key in VAT_KEYS:
+        mapping[key] = str(source.get(key) or "").strip()
+    return mapping
+
+
+def _is_complete_repeat_mapping(mapping: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(mapping, dict):
+        return False
+    return all((str(mapping.get(key) or "").strip()) for key in VAT_KEYS)
+
+
+def _build_repeat_entry_payload(repeat: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = dict(repeat or {})
+    mapping_raw = payload.get("mapping") or {}
+    mapping = {k: v for k, v in mapping_raw.items() if k in VAT_KEYS and (v or "").strip()}
+    general_raw = payload.get("general_mapping") or {}
+    general_mapping = {k: v for k, v in general_raw.items() if k in VAT_KEYS and (v or "").strip()}
+    if not general_mapping:
+        general_mapping = dict(mapping)
+    payload["mapping"] = mapping
+    payload["general_mapping"] = general_mapping
+    return payload
+
 SERIES_SETTING_KEYS = [
     "invoice_general",
     "invoice_services",
@@ -2499,10 +2526,9 @@ def _get_repeat_entry(creds, vat: str):
     if not isinstance(cust, dict):
         return {"enabled": False, "mapping": {}}
     rep = cust.get("repeat_entry") or {}
-    mp = rep.get("mapping") or {}
-    # κρατάμε μόνο ποσοστά
-    mapping = {k: v for k, v in mp.items() if k in VAT_KEYS and (v or "").strip()}
-    return {"enabled": bool(rep.get("enabled")), "mapping": mapping}
+    payload = _build_repeat_entry_payload(rep)
+    payload["enabled"] = bool(rep.get("enabled"))
+    return payload
 
 def _save_repeat_entry(creds, vat: str, enabled: bool, mapping: dict):
     cust, _ = _get_customer(creds, vat, create=True)
@@ -2510,6 +2536,7 @@ def _save_repeat_entry(creds, vat: str, enabled: bool, mapping: dict):
     cust["repeat_entry"] = {
         "enabled": bool(enabled),
         "mapping": mapping,
+        "general_mapping": dict(mapping),
         "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
     }
     return creds
@@ -4003,6 +4030,9 @@ def normalize_vat_key(raw):
     if re.search(r'0|μηδ', s):
         return "0%"
     return ""
+CREDENTIALS_RW_LOCK = threading.RLock()
+
+
 def _current_credentials_file() -> str:
     """Return credentials.json path for current request (group-aware)."""
     path = None
@@ -4017,26 +4047,28 @@ def _current_credentials_file() -> str:
 
 def read_credentials_list():
     path = _current_credentials_file()
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                data = [data]
-            return data
-    except FileNotFoundError:
-        return []
-    except Exception:
-        log.exception("read_credentials_list failed for %s", path)
-        return []
+    with CREDENTIALS_RW_LOCK:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    data = [data]
+                return data
+        except FileNotFoundError:
+            return []
+        except Exception:
+            log.exception("read_credentials_list failed for %s", path)
+            return []
 
 
 def write_credentials_list(data_list):
     path = _current_credentials_file()
     os.makedirs(os.path.dirname(path) or DATA_DIR, exist_ok=True)
     tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data_list, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    with CREDENTIALS_RW_LOCK:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data_list, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
 
 def find_active_client_index(creds_list, vat=None):
     # priority: match vat, else find 'active': true, else first
@@ -5274,7 +5306,9 @@ def api_repeat_entry_get():
 
     # we have creds and an index -> build response
     client_rec = creds[idx] if idx is not None and idx < len(creds) else None
-    repeat = (client_rec.get('repeat_entry') if isinstance(client_rec, dict) else {}) or {"enabled": False, "mapping": {}}
+    repeat_raw = (client_rec.get('repeat_entry') if isinstance(client_rec, dict) else {}) or {"enabled": False, "mapping": {}}
+    repeat = _build_repeat_entry_payload(repeat_raw)
+    repeat["enabled"] = bool((repeat_raw or {}).get("enabled"))
 
     # normalize expense_tags
     expense_tags = _list_invoice_categories(client_rec)
@@ -5368,6 +5402,7 @@ def api_repeat_entry_save():
     vat = str(data.get("vat") or "").strip()
     enabled = bool(data.get("enabled"))
     mapping_in = data.get("mapping") or {}
+    general_mapping_in = data.get("general_mapping") or {}
     # "" => Γενικό
     profile_name = (data.get("profile_name") or "").strip()
     # MTYPE για Γ Κατηγορία (διαχωρισμός τιμολογίων/αποδείξεων)
@@ -5375,37 +5410,57 @@ def api_repeat_entry_save():
     receipt_mtype = (data.get("receipt_mtype") or "").strip()
 
     # Επιτρέπουμε ΜΟΝΟ ποσοστά ΦΠΑ
-    VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
-    mapping = {k: (mapping_in.get(k) or "") for k in VAT_KEYS}
+    mapping = _normalize_repeat_mapping(mapping_in)
 
     # Έλεγχος για κενές επιλογές
     missing = [k for k in VAT_KEYS if not mapping[k]]
     if missing:
         return jsonify(ok=False, error="Συμπλήρωσε κατηγορία για " + ", ".join(missing) + "."), 400
 
-    creds = read_credentials_list() or []
-    idx = find_active_client_index(creds, vat=vat)
-    if idx is None:
-        return jsonify(ok=False, error="Πελάτης δεν βρέθηκε."), 404
+    with CREDENTIALS_RW_LOCK:
+        creds = read_credentials_list() or []
+        idx = find_active_client_index(creds, vat=vat)
+        if idx is None:
+            return jsonify(ok=False, error="Πελάτης δεν βρέθηκε."), 404
 
-    client = creds[idx] if isinstance(creds[idx], dict) else {}
+        client = creds[idx] if isinstance(creds[idx], dict) else {}
 
-    repeat = (client.get("repeat_entry") if isinstance(client, dict) else {}) or {}
-    repeat.update({
-        "enabled": enabled,
-        "mapping": mapping,
-        # Χρησιμοποιούμε το module datetime:
-        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        # ΠΑΝΤΑ γράφουμε το profile_name — κενό σημαίνει «Γενικό»
-        "profile_name": profile_name,
-        # Αποθηκεύουμε τα MTYPE ξεχωριστά για τιμολόγια και αποδείξεις
-        "invoice_mtype": invoice_mtype,
-        "receipt_mtype": receipt_mtype,  # Αποθηκεύουμε για τις αποδείξεις
-    })
-    client["repeat_entry"] = repeat
-    creds[idx] = client
+        repeat = (client.get("repeat_entry") if isinstance(client, dict) else {}) or {}
+        previous_general = _normalize_repeat_mapping(repeat.get("general_mapping"))
+        previous_mapping = _normalize_repeat_mapping(repeat.get("mapping"))
 
-    write_credentials_list(creds)
+        normalized_general = None
+        if isinstance(general_mapping_in, dict):
+            candidate = _normalize_repeat_mapping(general_mapping_in)
+            if _is_complete_repeat_mapping(candidate):
+                normalized_general = candidate
+
+        if not profile_name:
+            normalized_general = dict(mapping)
+        if normalized_general is None:
+            if _is_complete_repeat_mapping(previous_general):
+                normalized_general = previous_general
+            elif _is_complete_repeat_mapping(previous_mapping):
+                normalized_general = previous_mapping
+            else:
+                normalized_general = dict(mapping)
+
+        repeat.update({
+            "enabled": enabled,
+            "mapping": mapping,
+            # Χρησιμοποιούμε το module datetime:
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            # ΠΑΝΤΑ γράφουμε το profile_name — κενό σημαίνει «Γενικό»
+            "profile_name": profile_name,
+            # Αποθηκεύουμε τα MTYPE ξεχωριστά για τιμολόγια και αποδείξεις
+            "invoice_mtype": invoice_mtype,
+            "receipt_mtype": receipt_mtype,  # Αποθηκεύουμε για τις αποδείξεις
+            "general_mapping": normalized_general,
+        })
+        client["repeat_entry"] = repeat
+        creds[idx] = client
+
+        write_credentials_list(creds)
 
     try:
         _sync_repeat_entry_backend(
@@ -9060,7 +9115,7 @@ def profiles_page():
     if mode not in ("invoices", "receipts"):
         mode = "invoices"
 
-    creds = _load_credentials()
+    creds = read_credentials_list()
     client = None
     if vat:
         client = _find_client(creds, vat=vat)
@@ -9340,7 +9395,7 @@ def api_char_profiles_get():
             pass
         return None, None, None
 
-    creds = _load_credentials()
+    creds = read_credentials_list()
     client = _find_client(creds, vat=vat) if vat else None
     # Fallback: resolve active credential robustly (vat OR name), then fallback
     # to session snapshot only if full record cannot be found.
@@ -9431,83 +9486,88 @@ def api_char_profiles_save():
             pass
         return None, None, None
 
-    creds = _load_credentials()
-    save_path = None
-    client = _find_client(creds, vat=vat) if vat else None
-    if not client and active_name:
-        client = _find_client(creds, name=active_name)
-    if not client and (vat or active_name):
-        group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
-        if group_client is not None and group_creds is not None and group_path is not None:
-            client = group_client
-            creds = group_creds
-            save_path = group_path
-    # Fallback: if lookup by vat failed, use session active credential object
-    if not client:
-        try:
-            client = get_active_credential_from_session() or None
-        except Exception:
-            client = None
-    if not client:
-        return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
+    with CREDENTIALS_RW_LOCK:
+        creds = read_credentials_list()
+        save_path = None
+        client = _find_client(creds, vat=vat) if vat else None
+        if not client and active_name:
+            client = _find_client(creds, name=active_name)
+        if not client and (vat or active_name):
+            group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+            if (
+                group_client is not None
+                and group_creds is not None
+                and group_path is not None
+            ):
+                client = group_client
+                creds = group_creds
+                save_path = group_path
+        # Fallback: if lookup by vat failed, use session active credential object
+        if not client:
+            try:
+                client = get_active_credential_from_session() or None
+            except Exception:
+                client = None
+        if not client:
+            return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
 
-    constraints = _category_vat_constraints(client)
-    labels = _category_labels_for_client(client)
-    vat_by_key = {
-        "kat_fpa_a": "0%",
-        "kat_fpa_b": "6%",
-        "kat_fpa_g": "13%",
-        "kat_fpa_d": "17%",
-        "kat_fpa_e": "24%",
-    }
-    for key, vat_label in vat_by_key.items():
-        val = str(mapping.get(key) or "").strip()
-        if not val:
-            continue
-        allowed = constraints.get(val)
-        if allowed is not None and vat_label not in allowed:
-            display = labels.get(val, val)
-            return jsonify(
-                ok=False,
-                error=f"Η κατηγορία '{display}' δεν υποστηρίζει ΦΠΑ {vat_label}.",
-            ), 400
+        constraints = _category_vat_constraints(client)
+        labels = _category_labels_for_client(client)
+        vat_by_key = {
+            "kat_fpa_a": "0%",
+            "kat_fpa_b": "6%",
+            "kat_fpa_g": "13%",
+            "kat_fpa_d": "17%",
+            "kat_fpa_e": "24%",
+        }
+        for key, vat_label in vat_by_key.items():
+            val = str(mapping.get(key) or "").strip()
+            if not val:
+                continue
+            allowed = constraints.get(val)
+            if allowed is not None and vat_label not in allowed:
+                display = labels.get(val, val)
+                return jsonify(
+                    ok=False,
+                    error=f"Η κατηγορία '{display}' δεν υποστηρίζει ΦΠΑ {vat_label}.",
+                ), 400
 
-    arr = list(client.get("char_profiles", []))
-    # upsert by name+mode, but also migrate legacy same-name profiles without mode
-    hit = None
-    for p in arr:
-        if not isinstance(p, dict):
-            continue
-        p_name = str(p.get("name","")).strip().lower()
-        p_mode = str(p.get("mode") or "").strip().lower()
-        if p_name != name.lower():
-            continue
-        if p_mode == mode or (mode == "receipts" and p_mode == ""):
-            hit = p
-            break
-    if hit:
-        hit["mapping"] = mapping
-        hit.pop("map", None)
-        hit["mode"] = mode
-        hit["invoice_mtype"] = invoice_mtype
-        hit["receipt_mtype"] = receipt_mtype
-    else:
-        arr.append({
-            "name": name,
-            "mapping": mapping,
-            "mode": mode,
-            "invoice_mtype": invoice_mtype,
-            "receipt_mtype": receipt_mtype,
-        })
-    client["char_profiles"] = arr
-    if save_path is not None:
-        try:
-            with save_path.open('w', encoding='utf-8') as f:
-                json.dump(creds, f, ensure_ascii=False, indent=2)
-        except Exception:
-            _save_credentials(creds)
-    else:
-        _save_credentials(creds)
+        arr = list(client.get("char_profiles", []))
+        # upsert by name+mode, but also migrate legacy same-name profiles without mode
+        hit = None
+        for p in arr:
+            if not isinstance(p, dict):
+                continue
+            p_name = str(p.get("name", "")).strip().lower()
+            p_mode = str(p.get("mode") or "").strip().lower()
+            if p_name != name.lower():
+                continue
+            if p_mode == mode or (mode == "receipts" and p_mode == ""):
+                hit = p
+                break
+        if hit:
+            hit["mapping"] = mapping
+            hit.pop("map", None)
+            hit["mode"] = mode
+            hit["invoice_mtype"] = invoice_mtype
+            hit["receipt_mtype"] = receipt_mtype
+        else:
+            arr.append({
+                "name": name,
+                "mapping": mapping,
+                "mode": mode,
+                "invoice_mtype": invoice_mtype,
+                "receipt_mtype": receipt_mtype,
+            })
+        client["char_profiles"] = arr
+        if save_path is not None:
+            try:
+                with save_path.open('w', encoding='utf-8') as f:
+                    json.dump(creds, f, ensure_ascii=False, indent=2)
+            except Exception:
+                write_credentials_list(creds)
+        else:
+            write_credentials_list(creds)
     return jsonify(
         ok=True,
         profile={
@@ -9545,51 +9605,56 @@ def api_char_profiles_delete():
             pass
         return None, None, None
 
-    creds = _load_credentials()
-    save_path = None
-    client = _find_client(creds, vat=vat) if vat else None
-    if not client:
-        try:
-            active = get_active_credential_from_session() or {}
-        except Exception:
-            active = {}
-        active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
-        active_name = str((active or {}).get("name") or "").strip()
-        if active_vat:
-            client = _find_client(creds, vat=active_vat)
-        if not client and active_name:
-            client = _find_client(creds, name=active_name)
-        if not client and (vat or active_name):
-            group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
-            if group_client is not None and group_creds is not None and group_path is not None:
-                client = group_client
-                creds = group_creds
-                save_path = group_path
-    if not client:
-        return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
-    arr = list(client.get("char_profiles", []))
-    # remove matching name+mode; for receipts also remove legacy no-mode profile
-    def _keep_profile(p):
-        if not isinstance(p, dict):
-            return True
-        p_name = str(p.get("name","")).strip().lower()
-        p_mode = str(p.get("mode") or "").strip().lower()
-        if p_name != name.lower():
-            return True
-        if mode == "receipts":
-            return p_mode not in ("receipts", "")
-        return p_mode != "invoices"
+    with CREDENTIALS_RW_LOCK:
+        creds = read_credentials_list()
+        save_path = None
+        client = _find_client(creds, vat=vat) if vat else None
+        if not client:
+            try:
+                active = get_active_credential_from_session() or {}
+            except Exception:
+                active = {}
+            active_vat = str((active or {}).get("vat") or (active or {}).get("afm") or "").strip()
+            active_name = str((active or {}).get("name") or "").strip()
+            if active_vat:
+                client = _find_client(creds, vat=active_vat)
+            if not client and active_name:
+                client = _find_client(creds, name=active_name)
+            if not client and (vat or active_name):
+                group_client, group_creds, group_path = _find_client_in_group_files(vat, active_name)
+                if (
+                    group_client is not None
+                    and group_creds is not None
+                    and group_path is not None
+                ):
+                    client = group_client
+                    creds = group_creds
+                    save_path = group_path
+        if not client:
+            return jsonify(ok=False, error="Δεν βρέθηκε πελάτης"), 404
+        arr = list(client.get("char_profiles", []))
+        # remove matching name+mode; for receipts also remove legacy no-mode profile
+        def _keep_profile(p):
+            if not isinstance(p, dict):
+                return True
+            p_name = str(p.get("name", "")).strip().lower()
+            p_mode = str(p.get("mode") or "").strip().lower()
+            if p_name != name.lower():
+                return True
+            if mode == "receipts":
+                return p_mode not in ("receipts", "")
+            return p_mode != "invoices"
 
-    arr = [p for p in arr if _keep_profile(p)]
-    client["char_profiles"] = arr
-    if save_path is not None:
-        try:
-            with save_path.open('w', encoding='utf-8') as f:
-                json.dump(creds, f, ensure_ascii=False, indent=2)
-        except Exception:
-            _save_credentials(creds)
-    else:
-        _save_credentials(creds)
+        arr = [p for p in arr if _keep_profile(p)]
+        client["char_profiles"] = arr
+        if save_path is not None:
+            try:
+                with save_path.open('w', encoding='utf-8') as f:
+                    json.dump(creds, f, ensure_ascii=False, indent=2)
+            except Exception:
+                write_credentials_list(creds)
+        else:
+            write_credentials_list(creds)
     return jsonify(ok=True)
 
 @app.get("/profiles", endpoint="char_profiles_ui")

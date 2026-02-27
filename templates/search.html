@@ -1163,8 +1163,12 @@ function katToPercent(k){
     if(r.ok){
       const j = await r.json();
       const repeat = j.repeat_entry || {};
+      const general = (repeat && repeat.general_mapping && Object.keys(repeat.general_mapping || {}).length)
+        ? repeat.general_mapping
+        : (repeat.mapping || {});
       return {
-        defaultMap: (repeat.mapping || {}),
+        defaultMap: general,
+        activeMap: (repeat.mapping || {}),
         invoiceMtype: (repeat.invoice_mtype || ""),
         receiptMtype: (repeat.receipt_mtype || ""),
         savedName: (repeat.profile_name || "")
@@ -1177,14 +1181,18 @@ function katToPercent(k){
                           {credentials:'same-origin'});
     const j = await r.json();
     const repeat = j.repeat_entry || {};
+    const general = (repeat && repeat.general_mapping && Object.keys(repeat.general_mapping || {}).length)
+      ? repeat.general_mapping
+      : (repeat.mapping || {});
     return {
-      defaultMap: (repeat.mapping || {}),
+      defaultMap: general,
+      activeMap: (repeat.mapping || {}),
       invoiceMtype: (repeat.invoice_mtype || ""),
       receiptMtype: (repeat.receipt_mtype || ""),
       savedName: (repeat.profile_name || "")
     };
   }catch(_){}
-  return { defaultMap:{}, invoiceMtype:"", receiptMtype:"", savedName:"" };
+  return { defaultMap:{}, activeMap:{}, invoiceMtype:"", receiptMtype:"", savedName:"" };
 }
   // Άνοιγμα modal: ΠΑΝΤΑ καθαρό render, χωρίς διπλο-append
   async function openModal(){
