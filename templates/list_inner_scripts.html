@@ -35,21 +35,22 @@ $(document).ready(function(){
     $('input[type="checkbox"][name="delete_mark"]').prop('checked', checked);
   });
 
-  // Delete button -> confirm dialog (use modal_utils to avoid hidden-class issues)
+  // Delete button -> open modal
+  const modal = $('#deleteModal');
   let marksToDelete = [];
-  $('#deleteBtn').on('click', async function(){
+  $('#deleteBtn').on('click', function(){
     marksToDelete = $('input[type="checkbox"][name="delete_mark"]:checked').map(function(){ return $(this).val(); }).get();
     if(!marksToDelete.length){
       showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.');
       return;
     }
-    const confirmed = await showModalConfirm(
-      'Διαγραφή εγγραφών',
-      `Θες σίγουρα να διαγράψεις ${marksToDelete.length} εγγραφή(ες);`,
-      'Διαγραφή',
-      'Άκυρο'
-    );
-    if(!confirmed) return;
+    $('#deleteModalMessage').text(`Θες σίγουρα να διαγράψεις ${marksToDelete.length} εγγραφή(ες);`);
+    modal.show();
+  });
+
+  // Modal buttons
+  modal.find('.cancel').on('click', function(){ modal.hide(); });
+  modal.find('.confirm').on('click', function(){
     const form = $('<form method="POST" action="{{ url_for("delete_invoices") }}"></form>');
     marksToDelete.forEach(function(s){
       form.append($('<input>').attr('type','hidden').attr('name','delete_mark').val(s));
@@ -57,9 +58,6 @@ $(document).ready(function(){
     $('body').append(form);
     form.submit();
   });
-
-  // remove redundant modal button handlers; confirmation is done via showModalConfirm above
-
 
   // Auto fade-out flash banners
   document.querySelectorAll('.flash-banner').forEach(b => {

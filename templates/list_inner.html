@@ -17,7 +17,7 @@
         </div>
       </div>
       {% endif %}
-      <a class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition hidden" href="{{ url_for('fetch') }}" aria-hidden="true">⬅ Λήψη Παραστατικών</a>
+      <a class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
     </div>
   </div>
 
@@ -152,8 +152,6 @@
     (function(){
       const btn = document.getElementById('deleteBtn');
       if(!btn) return;
-      // if standardized modal helpers exist, our jQuery script handles clicks
-      if (typeof showModalConfirm === 'function') return;
       btn.addEventListener('click', function fallbackDeleteOpen(e){
         try{
           // prefer Tabulator helper if available
@@ -189,10 +187,6 @@
           if(modal) modal.classList.remove('hidden');
 
           const confirmBtn = document.getElementById('deleteConfirm');
-          const closeBtn = document.getElementById('deleteModalClose');
-          if(closeBtn){ closeBtn.addEventListener('click', ()=>{
-            const m = document.getElementById('deleteModal'); if(m) m.classList.add('hidden');
-          }); }
           if(!confirmBtn) return;
           // replace confirm handler with a safe submit that builds the same payload
           confirmBtn.onclick = function fallbackConfirm(){
@@ -225,15 +219,13 @@
   </div>
 </div>
 
-<!-- Delete modal styled like other warning dialogs -->
-<div id="deleteModal" data-role="modal-warning" class="fixed inset-0 hidden items-center justify-center bg-black/40">
-  <div class="modal-warning-panel">
-    <button type="button" class="modal-warning-close" id="deleteModalClose">×</button>
-    <div class="modal-warning-title">⚠️ Διαγραφή εγγραφών</div>
-    <div class="modal-warning-body space-y-2" id="deleteModalMessage"></div>
-    <div class="modal-warning-actions">
-      <button type="button" id="deleteCancel" class="cancel modal-warning-btn modal-warning-btn--muted">Άκυρο</button>
-      <button type="button" id="deleteConfirm" class="confirm modal-warning-btn modal-warning-btn--danger">Διαγραφή</button>
+<!-- Delete modal -->
+<div id="deleteModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-black bg-opacity-30">
+  <div class="bg-white p-6 rounded-lg w-80 shadow-lg text-center">
+    <div id="deleteModalMessage" class="mb-4 font-semibold text-gray-800"></div>
+    <div class="flex gap-3 justify-center">
+      <button id="deleteCancel" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 transition">Ακύρωση</button>
+      <button id="deleteConfirm" class="px-4 py-2 bg-red-600 text-white rounded-lg shadow hover:bg-red-700 transition">Διαγραφή</button>
     </div>
   </div>
 </div>
