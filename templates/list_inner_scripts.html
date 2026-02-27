@@ -45,11 +45,16 @@ $(document).ready(function(){
       return;
     }
     $('#deleteModalMessage').text(`Θες σίγουρα να διαγράψεις ${marksToDelete.length} εγγραφή(ες);`);
+    // Tailwind "hidden" class prevents jQuery.show(), so remove it explicitly
+    modal.removeClass('hidden');
     modal.show();
   });
 
   // Modal buttons
-  modal.find('.cancel, #deleteModalClose').on('click', function(){ modal.hide(); });
+  modal.find('.cancel, #deleteModalClose').on('click', function(){
+    modal.addClass('hidden');
+    modal.hide();
+  });
   modal.find('.confirm').on('click', function(){
     const form = $('<form method="POST" action="{{ url_for("delete_invoices") }}"></form>');
     marksToDelete.forEach(function(s){
