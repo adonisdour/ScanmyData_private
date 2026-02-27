@@ -975,6 +975,17 @@ function katToPercent(k){
   }
 
   selProfile.addEventListener('change', () => {
+    try {
+      if (typeof window.__applyRepeatProfilePayload === 'function') {
+        window.__applyRepeatProfilePayload(selProfile.selectedOptions[0] || null, { remember: true });
+        setHint('');
+        return;
+      }
+    } catch (err) {
+      console.warn('repeat profile bridge failed', err);
+    }
+
+    // Fallback to legacy inline logic if the helper is not yet available.
     const opt = selProfile.selectedOptions[0];
     let mapping = {};
     try { mapping = (opt && opt.dataset && opt.dataset.mapping) ? JSON.parse(opt.dataset.mapping) : {}; } catch(_) { mapping = {}; }
@@ -1173,18 +1184,6 @@ function katToPercent(k){
       try {
         let profilesOut = [];
 
-        if (!useReceiptsMode) {
-          try {
-            const rp = await fetch('/api/profiles', {credentials:'same-origin'});
-            const jp = await rp.json();
-            if (jp && Array.isArray(jp.profiles)) {
-              profilesOut = jp.profiles
-                .filter(p => String((p && p.mode) || 'invoices').trim().toLowerCase() !== 'receipts')
-                .map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-            }
-          } catch (_) {}
-        }
-
         let j = null;
         try {
           const r = await fetch('/api/char_profiles?vat=' + encodeURIComponent(VAT || '') + charProfilesModeParam, {credentials:'same-origin'});
@@ -1213,11 +1212,29 @@ function katToPercent(k){
             if (typeof window !== 'undefined') window.CUSTOMER_CATEGORIES = CUSTOMER_CATEGORIES.slice();
           }
 
-          if (useReceiptsMode) {
-            profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
-          } else if (!profilesOut.length) {
-            profilesOut = (j.profiles || []).map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+          const modeNorm = useReceiptsMode ? 'receipts' : 'invoices';
+          profilesOut = (Array.isArray(j.profiles) ? j.profiles : [])
+            .filter(p => String((p && p.mode) || 'invoices').trim().toLowerCase() === modeNorm)
+            .map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+
+          if (!profilesOut.length && !useReceiptsMode) {
+            profilesOut = (Array.isArray(j.profiles) ? j.profiles : [])
+              .filter(p => String((p && p.mode) || 'invoices').trim().toLowerCase() !== 'receipts')
+              .map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
           }
+        }
+
+        if (!profilesOut.length && !useReceiptsMode) {
+          try {
+            const rp = await fetch('/api/profiles', {credentials:'same-origin'});
+            const jp = await rp.json();
+            if (jp && Array.isArray(jp.profiles)) {
+              profilesOut = jp.profiles
+                .filter(p => String((p && p.mode) || 'invoices').trim().toLowerCase() !== 'receipts')
+                .map(p => ({...p, mapping: normalizeMapping(p.mapping || p.map || {})}));
+            }
+          }
+          catch (_) {}
         }
 
         return profilesOut;
@@ -1256,6 +1273,12 @@ function katToPercent(k){
   // 2) γέμισε το dropdown των προφίλ (πρώτο = "Γενικό")
   const sel = document.getElementById('charProfileSelect');
   if(sel){
+    const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
+    const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
+    const repeatReceiptMtypeContainer = document.getElementById('repeatReceiptMtypeContainer');
+    const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
+    const profilePayloads = {};
+
     const receiptsGeneralProfile = useReceiptsMode
       ? (Array.isArray(profiles) ? profiles.find(p => !String((p && p.name) || '').trim() && String((p && p.mode) || '').trim().toLowerCase() === 'receipts') : null)
       : null;
@@ -1269,15 +1292,93 @@ function katToPercent(k){
       ? String(receiptsGeneralProfile.receipt_mtype || receiptsGeneralProfile.receiptMtype || '').trim()
       : String(receiptMtype || '').trim();
 
+    const normalizePayload = (raw) => ({
+      mapping: normalizeMapping((raw && raw.mapping) || {}),
+      invoiceMtype: String((raw && raw.invoiceMtype) || '').trim(),
+      receiptMtype: String((raw && raw.receiptMtype) || '').trim(),
+      name: String((raw && raw.name) || '').trim(),
+      id: String((raw && raw.id) || '').trim()
+    });
+
+    const registerPayload = (optionEl, rawPayload) => {
+      if (!optionEl) return;
+      const normalized = normalizePayload(rawPayload);
+      optionEl.dataset.mapping = JSON.stringify(normalized.mapping);
+      optionEl.dataset.invoiceMtype = normalized.invoiceMtype;
+      optionEl.dataset.receiptMtype = normalized.receiptMtype;
+      optionEl.dataset.profileName = normalized.name;
+      optionEl.dataset.profileId = normalized.id;
+      optionEl.dataset.payload = JSON.stringify(normalized);
+      const valKey = String(optionEl.value || '').trim();
+      if (valKey) profilePayloads[valKey] = normalized;
+      if (normalized.id) profilePayloads['id:' + normalized.id] = normalized;
+      if (normalized.name) profilePayloads['name:' + normalized.name.toLowerCase()] = normalized;
+      if (!profilePayloads['__general__'] && !normalized.name) profilePayloads['__general__'] = normalized;
+    };
+
+    const payloadFromOption = (opt) => {
+      if (opt && opt.dataset && opt.dataset.payload) {
+        try { return JSON.parse(opt.dataset.payload); } catch(_) {}
+      }
+      const valueKey = String(opt && opt.value || '').trim();
+      if (valueKey && profilePayloads[valueKey]) return profilePayloads[valueKey];
+      const idKey = String(opt && opt.dataset && (opt.dataset.profileId || opt.dataset.id) || '').trim();
+      if (idKey && profilePayloads['id:' + idKey]) return profilePayloads['id:' + idKey];
+      const nameKey = String(opt && opt.dataset && opt.dataset.profileName || '').trim().toLowerCase();
+      if (nameKey && profilePayloads['name:' + nameKey]) return profilePayloads['name:' + nameKey];
+      if (profilePayloads['__general__']) return profilePayloads['__general__'];
+      return normalizePayload({
+        mapping: defaultMap || {},
+        invoiceMtype: invoiceMtype || '',
+        receiptMtype: receiptMtype || '',
+        name: '',
+        id: ''
+      });
+    };
+
+    const applyPayloadToUi = (payload, extra) => {
+      const data = normalizePayload(payload);
+      renderMapping(data.mapping || {});
+      if (repeatMtypeSelect && repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none') {
+        repeatMtypeSelect.value = data.invoiceMtype || '';
+      }
+      if (repeatReceiptMtypeSelect && repeatReceiptMtypeContainer && repeatReceiptMtypeContainer.style.display !== 'none') {
+        repeatReceiptMtypeSelect.value = data.receiptMtype || '';
+      }
+      try {
+        window.__repeat_invoice_mtype = data.invoiceMtype || '';
+        window.__repeat_receipt_mtype = data.receiptMtype || '';
+      } catch(_) {}
+      if (!extra || !extra.skipHint) {
+        setActiveProfileHint(data.name || '');
+      }
+      if (!extra || extra.remember !== false) {
+        try {
+          const modeForRemember = (typeof rcRepeatModalShouldUseReceiptsMode === 'function' && rcRepeatModalShouldUseReceiptsMode()) ? 'receipts' : 'invoices';
+          const targetVat = window._repeatModalVAT || "{{ vat or '' }}";
+          rememberRepeatSelectedProfile(targetVat, modeForRemember, data.name || '');
+        } catch(_) {}
+      }
+      setHint('');
+    };
+
+    const handleProfileSelection = (opt, extra) => {
+      const payload = payloadFromOption(opt);
+      applyPayloadToUi(payload, extra);
+    };
+
     sel.innerHTML = "";
+    const generalPayload = {
+      mapping: generalMap || {},
+      invoiceMtype: generalInvoiceMtype,
+      receiptMtype: generalReceiptMtype,
+      name: '',
+      id: ''
+    };
     const o0 = document.createElement('option');
     o0.value = "";
     o0.textContent = "Γενικό";
-    o0.dataset.mapping = JSON.stringify(normalizeMapping(generalMap || {}));
-    o0.dataset.invoiceMtype = generalInvoiceMtype;
-    o0.dataset.receiptMtype = generalReceiptMtype;
-    o0.dataset.profileName = '';
-    o0.dataset.profileId = '';
+    registerPayload(o0, generalPayload);
     sel.appendChild(o0);
 
     const filteredProfiles = (Array.isArray(profiles) ? profiles : []).filter(p => {
@@ -1298,26 +1399,19 @@ function katToPercent(k){
       o.value = profileId || (profileName ? (profileName + '__' + String(idx)) : ('profile_' + String(idx)));
       o.textContent = profileName || "(χωρίς όνομα)";
       o.dataset.id = profileId;
-      o.dataset.profileId = profileId;
-      o.dataset.profileName = profileName;
-      o.dataset.mapping = JSON.stringify(profileMap);
-      o.dataset.invoiceMtype = profileInvoiceMtype;
-      o.dataset.receiptMtype = profileReceiptMtype;
+      registerPayload(o, {
+        mapping: profileMap,
+        invoiceMtype: profileInvoiceMtype,
+        receiptMtype: profileReceiptMtype,
+        name: profileName,
+        id: profileId
+      });
       sel.appendChild(o);
     });
     
-    // Populate MTYPE dropdowns (μόνο για Γ Κατηγορία)
-    const repeatMtypeContainer = document.getElementById('repeatMtypeContainer');
-    const repeatMtypeSelect = document.getElementById('repeatMtypeSelect');
-    const repeatReceiptMtypeContainer = document.getElementById('repeatReceiptMtypeContainer');
-    const repeatReceiptMtypeSelect = document.getElementById('repeatReceiptMtypeSelect');
-    
     if (window.G_CATEGORY_DATA && window.G_CATEGORY_DATA.mtype_options && window.G_CATEGORY_DATA.mtype_options.length > 0) {
-      // Είναι Γ Κατηγορία - δείξε τα MTYPE dropdowns
       if (repeatMtypeContainer) repeatMtypeContainer.style.display = '';
       if (repeatReceiptMtypeContainer) repeatReceiptMtypeContainer.style.display = '';
-      
-      // Γέμισε το dropdown για τιμολόγια
       if (repeatMtypeSelect) {
         repeatMtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
         window.G_CATEGORY_DATA.mtype_options.forEach(mt => {
@@ -1330,8 +1424,6 @@ function katToPercent(k){
           repeatMtypeSelect.appendChild(opt);
         });
       }
-      
-      // Γέμισε το dropdown για αποδείξεις
       if (repeatReceiptMtypeSelect) {
         repeatReceiptMtypeSelect.innerHTML = '<option value="">-- επιλέξτε είδος κίνησης --</option>';
         window.G_CATEGORY_DATA.mtype_options.forEach(mt => {
@@ -1345,55 +1437,10 @@ function katToPercent(k){
         });
       }
     } else {
-      // Όχι Γ Κατηγορία - κρύψε τα MTYPE dropdowns
       if (repeatMtypeContainer) repeatMtypeContainer.style.display = 'none';
       if (repeatReceiptMtypeContainer) repeatReceiptMtypeContainer.style.display = 'none';
     }
 
-    const resolveProfilePayloadFromOption = (opt) => {
-      if (!opt) {
-        return {
-          mapping: normalizeMapping(defaultMap || {}),
-          invoiceMtype: String(invoiceMtype || ''),
-          receiptMtype: String(receiptMtype || ''),
-          name: '',
-          id: ''
-        };
-      }
-
-      let parsedMap = normalizeMapping(defaultMap || {});
-      try {
-        parsedMap = normalizeMapping(JSON.parse((opt.dataset && opt.dataset.mapping) || '{}'));
-      } catch(_) {}
-
-      return {
-        mapping: parsedMap,
-        invoiceMtype: String((opt.dataset && opt.dataset.invoiceMtype) || ''),
-        receiptMtype: String((opt.dataset && opt.dataset.receiptMtype) || ''),
-        name: String((opt.dataset && opt.dataset.profileName) || '').trim(),
-        id: String((opt.dataset && (opt.dataset.profileId || opt.dataset.id)) || '').trim(),
-      };
-    };
-
-    const applyMtypesFromSelection = (opt, payload) => {
-      try {
-        const p = payload || resolveProfilePayloadFromOption(opt);
-        const invoiceVal = String((p && p.invoiceMtype) || '');
-        const receiptVal = String((p && p.receiptMtype) || '');
-        if (repeatMtypeSelect && repeatMtypeContainer && repeatMtypeContainer.style.display !== 'none') {
-          repeatMtypeSelect.value = invoiceVal;
-        }
-        if (repeatReceiptMtypeSelect && repeatReceiptMtypeContainer && repeatReceiptMtypeContainer.style.display !== 'none') {
-          repeatReceiptMtypeSelect.value = receiptVal;
-        }
-        try {
-          window.__repeat_invoice_mtype = invoiceVal;
-          window.__repeat_receipt_mtype = receiptVal;
-        } catch(_) {}
-      } catch(_) {}
-    };
-
-    // 3) αν έχει αποθηκευτεί ενεργό προφίλ, επίλεξέ το και προ-συμπλήρωσε
     const selectedBySavedName = Array.from(sel.options).find(o => {
       const optionValue = String(o.value || '').trim();
       const optionId = String((o.dataset && (o.dataset.profileId || o.dataset.id)) || '').trim();
@@ -1411,37 +1458,27 @@ function katToPercent(k){
 
     if (profileToSelect && selectedBySavedName){
       sel.value = selectedBySavedName.value;
-      try{
-        const selected = sel.selectedOptions[0];
-        const selectedPayload = resolveProfilePayloadFromOption(selected);
-        renderMapping(selectedPayload.mapping || {});
-        applyMtypesFromSelection(selected, selectedPayload);
-        const selectedName = selectedPayload.name || profileToSelect;
-        setActiveProfileHint(selectedName);
-        rememberRepeatSelectedProfile(VAT, modeKey, selectedName);
-
+      try {
+        handleProfileSelection(selectedBySavedName, { remember: true });
       } catch (_e) {
         renderMapping(defaultMap);
       }
     } else {
       sel.value = "";
-      const generalPayload = resolveProfilePayloadFromOption(sel.selectedOptions[0]);
-      renderMapping((generalPayload && generalPayload.mapping) || defaultMap); // "Γενικό"
-      applyMtypesFromSelection(sel.selectedOptions[0], generalPayload);
-      setActiveProfileHint("");
-
+      handleProfileSelection(sel.selectedOptions[0] || null, { remember: false, skipHint: false });
     }
 
     sel.onchange = () => {
-      const opt = sel.selectedOptions[0];
-      const selectedPayload = resolveProfilePayloadFromOption(opt);
-      const selectedName = (selectedPayload && selectedPayload.name) || String(sel.value || '').trim();
-      renderMapping((selectedPayload && selectedPayload.mapping) || defaultMap);
-      applyMtypesFromSelection(opt, selectedPayload);
-      setActiveProfileHint(selectedName);
-      rememberRepeatSelectedProfile(VAT, modeKey, selectedName);
-
+      handleProfileSelection(sel.selectedOptions[0], { remember: true });
       hint && (hint.style.display='none', hint.textContent='');
+    };
+
+    window.__applyRepeatProfilePayload = (opt, extra) => {
+      try {
+        handleProfileSelection(opt, extra);
+      } catch (err) {
+        console.warn('applyRepeatProfilePayload failed', err);
+      }
     };
   } else {
     // αν για κάποιο λόγο δεν υπάρχει το select, τουλάχιστον δείξε τα dropdowns
@@ -9688,30 +9725,6 @@ function openReceiptClassModal(summaryObj){
             const opt=selProf.selectedOptions[0];
             const map=(opt&&opt.dataset.mapping)?JSON.parse(opt.dataset.mapping):{};
             renderRows(map);
-        try {
-          const selectedName = String(selProf.value || '').trim();
-          rememberRepeatSelectedProfile(activeVat, 'receipts', selectedName);
-          setActiveProfileHint(selectedName);
-
-          if (activeVat) {
-            const getResp = await fetch('/api/repeat_entry/get?vat=' + encodeURIComponent(activeVat), { credentials: 'same-origin' });
-            const getData = await getResp.json().catch(() => null);
-            const rep = getData?.repeat_entry || {};
-            await fetch('/api/repeat_entry/save', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              credentials: 'same-origin',
-              body: JSON.stringify({
-                vat: activeVat,
-                enabled: !!rep.enabled,
-                mapping: rep.mapping || {},
-                profile_name: selectedName,
-                invoice_mtype: rep.invoice_mtype || '',
-                receipt_mtype: rep.receipt_mtype || ''
-              })
-            });
-          }
-        } catch(_) {}
         try { await setupCombinedMtype(); } catch(_) {}
         });
     }
@@ -9725,9 +9738,9 @@ function openReceiptClassModal(summaryObj){
     if (closeBtnX) closeBtnX.onclick = closeReceiptClassModal;
     if (cancelBtn) cancelBtn.onclick = closeReceiptClassModal;
     if (saveBtn) saveBtn.onclick = async ()=>{
-      const out={ '0%':'', '6%':'', '13%':'', '17%':'', '24%':'' };
+      const out={ kat_fpa_a:'', kat_fpa_b:'', kat_fpa_g:'', kat_fpa_d:'', kat_fpa_e:'' };
         list.querySelectorAll('div.flex.items-center').forEach(row=>{
-        const mapKey = row.dataset.vat || '';
+        const mapKey = row.dataset.key || '';
             const sel=row.querySelector('select');
         if(mapKey && sel){ out[mapKey]=sel.value || ''; }
         });
@@ -9743,7 +9756,7 @@ function openReceiptClassModal(summaryObj){
         // profile name may be empty (Γενικό). any non-empty name is fine.
         const profName=(selProf?.value||'').trim();
         // Previously we refused blank name; remove that check so "Γενικό" can be saved.
-      if(!out['0%'] || !out['6%'] || !out['13%'] || !out['17%'] || !out['24%']){
+      if(!out.kat_fpa_a || !out.kat_fpa_b || !out.kat_fpa_g || !out.kat_fpa_d || !out.kat_fpa_e){
         showFlash('Συμπλήρωσε κατηγορία για όλα τα ποσοστά ΦΠΑ.', 'error', 3500);
         return;
       }
@@ -9845,17 +9858,8 @@ RC.applySavedReceiptAnalysisMapping = async function(summaryObj){
     const normalizeMap = (src) => {
       const out = {};
       const mapObj = (src && typeof src === 'object') ? src : {};
-      const legacyKeyToVat = {
-        kat_fpa_a: '0%',
-        kat_fpa_b: '6%',
-        kat_fpa_g: '13%',
-        kat_fpa_d: '17%',
-        kat_fpa_e: '24%'
-      };
       Object.entries(mapObj).forEach(([k, v]) => {
-        const rawKey = String(k || '').trim();
-        const baseKey = legacyKeyToVat[rawKey] || rawKey;
-        const nk = (typeof __rcNormalizeVatCategory === 'function') ? __rcNormalizeVatCategory(baseKey) : String(baseKey || '').trim();
+        const nk = (typeof __rcNormalizeVatCategory === 'function') ? __rcNormalizeVatCategory(k) : String(k || '').trim();
         const cv = String(v || '').trim();
         if (nk && cv) out[nk] = cv;
       });
@@ -10650,16 +10654,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const s = readSummaryObject();
     if (!s || !isReceiptSummary(s) || !hasMeaningfulLines(s)) return;
 
-    // avoid double firing for the same payload (mark may be empty before confirm assigns one)
+    // avoid double firing for the same mark
     const mk = String(s.mark || s.MARK || '').trim();
-    const payloadFingerprint = mk || [
-      String(s.issueDate || s.issue_date || ''),
-      String(s.AFM_issuer || s.AFM || ''),
-      String(s.totalValue || s.total_amount || ''),
-      String((Array.isArray(s.lines) ? s.lines.length : 0) || 0)
-    ].join('|');
-    if (!payloadFingerprint || payloadFingerprint === lastMarkTried) return;
-    lastMarkTried = payloadFingerprint;
+    if (!mk || mk === lastMarkTried) return;
+    lastMarkTried = mk;
 
     // hide modal pre-emptively to avoid flicker
     try { hideSummaryModal(); } catch(_){}
