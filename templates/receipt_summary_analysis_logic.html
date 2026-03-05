@@ -748,9 +748,11 @@
     const summarySaysAnalysis = !!(summary && (summary.receipt_analysis_enabled === true || summary.receiptAnalysisEnabled === true || summary.receipts_analysis_enabled === true));
     const hasUrlBaseline = !!(summary && summary.receipt_url_totals && typeof summary.receipt_url_totals === 'object');
     const lockedAnalysis = !!window.__RC_RECEIPT_ANALYSIS_LOCK;
-    const receiptsAnalysis = explicitReceiptMode
-      ? (explicitReceiptMode === 'analysis')
-      : !!(isReceiptAnalysisActive() || summarySaysAnalysis || hasUrlBaseline || lockedAnalysis);
+    const receiptsAnalysis = isReceiptSummary && (
+      explicitReceiptMode
+        ? (explicitReceiptMode === 'analysis')
+        : !!(isReceiptAnalysisActive() || summarySaysAnalysis || hasUrlBaseline || lockedAnalysis)
+    );
     if (isReceiptSummary && receiptsAnalysis) {
       window.__RC_RECEIPT_ANALYSIS_LOCK = true;
       window.__RC_FORCE_RECEIPT_ANALYSIS = true;
@@ -924,8 +926,17 @@
       const amount = parseMoneyInput(amountInput.value || '');
       const vatRate = vatRateFromCategory(vatCategoryInput.value || '');
       if (!Number.isFinite(amount) || !Number.isFinite(vatRate)) return;
+      const vatAlreadySet = String(vatInput.value || '').trim() !== '';
+      const wasAutofilled = vatInput.dataset && vatInput.dataset.autofill === '1';
+      const userEdited = vatInput.dataset && vatInput.dataset.userEdited === '1';
+      if (userEdited) return;
+      if (vatAlreadySet && !wasAutofilled) return;
       const vatValue = amount * (vatRate / 100);
       vatInput.value = formatMoneyOutput(vatValue);
+      if (vatInput.dataset) {
+        vatInput.dataset.autofill = '1';
+        vatInput.dataset.userEdited = '';
+      }
     }
 
     function autoFillAmountFromVatForLine(lineId){
@@ -937,8 +948,17 @@
       const vatRate = vatRateFromCategory(vatCategoryInput.value || '');
       const vatValue = parseMoneyInput(vatInput.value || '');
       if (!Number.isFinite(vatRate) || !Number.isFinite(vatValue) || vatRate <= 0) return;
+      const amountAlreadySet = String(amountInput.value || '').trim() !== '';
+      const wasAutofilled = amountInput.dataset && amountInput.dataset.autofill === '1';
+      const userEdited = amountInput.dataset && amountInput.dataset.userEdited === '1';
+      if (userEdited) return;
+      if (amountAlreadySet && !wasAutofilled) return;
       const amount = vatValue * 100 / vatRate;
       amountInput.value = formatMoneyOutput(amount);
+      if (amountInput.dataset) {
+        amountInput.dataset.autofill = '1';
+        amountInput.dataset.userEdited = '';
+      }
     }
 
     function enforceReceiptZeroVatRule(lineId){
@@ -959,6 +979,10 @@
           vatInput.readOnly = true;
           vatInput.classList.add('bg-gray-100');
           vatInput.title = 'Για αποδειξάκια με 0% δεν συμπληρώνεται ΦΠΑ.';
+          if (vatInput.dataset) {
+            vatInput.dataset.autofill = '1';
+            vatInput.dataset.userEdited = '';
+          }
           amountInput.placeholder = 'Μικτή αξία';
           amountInput.title = 'Συμπληρώνεις μόνο μικτή αξία στην Καθαρή Αξία.';
 
@@ -975,6 +999,12 @@
           vatInput.readOnly = false;
           vatInput.classList.remove('bg-gray-100');
           vatInput.title = '';
+          if (vatInput.dataset) {
+            vatInput.dataset.autofill = '';
+            if (!String(vatInput.value || '').trim()) {
+              vatInput.dataset.userEdited = '';
+            }
+          }
           amountInput.placeholder = '0,00';
           amountInput.title = '';
           const hint = document.getElementById('receiptZeroVatHint-' + lineId);
@@ -1291,6 +1321,15 @@
       });
       inp.addEventListener('input', function(){
         try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
+        if (this.dataset) {
+          if ((this.value || '').trim()) {
+            this.dataset.userEdited = '1';
+            this.dataset.autofill = '';
+          } else {
+            this.dataset.userEdited = '';
+            this.dataset.autofill = '';
+          }
+        }
         const lineId = this.dataset.lineId || '';
         autoFillVatForLine(lineId);
         enforceReceiptZeroVatRule(lineId);
@@ -1299,6 +1338,15 @@
       });
       inp.addEventListener('change', function(){
         try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
+        if (this.dataset) {
+          if ((this.value || '').trim()) {
+            this.dataset.userEdited = '1';
+            this.dataset.autofill = '';
+          } else {
+            this.dataset.userEdited = '';
+            this.dataset.autofill = '';
+          }
+        }
         const lineId = this.dataset.lineId || '';
         autoFillVatForLine(lineId);
         enforceReceiptZeroVatRule(lineId);
@@ -1316,6 +1364,15 @@
       });
       inp.addEventListener('input', function(){
         try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
+        if (this.dataset) {
+          if ((this.value || '').trim()) {
+            this.dataset.userEdited = '1';
+            this.dataset.autofill = '';
+          } else {
+            this.dataset.userEdited = '';
+            this.dataset.autofill = '';
+          }
+        }
         const lineId = this.dataset.lineId || '';
         autoFillAmountFromVatForLine(lineId);
         enforceReceiptZeroVatRule(lineId);
@@ -1324,6 +1381,15 @@
       });
       inp.addEventListener('change', function(){
         try { rcMarkSummaryEditingWindow(4500); } catch(_) {}
+        if (this.dataset) {
+          if ((this.value || '').trim()) {
+            this.dataset.userEdited = '1';
+            this.dataset.autofill = '';
+          } else {
+            this.dataset.userEdited = '';
+            this.dataset.autofill = '';
+          }
+        }
         const lineId = this.dataset.lineId || '';
         autoFillAmountFromVatForLine(lineId);
         enforceReceiptZeroVatRule(lineId);

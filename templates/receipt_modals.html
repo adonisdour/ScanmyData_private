@@ -22,7 +22,7 @@ only when the user has enabled receipt analysis.
       <div class="flex items-center gap-2">
         <label class="text-sm font-medium">Προφίλ</label>
         <select id="charProfileSelectClass" class="border rounded px-2 py-1"></select>
-        <a data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat, mode='receipts') }}" class="px-2 py-1 border rounded">+</a>
+        <a data-profiles-link="true" href="{{ url_for('profiles_page', vat=vat, mode='receipts', return_to='receipt_class') }}" class="px-2 py-1 border rounded">+</a>
       </div>
 
       <div id="receiptClassList" class="space-y-2"></div>

@@ -20,15 +20,26 @@
       return 'rc-direct:' + String((s && (s.mark || s.MARK)) || '').trim();
     }
   }
-  function isReceipts(){ try{var sw=$id('useReceiptsSwitch'); if(sw) return !!sw.checked;}catch(_){}
+  function isReceipts(){ try{var sw=$id('useReceiptsSwitch'); if(sw) return !!sw.checked;}catch(_){ }
                          return lsGet('UI:useReceipts','0')==='1'; }
-  function isRepeat(){   try{var rs=$id('repeatEntrySwitch'); if(rs) return !!rs.checked;}catch(_){}
+  function isRepeat(){   try{var rs=$id('repeatEntrySwitch'); if(rs) return !!rs.checked;}catch(_){ }
                          return lsGet('REPEAT:enabled','0')==='1'; }
+  function receiptMode(){
+    try{
+      var mode = localStorage.getItem('rc:receiptMode');
+      return String(mode || 'mixed').trim().toLowerCase();
+    }catch(_){ return 'mixed'; }
+  }
   function isMixedMode(){
     try{
-      var mode = localStorage.getItem('rc:receiptMode') || 'mixed';
-      return String(mode || '').toLowerCase() !== 'analysis';
+      var mode = receiptMode();
+      if(!mode) return true;
+      if(mode === 'manual' || mode === 'off') return false;
+      return true; // allow both mixed and analysis flows
     }catch(_){ return true; }
+  }
+  function isAnalysisMode(){
+    return receiptMode() === 'analysis';
   }
   function parseSummary(){
     var el=$id('summaryJsonInput');
@@ -63,13 +74,281 @@
   }
   function normalizeReceipt(s){
     try{
-      s.is_receipt=true;
-      s.category=s.category||'αποδειξακια';
-      s.characteristic=s.characteristic||'αποδειξακια';
+      var analysis = isReceiptAnalysisContext(s);
+      s.is_receipt = true;
+      if (analysis) {
+        s.receipt_analysis_enabled = true;
+      } else {
+        s.category = s.category || 'αποδειξακια';
+        s.characteristic = s.characteristic || 'αποδειξακια';
+      }
       if(!Array.isArray(s.lines)) s.lines=[];
-      s.lines=s.lines.map(function(l){ l=l||{}; l.category='αποδειξακια'; return l; });
-    }catch(_){}
+      if(!s.lines.length){
+        var amountGuess = String(s.totalNetValue || s.totalValue || s.total_amount || '').trim();
+        var vatGuess = String(s.totalVatAmount || s.total_vat || '').trim();
+        s.lines = [{
+          id: 'r0',
+          description: '',
+          amount: amountGuess,
+          vat: vatGuess,
+          vat_category: '',
+          category: analysis ? '' : 'αποδειξακια'
+        }];
+      } else {
+        s.lines = s.lines.map(function(l){
+          l = l || {};
+          if (analysis) {
+            l.category = l.category || '';
+          } else {
+            l.category = l.category || 'αποδειξακια';
+          }
+          return l;
+        });
+      }
+    }catch(_){ }
     return s;
+  }
+
+  function isReceiptAnalysisContext(summary){
+    try {
+      if (typeof isReceiptModeAnalysisStrict === 'function' && isReceiptModeAnalysisStrict()) return true;
+    } catch(_) {}
+    try {
+      if (typeof isReceipts === 'function' && typeof isRepeat === 'function' && isReceipts() && isRepeat()) return true;
+    } catch(_) {}
+    try {
+      var mode = receiptMode();
+      if (mode === 'analysis') return true;
+    } catch(_) {}
+    try {
+      if (typeof isReceiptAnalysisOn === 'function' && isReceiptAnalysisOn()) return true;
+    } catch(_) {}
+    try {
+      if (summary && (summary.receipt_analysis_enabled === true || summary.receipts_analysis_enabled === true)) return true;
+    } catch(_) {}
+    return false;
+  }
+
+  function normalizeMappingObject(mapping){
+    var out = { '0%':'', '6%':'', '13%':'', '17%':'', '24%':'' };
+    if(!mapping || typeof mapping !== 'object') return out;
+    if ('kat_fpa_a' in mapping || 'kat_fpa_b' in mapping || 'kat_fpa_g' in mapping || 'kat_fpa_d' in mapping || 'kat_fpa_e' in mapping) {
+      out['0%'] = mapping.kat_fpa_a || '';
+      out['6%'] = mapping.kat_fpa_b || '';
+      out['13%'] = mapping.kat_fpa_g || '';
+      out['17%'] = mapping.kat_fpa_d || '';
+      out['24%'] = mapping.kat_fpa_e || '';
+      return out;
+    }
+    Object.keys(out).forEach(function(key){
+      if (Object.prototype.hasOwnProperty.call(mapping, key)) {
+        out[key] = mapping[key] || '';
+      }
+    });
+    return out;
+  }
+
+  function vatKeyFromValue(raw){
+    var val = String(raw || '').trim().toLowerCase();
+    if (!val) return '24%';
+    if (val.indexOf('kat_fpa_a') >= 0) return '0%';
+    if (val.indexOf('kat_fpa_b') >= 0) return '6%';
+    if (val.indexOf('kat_fpa_g') >= 0) return '13%';
+    if (val.indexOf('kat_fpa_d') >= 0) return '17%';
+    if (val.indexOf('kat_fpa_e') >= 0) return '24%';
+    if (val.indexOf('0') >= 0 && val.indexOf('24') === -1 && val.indexOf('13') === -1 && val.indexOf('17') === -1 && val.indexOf('6') === -1) return '0%';
+    if (val.indexOf('6') >= 0) return '6%';
+    if (val.indexOf('13') >= 0) return '13%';
+    if (val.indexOf('17') >= 0) return '17%';
+    if (val.indexOf('24') >= 0) return '24%';
+    var numMatch = val.match(/(0|6|13|17|24)/);
+    if (numMatch) {
+      return String(numMatch[0]) + '%';
+    }
+    return '24%';
+  }
+
+  function mappingHasValues(map){
+    if (!map) return false;
+    return Object.keys(map).some(function(key){ return String(map[key] || '').trim() !== ''; });
+  }
+
+  function ensureSummaryCategoryFromLines(summary){
+    if (!summary || typeof summary !== 'object') return;
+    var lines = Array.isArray(summary.lines) ? summary.lines : [];
+    var first = lines.find(function(line){ return line && String(line.category || '').trim(); });
+    var cat = first ? String(first.category || '').trim() : '';
+    if (cat) {
+      if (!summary.category) summary.category = cat;
+      if (!summary.characteristic) summary.characteristic = cat;
+      if (!summary['χαρακτηρισμός']) summary['χαρακτηρισμός'] = cat;
+    }
+  }
+
+  function summaryHasCompleteCategories(summary){
+    if(!summary || typeof summary !== 'object') return false;
+    var lines = Array.isArray(summary.lines) ? summary.lines : [];
+    if(!lines.length){
+      var headCat = String(summary.category || summary.characteristic || summary['χαρακτηρισμός'] || '').trim();
+      var hasMtype = String(summary.mtype || summary.receipt_mtype || summary.receiptMtype || '').trim();
+      var analysisFlag = !!(summary.receipt_analysis_enabled === true || summary.receiptAnalysisEnabled === true || summary.receipts_analysis_enabled === true);
+      return !!(headCat || hasMtype || analysisFlag);
+    }
+    for(var i=0;i<lines.length;i++){
+      var ln = lines[i] || {};
+      if(!String(ln.category || '').trim()) return false;
+    }
+    var headCat = String(summary.category || summary.characteristic || summary['χαρακτηρισμός'] || '').trim();
+    return !!headCat;
+  }
+
+  function hasBlockingWarnings(){
+    try{
+      if(window.RC && typeof window.RC.hasWarnings === 'function'){
+        return !!window.RC.hasWarnings();
+      }
+    }catch(_){ }
+    return false;
+  }
+
+  function detectActiveVat(){
+    try {
+      if (window._repeatModalVAT) return String(window._repeatModalVAT).trim();
+    } catch(_) {}
+    try {
+      var hidden = document.querySelector('input[name="active_vat"]');
+      if (hidden && hidden.value) return hidden.value.trim();
+    } catch(_) {}
+    try {
+      var flagged = document.querySelector('[data-active-vat]');
+      if (flagged) {
+        var attr = flagged.getAttribute('data-active-vat') || flagged.dataset.activeVat || '';
+        if (attr) return attr.trim();
+      }
+    } catch(_) {}
+    try {
+      if (typeof ACTIVE_VAT !== 'undefined' && ACTIVE_VAT) return String(ACTIVE_VAT).trim();
+    } catch(_) {}
+    return '';
+  }
+
+  function applyMappingToSummary(summary, map){
+    if (!summary || typeof summary !== 'object') return false;
+    var normalized = normalizeMappingObject(map || {});
+    var lines = Array.isArray(summary.lines) ? summary.lines : [];
+    var changed = false;
+    lines.forEach(function(line){
+      if (!line || typeof line !== 'object') return;
+      var key = vatKeyFromValue(line.vat_category || line.vatCategory || line.vat || '');
+      var mapped = normalized[key] || '';
+      if (!String(line.category || '').trim() && mapped) {
+        line.category = mapped;
+        changed = true;
+      }
+    });
+    if (changed) ensureSummaryCategoryFromLines(summary);
+    return changed;
+  }
+
+  var receiptAnalysisCache = null;
+
+  async function fetchRepeatEntryState(vat){
+    var suffix = vat ? ('?vat=' + encodeURIComponent(vat)) : '';
+    var endpoints = ['/api/repeat_entry/get_v2', '/api/repeat_entry/get'];
+    for (var i = 0; i < endpoints.length; i++) {
+      try {
+        var resp = await fetch(endpoints[i] + suffix, { credentials: 'same-origin' });
+        if (!resp.ok) continue;
+        var data = await resp.json().catch(function(){ return null; });
+        if (data) return data;
+      } catch(_){ }
+    }
+    return null;
+  }
+
+  async function fetchReceiptProfileMapping(vat, profileName){
+    try {
+      var params = new URLSearchParams();
+      params.set('mode', 'receipts');
+      if (vat) params.set('vat', vat);
+      var resp = await fetch('/api/char_profiles?' + params.toString(), { credentials:'same-origin' });
+      if (!resp.ok) return null;
+      var data = await resp.json().catch(function(){ return null; });
+      if (!data) return null;
+      var profiles = Array.isArray(data.profiles) ? data.profiles : [];
+      var receiptsOnly = profiles.filter(function(p){
+        var mode = String((p && p.mode) || '').trim().toLowerCase();
+        return !mode || mode === 'receipts';
+      }).map(function(p){
+        return {
+          name: String(p && p.name || '').trim(),
+          mapping: normalizeMappingObject((p && (p.mapping || p.map)) || {}),
+          receipt_mtype: String(p && (p.receipt_mtype || p.receiptMtype || p.invoice_mtype || p.invoiceMtype) || '').trim()
+        };
+      });
+      var target = null;
+      if (profileName) {
+        target = receiptsOnly.find(function(p){ return p.name && p.name.toLowerCase() === profileName.toLowerCase(); });
+      }
+      if (!target) {
+        target = receiptsOnly.find(function(p){ return !p.name; }) || receiptsOnly[0] || null;
+      }
+      return target;
+    } catch(_){ return null; }
+  }
+
+  async function loadReceiptAnalysisMapping(){
+    if (receiptAnalysisCache && (Date.now() - receiptAnalysisCache.ts) < 60000) {
+      return receiptAnalysisCache.data;
+    }
+    var vat = detectActiveVat();
+    var state = await fetchRepeatEntryState(vat);
+    if (!state) return null;
+    var repeat = state.repeat_entry || {};
+    var mapping = normalizeMappingObject(repeat.mapping || {});
+    var receiptMtype = String(repeat.receipt_mtype || '').trim();
+    var profileName = String(repeat.profile_name || '').trim();
+    if (!mappingHasValues(mapping) || profileName) {
+      var profilePayload = await fetchReceiptProfileMapping(vat || state.vat || state.afm || '', profileName);
+      if (profilePayload && mappingHasValues(profilePayload.mapping)) {
+        mapping = profilePayload.mapping;
+      }
+      if (!receiptMtype && profilePayload && profilePayload.receipt_mtype) {
+        receiptMtype = profilePayload.receipt_mtype;
+      }
+    }
+    var out = { mapping: mapping, receipt_mtype: receiptMtype };
+    receiptAnalysisCache = { ts: Date.now(), data: out };
+    return out;
+  }
+
+  async function applyReceiptAnalysisProfile(summary){
+    if (!isReceiptAnalysisContext(summary)) return;
+    summary.receipt_analysis_enabled = true;
+    var applied = false;
+    try {
+      if (window.RC && typeof window.RC.applySavedReceiptAnalysisMapping === 'function') {
+        var result = await window.RC.applySavedReceiptAnalysisMapping(summary);
+        applied = !!(result && result.applied);
+      }
+    } catch(err) {
+      console.warn('RC.applySavedReceiptAnalysisMapping failed', err);
+    }
+    if (!applied) {
+      try {
+        var cache = await loadReceiptAnalysisMapping();
+        if (cache && mappingHasValues(cache.mapping)) {
+          applied = applyMappingToSummary(summary, cache.mapping);
+          if (!summary.mtype && cache.receipt_mtype) {
+            summary.mtype = cache.receipt_mtype;
+            summary.receipt_mtype = cache.receipt_mtype;
+          }
+        }
+      } catch(err2) {
+        console.warn('receipt analysis mapping fallback failed', err2);
+      }
+    }
+    ensureSummaryCategoryFromLines(summary);
   }
   function submitViaForm(s){
     var form=$id('saveSummaryForm');
@@ -109,8 +388,8 @@
           url: scrapeUrl,
           summary: s,
           force: false,
-          category: 'αποδειξακια',
-          receipt_analysis_enabled: false
+          category: (s && s.category) ? s.category : 'αποδειξακια',
+          receipt_analysis_enabled: !!(s && (s.receipt_analysis_enabled || s.receipts_analysis_enabled))
         })
       }).then(function(r){
         return r.json().catch(function(){ return null; }).then(function(j){ return { r: r, j: j }; });
@@ -136,10 +415,11 @@
     }catch(_){ location.reload(); }
   }
   var trying=false;
-  function tryDirect(){
+  async function tryDirect(){
     if(trying) return;
     if(!isReceipts()||!isRepeat()) return;
     if(!isMixedMode()) return;
+    if(hasBlockingWarnings()) return;
 
     var s=parseSummary();
     if(!s||!isReceiptSummary(s)||!hasLines(s)) return;
@@ -154,7 +434,13 @@
     ssSet(k, String(nowTs));
     trying=true;
 
+    function abortAttempt(){
+      trying = false;
+      ssDel(k);
+    }
+
     s = normalizeReceipt(s);
+    var analysisActive = isAnalysisMode() || isReceiptAnalysisContext(s);
 
     // Merge live component state (`summaryDataInput`) so MTYPE set in the component is not lost
     try {
@@ -187,29 +473,56 @@
       }
     } catch(e) { /* ignore */ }
 
-    submitViaConfirmApi(s)
-      .then(function(){ afterSubmit(mark, k); })
-      .catch(function(err){
-        // Fallback path (legacy) only if direct API failed
-        if(submitViaForm(s)){
-          setTimeout(function(){
-            trying=false;
-            ssDel(k);
-          }, 2500);
-          return;
-        }
-        submitViaFetch(s).then(function(){ afterSubmit(mark, k); })
-          .catch(function(err2){
-            trying=false;
-            ssDel(k);
-            try{
-              var msg = (err2 && err2.message) ? err2.message : ((err && err.message) ? err.message : 'server');
-              var errMsg = 'Σφάλμα αποθήκευσης: ' + msg;
-              if (window.showFlash) window.showFlash(errMsg, 'error', 6000);
-              if (window.persistReceiptFlash) window.persistReceiptFlash(errMsg, 'error');
-            }catch(_){ }
-          });
-      });
+    try {
+      await applyReceiptAnalysisProfile(s);
+    } catch(errApply) {
+      console.warn('receipt analysis apply failed', errApply);
+    }
+
+    analysisActive = isAnalysisMode() || isReceiptAnalysisContext(s);
+    if(!summaryHasCompleteCategories(s)){
+      abortAttempt();
+      return;
+    }
+    if(analysisActive){
+      var activeMtype = String(s.mtype || s.receipt_mtype || '').trim();
+      if(!activeMtype){
+        abortAttempt();
+        return;
+      }
+    }
+    if(hasBlockingWarnings()){
+      abortAttempt();
+      return;
+    }
+
+    try {
+      await submitViaConfirmApi(s);
+      afterSubmit(mark, k);
+      return;
+    } catch(err){
+      if(submitViaForm(s)){
+        setTimeout(function(){
+          trying=false;
+          ssDel(k);
+        }, 2500);
+        return;
+      }
+      try {
+        await submitViaFetch(s);
+        afterSubmit(mark, k);
+        return;
+      } catch(err2){
+        trying=false;
+        ssDel(k);
+        try{
+          var msg = (err2 && err2.message) ? err2.message : ((err && err.message) ? err.message : 'server');
+          var errMsg = 'Σφάλμα αποθήκευσης: ' + msg;
+          if (window.showFlash) window.showFlash(errMsg, 'error', 6000);
+          if (window.persistReceiptFlash) window.persistReceiptFlash(errMsg, 'error');
+        }catch(_){ }
+      }
+    }
   }
 
   function patchOpenModal(){

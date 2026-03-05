@@ -104,6 +104,120 @@ def test_char_profiles_save_mode(monkeypatch):
         # the list should exist; exact contents can vary depending on heuristics
 
 
+def test_char_profiles_mtype_persistence(monkeypatch):
+    cred = setup_client(monkeypatch, expense_tags=["cat1"])
+    with app_module.app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['active_credential'] = cred['name']
+        payload = {
+            "vat": "999999999",
+            "name": "MTYPE",
+            "mapping": {
+                "kat_fpa_a": "cat1",
+                "kat_fpa_b": "cat1",
+                "kat_fpa_g": "cat1",
+                "kat_fpa_d": "cat1",
+                "kat_fpa_e": "cat1",
+            },
+            "mode": "invoices",
+            "invoice_mtype": "3.2",
+            "receipt_mtype": "11.1",
+        }
+        resp = c.post('/api/char_profiles/save', json=payload)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['profile']['invoice_mtype'] == '3.2'
+        assert data['profile']['receipt_mtype'] == '11.1'
+
+        resp = c.get('/api/char_profiles?vat=999999999')
+        assert resp.status_code == 200
+        profiles = resp.get_json()['profiles']
+        match = next((p for p in profiles if p['name'] == 'MTYPE'), None)
+        assert match is not None
+        assert match['invoice_mtype'] == '3.2'
+        assert match['receipt_mtype'] == '11.1'
+
+
+def test_receipts_mtype_normalizes_from_invoice_field(monkeypatch):
+    cred = setup_client(monkeypatch, expense_tags=["cat1"])
+    with app_module.app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['active_credential'] = cred['name']
+
+        payload = {
+            "vat": "999999999",
+            "name": "R-MTYPE",
+            "mapping": {
+                "kat_fpa_a": "cat1",
+                "kat_fpa_b": "cat1",
+                "kat_fpa_g": "cat1",
+                "kat_fpa_d": "cat1",
+                "kat_fpa_e": "cat1",
+            },
+            "mode": "receipts",
+            "invoice_mtype": "12",
+            "receipt_mtype": "",
+        }
+        resp = c.post('/api/char_profiles/save', json=payload)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['ok']
+        assert body['profile']['receipt_mtype'] == '12'
+
+        resp = c.get('/api/char_profiles?vat=999999999&mode=receipts')
+        assert resp.status_code == 200
+        profiles = resp.get_json()['profiles']
+        match = next((p for p in profiles if p['name'] == 'R-MTYPE'), None)
+        assert match is not None
+        assert match['receipt_mtype'] == '12'
+
+
+def test_receipts_general_profile_upsert(monkeypatch):
+    cred = setup_client(monkeypatch, expense_tags=["cat1"])
+    with app_module.app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['active_credential'] = cred['name']
+
+        first = {
+            "vat": "999999999",
+            "name": "",
+            "mapping": {
+                "kat_fpa_a": "cat1",
+                "kat_fpa_b": "cat1",
+                "kat_fpa_g": "cat1",
+                "kat_fpa_d": "cat1",
+                "kat_fpa_e": "cat1",
+            },
+            "mode": "receipts",
+            "receipt_mtype": "11",
+        }
+        second = {
+            "vat": "999999999",
+            "name": "",
+            "mapping": {
+                "kat_fpa_a": "cat1",
+                "kat_fpa_b": "cat1",
+                "kat_fpa_g": "cat1",
+                "kat_fpa_d": "cat1",
+                "kat_fpa_e": "cat1",
+            },
+            "mode": "receipts",
+            "receipt_mtype": "12",
+        }
+
+        r1 = c.post('/api/char_profiles/save', json=first)
+        assert r1.status_code == 200
+        r2 = c.post('/api/char_profiles/save', json=second)
+        assert r2.status_code == 200
+
+        resp = c.get('/api/char_profiles?vat=999999999&mode=receipts')
+        assert resp.status_code == 200
+        profiles = resp.get_json()['profiles']
+        general = [p for p in profiles if (p.get('name') or '') == '']
+        assert len(general) == 1
+        assert general[0].get('receipt_mtype') == '12'
+
+
 if __name__ == '__main__':
     test_char_profiles_mode_filter(None)
     test_char_profiles_save_mode(None)

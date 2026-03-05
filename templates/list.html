@@ -131,7 +131,7 @@
           </div>
         </div>
       {% endif %}
-      <a class="small-btn secondary" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
+      <a class="small-btn secondary hidden" href="{{ url_for('fetch') }}">⬅ Λήψη Παραστατικών</a>
     </div>
   </div>
 
@@ -162,13 +162,15 @@
   </div>
 </div>
 
-<!-- Pop-up Modal for Delete Confirmation -->
-<div id="deleteModal">
-  <div class="modal-content">
-    <div id="deleteModalMessage">Θέλεις σίγουρα να διαγράψεις τις επιλεγμένες εγγραφές;</div>
-    <div class="modal-buttons">
-      <button class="cancel">Ακύρωση</button>
-      <button class="confirm">Διαγραφή</button>
+<!-- Pop-up Modal for Delete Confirmation (warning style) -->
+<div id="deleteModal" data-role="modal-warning" class="fixed inset-0 hidden items-center justify-center bg-black/40">
+  <div class="modal-warning-panel" role="dialog" aria-modal="true">
+    <button type="button" class="modal-warning-close" id="deleteModalClose">×</button>
+    <div class="modal-warning-title">⚠ Διαγραφή εγγραφών</div>
+    <div class="modal-warning-body" id="deleteModalMessage">Θες σίγουρα να διαγράψεις τις επιλεγμένες εγγραφές;</div>
+    <div class="modal-warning-actions">
+      <button type="button" class="modal-warning-btn modal-warning-btn--muted cancel" id="deleteCancel">Ακύρωση</button>
+      <button type="button" class="modal-warning-btn modal-warning-btn--danger confirm" id="deleteConfirm">Διαγραφή</button>
     </div>
   </div>
 </div>
@@ -231,12 +233,12 @@ $(document).ready(function(){
       return;
     }
     $('#deleteModalMessage').text(`Θες σίγουρα να διαγράψεις ${marksToDelete.length} εγγραφή(ες);`);
-    modal.show();
+    modal.removeClass('hidden').addClass('flex');
   });
 
   // Modal buttons
-  modal.find('.cancel').on('click', function(){ modal.hide(); });
-  modal.find('.confirm').on('click', function(){
+  $('#deleteCancel, #deleteModalClose, .cancel').on('click', function(){ modal.addClass('hidden').removeClass('flex'); });
+  $('#deleteConfirm, .confirm').on('click', function(){
     const form = $('<form method="POST" action="{{ url_for("delete_invoices") }}"></form>');
     marksToDelete.forEach(function(s){
       form.append($('<input>').attr('type','hidden').attr('name','delete_mark').val(s));
