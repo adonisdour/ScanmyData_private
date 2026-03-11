@@ -1856,8 +1856,9 @@ def scrape_epsilon(url, timeout=20, debug=False):
 def scrape_einvoicing_gr(url, timeout=15, debug=False):
     """
     e-Invoicing.gr (PEPPOL) pages, π.χ. https://e-invoicing.gr/edocuments/ViewInvoice?ct=PEPPOL&id=...&s=A&h=...
-    1) Μετατρέπει το ViewInvoice URL σε API endpoint /api/GetInvoice
-    2) Εξάγει MARK και ΑΦΜ Πελάτη από το HTML response
+    1) Try the AADE/myDATA button or any embedded mydatapi link first and delegate to
+       :func:`scrape_mydatapi` for those cases.
+    2) Otherwise convert the ViewInvoice URL to an API endpoint and parse the response.
     """
     out = {
         "issuer_vat": None, "issue_date": None, "issuer_name": None,
@@ -1866,7 +1867,39 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
         "vat_analysis_inferred": False
     }
 
+    # early myDATA probe (page may include direct link or button)
+    # Only apply when the URL does *not* already contain the required
+    # query parameters for the API endpoint.  Otherwise we prefer the
+    # built-in API logic which is more reliable and avoids spurious 404s.
     parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    has_params = all(k in qs and qs[k] for k in ("ct", "id", "s", "h"))
+    if not has_params and "/api/GetInvoice" not in parsed.path:
+        sess = requests.Session()
+        sess.headers.update(HEADERS)
+        try:
+            r0 = sess.get(url, timeout=timeout, allow_redirects=True)
+            r0.raise_for_status()
+            r0.encoding = r0.apparent_encoding or 'utf-8'
+            html0 = r0.text
+
+            myd = _extract_mydatapi_url_from_text(html0, r0.url)
+            if not myd:
+                soup0 = BeautifulSoup(html0, "html.parser")
+                btn = soup0.find("span", class_=lambda c: c and "btn" in c,
+                                 string=lambda s: s and "Παραστατικό" in s)
+                if btn:
+                    parent = btn.find_parent("a")
+                    if parent:
+                        href = parent.get("href") or ""
+                        if href and href.strip() not in ("#", "javascript:void(0)"):
+                            myd = urljoin(r0.url, href)
+            if myd:
+                if debug: print("e-invoicing.gr: delegating to mydatapi", myd)
+                return scrape_mydatapi(myd, timeout=timeout, debug=debug)
+        except Exception as e:
+            if debug: print("e-invoicing.gr early fetch error:", e)
+    # continue below with parsed variable
     
     # Αν είναι ήδη API URL, χρησιμοποίησέ το
     if "/api/GetInvoice" in parsed.path:
@@ -2216,7 +2249,39 @@ def scrape_einvoicing_gr(url, timeout=15, debug=False):
         "vat_analysis_inferred": False
     }
 
+    # early delegation: check for myDATA link (AADE button or embedded) before
+    # building API URL.  receipts often come from the button click.  however we
+    # must skip this step if the URL already includes the required query
+    # parameters, in which case the normal API translation is preferred.
     parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    has_params = all(k in qs and qs[k] for k in ("ct", "id", "s", "h"))
+    if not has_params and "/api/GetInvoice" not in parsed.path:
+        sess = requests.Session()
+        sess.headers.update(HEADERS)
+        try:
+            r0 = sess.get(url, timeout=timeout, allow_redirects=True)
+            r0.raise_for_status()
+            r0.encoding = r0.apparent_encoding or "utf-8"
+            html0 = r0.text
+
+            myd = _extract_mydatapi_url_from_text(html0, r0.url)
+            if not myd:
+                soup0 = BeautifulSoup(html0, "html.parser")
+                btn = soup0.find("span", class_=lambda c: c and "btn" in c,
+                                 string=lambda s: s and "Παραστατικό" in s)
+                if btn:
+                    parent = btn.find_parent("a")
+                    if parent:
+                        href = parent.get("href") or ""
+                        if href and href.strip() not in ("#", "javascript:void(0)"):
+                            myd = urljoin(r0.url, href)
+            if myd:
+                if debug: print("e-invoicing.gr: delegating to mydatapi", myd)
+                return scrape_mydatapi(myd, timeout=timeout, debug=debug)
+        except Exception as e:
+            if debug: print("e-invoicing.gr early fetch error:", e)
+    # continue below with parsed variable
     if "/api/GetInvoice" in parsed.path:
         api_url = url
     else:
