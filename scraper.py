@@ -5,6 +5,21 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import xml.etree.ElementTree as ET
+import os
+
+# attempt to load a .env file if present so that environment variables can be
+# configured via that file; repeated import will be idempotent.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)
+except Exception:
+    pass
+
+# helper to decide whether browser fallback is permitted; evaluated each time
+# so that changes to the environment (including via reloading a .env file)
+# take effect without restarting the interpreter.
+def _use_browser_fallback() -> bool:
+    return os.getenv("MYDATA_USE_BROWSER", "0").lower() in ("1", "true", "yes")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -47,7 +62,18 @@ def _resolve_mydatapi_via_browser(url, timeout=20, debug=False):
     """
     JS-aware fallback: ανοίγει τη σελίδα και προσπαθεί να πατήσει το κουμπί
     "Προβολή μέσω MyData" για να πιάσει το τελικό mydatapi URL.
+
+    This operation launches a full Chromium instance which consumes hundreds
+    of megabytes of RAM.  On constrained environments (Render free tier, CI
+    containers, etc.) this often exceeds the memory quota.  The behaviour is
+    controlled by the ``MYDATA_USE_BROWSER`` environment variable; when it is
+    false (the default) the function simply returns ``None`` immediately.
     """
+    if not _use_browser_fallback():
+        if debug:
+            print("browser fallback disabled via MYDATA_USE_BROWSER")
+        return None
+
     try:
         from playwright.sync_api import sync_playwright
     except Exception:

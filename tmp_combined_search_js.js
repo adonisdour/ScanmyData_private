@@ -335,10 +335,33 @@ function katToPercent(k){
 
   function categoryAllowedForVat(cat, vatKey){
     if(!cat) return false;
-    const key = String(cat);
+    const key = String(cat).trim();
+    let normVat = (typeof normalizeVatKey === 'function')
+      ? normalizeVatKey(vatKey)
+      : String(vatKey || '').trim();
+
+    if (!normVat) {
+      const raw = (vatKey || '').toString().toLowerCase().trim().replace(',', '.');
+      if (/^[1-7]$/.test(raw)) {
+        const codeMap = { '1': '24%', '2': '13%', '3': '6%', '4': '17%', '5': '9%', '6': '4%', '7': '0%' };
+        normVat = codeMap[raw] || '';
+      } else if (/\b24\b|24%|24\.0/.test(raw)) normVat = '24%';
+      else if (/\b17\b|17%|17\.0/.test(raw)) normVat = '17%';
+      else if (/\b13\b|13%|13\.0/.test(raw)) normVat = '13%';
+      else if (/\b6\b|6%|6\.0/.test(raw)) normVat = '6%';
+      else if (/\b9\b|9%|9\.0/.test(raw)) normVat = '9%';
+      else if (/\b4\b|4%|4\.0/.test(raw)) normVat = '4%';
+      else if (/\b3\b|3%|3\.0/.test(raw)) normVat = '3%';
+      else if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|ανευ|άνευ|exempt|no\s*vat|39α|47β/.test(raw)) normVat = '0%';
+    }
+
+    const vatNormKey = normVat || (vatKey || '');
+
+    // Εγγυοδοσία: μόνο στο 0% στο repeat mapping modal.
+    if(key === 'εγγυοδοσια' && vatNormKey !== '0%') return false;
     const allowed = CATEGORY_VAT_CONSTRAINTS[key];
-    if(!allowed || !allowed.length) return false;
-    return allowed.includes(vatKey);
+    if(!allowed || !allowed.length) return true;
+    return allowed.includes(vatNormKey);
   }
 
   
@@ -4131,13 +4154,23 @@ function openRepeatModalWithMapping(mapping){
 function normalizeVatKey(s){
   const t = (s || '').toString().toLowerCase().trim().replace(',', '.');
 
+  // Numeric VAT category codes from myDATA (ν. 5144/2024):
+  // 1 = 24%, 2 = 13%, 3 = 6%, 4 = 17%, 5 = 9%, 6 = 4%, 7 = 0%
+  if (/^[1-7]$/.test(t)) {
+    const codeMap = { '1': '24%', '2': '13%', '3': '6%', '4': '17%', '5': '9%', '6': '4%', '7': '0%' };
+    return codeMap[t] || '';
+  }
+
   // τυπικά patterns που επιστρέφει myDATA / scrapers
   if (/\b17\b|17%|17\.0/.test(t)) return '17%';
   if (/\b24\b|24%|24\.0|κανονικ/.test(t)) return '24%';
   if (/\b13\b|13%|13\.0/.test(t)) return '13%';
   if (/\b6\b|6%|6\.0|μειωμ|reduced/.test(t)) return '6%';
-  // 0: μηδενικό, απαλλασσόμενο, χωρίς ΦΠΑ
-  if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|exempt|no\s*vat/.test(t)) return '0%';
+  if (/\b9\b|9%|9\.0/.test(t)) return '9%';  // also support 9% patterns
+  if (/\b4\b|4%|4\.0/.test(t)) return '4%';  // also support 4% patterns
+  if (/\b3\b|3%|3\.0/.test(t)) return '3%';  // also support 3% patterns
+  // 0: μηδενικό, απαλλασσόμενο, χωρίς/άνευ ΦΠΑ, exemption άρθρα
+  if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|ανευ|άνευ|exempt|no\s*vat|39α|47β/.test(t)) return '0%';
 
   return ''; // άγνωστο -> θα αφήσει το modal ανοιχτό
 }
