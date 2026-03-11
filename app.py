@@ -68,6 +68,23 @@ import sys, subprocess, json
 from pathlib import Path
 # --- Lock + current_app imports (paste here) ---
 import threading
+# thread-local storage used by background workers to remember which
+# group directory they should treat as "active".  Without this the
+# fetch thread loses the request/session context and get_group_base_dir()
+# falls back to the global DATA_DIR, which means invoices end up in the
+# wrong place (the complaint "έχει χάσει το scope που να τα γράφει").
+# The helper functions below let the thread set/read an override.
+_thread_locals = threading.local()
+
+def _set_thread_group_base_dir(path: str):
+    try:
+        _thread_locals.group_base_dir = path
+    except Exception:
+        pass
+
+def _get_thread_group_base_dir():
+    return getattr(_thread_locals, 'group_base_dir', None)
+
 try:
     from filelock import FileLock  # προτιμώμενο, cross-process
 except Exception:
@@ -1016,9 +1033,19 @@ CREDENTIALS_PATH = os.path.join(DATA_DIR, "credentials.json")
 def get_group_base_dir():
     """Return absolute path to the data directory for the currently active group (or user's single group).
     Falls back to the global DATA_DIR if no group selected or available.
-    
-    If the group's data folder is missing locally, attempts lazy-pull from Firebase.
+
+    This helper now also honours a *thread-local override* set by
+    background tasks such as the fetch worker.  Without the override the
+    worker would call ``get_active_group()`` outside of a request
+    context, obtain ``None`` and therefore end up writing into the
+    global ``DATA_DIR``.  The override keeps the correct folder even if
+    the request context has disappeared.
     """
+    # check for thread-local override first (background threads)
+    override = _get_thread_group_base_dir()
+    if override:
+        return override
+
     try:
         # avoid top-level import cycles
         from auth import get_active_group
@@ -1028,7 +1055,7 @@ def get_group_base_dir():
 
     if grp and getattr(grp, 'data_folder', None):
         base = os.path.join(BASE_DIR, 'data', grp.data_folder)
-        
+
         # If folder doesn't exist, attempt lazy-pull from Firebase before creating empty folder
         if not os.path.exists(base):
             try:
@@ -1405,7 +1432,13 @@ log = logging.getLogger("mydata_app")
 
 
 def delete_customer_data_files(vat: str) -> Dict[str, Any]:
-    """Remove JSON/Excel artifacts for a specific VAT from DATA_DIR.
+    """Remove JSON/Excel artifacts for a specific VAT from the *active group*.
+
+    Prior to the multi-group refactor this walked ``DATA_DIR``; that meant
+    when a user switched teams the cleanup command would erase files from
+    other groups too.  The new implementation restricts the walk to the
+    folder returned by :func:`group_path` (which already handles the
+    global fallback when no group is selected).
 
     Returns a dict with keys:
       - count: number of files removed
@@ -1424,7 +1457,8 @@ def delete_customer_data_files(vat: str) -> Dict[str, Any]:
         tokens.add(digits_only)
 
     allowed_ext = {".json", ".xlsx", ".xls", ".csv"}
-    base_dir = os.path.abspath(DATA_DIR)
+    # walk only the active group's data folder (or DATA_DIR fallback)
+    base_dir = os.path.abspath(group_path())
 
     for root, _, files in os.walk(base_dir):
         for fname in files:
@@ -7719,6 +7753,31 @@ def append_doc_to_customer_file(doc, vat):
     mark = str(doc.get("mark", "")).strip()
     is_receipt = _is_receipt_record(doc)
 
+    # check for legacy mode, where we simply append new documents (avoiding
+    # merges and pruning entirely).  Duplicate payloads are still suppressed.
+    legacy = False
+    try:
+        settings = load_settings() or {}
+        legacy = bool(settings.get("legacy_fetch_mode"))
+    except Exception:
+        legacy = False
+    if os.getenv("LEGACY_FETCH_MODE"):
+        legacy = True
+
+    if legacy:
+        sig = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+        for d in cache:
+            try:
+                if json.dumps(d, sort_keys=True, ensure_ascii=False) == sig:
+                    return False
+            except Exception:
+                if str(d) == str(doc):
+                    return False
+        cache.append(doc)
+        json_write(customer_file, cache)
+        return True
+
+    # normal non-legacy behaviour follows
     if mark and not is_receipt:
         # gather indices of every entry with this mark
         matching_idxs = []
@@ -7847,12 +7906,39 @@ def append_summary_to_customer_file(summary, vat):
     from unclassified to χαρακτηρισμενο is recorded with ``updated_at``.
     The old fallback-identity logic for receipts using
     ``RECEIPT_FALLBACK_MARK`` is preserved.
+
+    When ``legacy_fetch_mode`` setting is true the function reverts to the
+    simplest append-only behaviour used in earlier revisions: no merges,
+    no updated_at stamps, just avoid exact duplicates.
     """
     if not vat:
         return False
     summary_file = group_path(f"{vat}_summary.json")
     summaries = json_read(summary_file)
     mark = str(summary.get("mark", "")).strip()
+
+    # check legacy flag from settings or environment
+    legacy = False
+    try:
+        settings = load_settings() or {}
+        legacy = bool(settings.get("legacy_fetch_mode"))
+    except Exception:
+        legacy = False
+    if os.getenv("LEGACY_FETCH_MODE"):
+        legacy = True
+
+    if legacy:
+        sig = json.dumps(summary, sort_keys=True, ensure_ascii=False)
+        for s in summaries:
+            try:
+                if json.dumps(s, sort_keys=True, ensure_ascii=False) == sig:
+                    return False
+            except Exception:
+                if str(s) == str(summary):
+                    return False
+        summaries.append(summary)
+        json_write(summary_file, summaries)
+        return True
 
     def _is_receipt_summary(s: dict) -> bool:
         if not isinstance(s, dict):
@@ -7945,6 +8031,21 @@ def get_customer_docs_file(vat):
 
 
 
+# ---------------- Notifications (broadcast) ----------------
+# simple in-memory list of messages; cleared as they are fetched by clients.
+global_notifications = []
+
+@app.route('/api/global_notifications', methods=['GET'])
+def api_global_notifications():
+    """Return and clear any pending broadcast messages."""
+    try:
+        msgs = list(global_notifications)
+        global_notifications.clear()
+        return jsonify({"msgs": msgs}), 200
+    except Exception:
+        return jsonify({"msgs": []}), 500
+
+
 # ---------------- Fetch page (updated with per-customer summary) ----------------
 
 @app.route("/fetch", methods=["GET", "POST"])
@@ -7973,8 +8074,9 @@ def fetch():
 
         selected = request.form.get("use_credential") or session.get("active_credential") or ""
         vat = request.form.get("vat_number", "").strip()
-        aade_user = AADE_USER_ENV
-        aade_key = AADE_KEY_ENV
+        # read env vars fresh each request (constants were evaluated on import)
+        aade_user = os.getenv("AADE_USER_ID", AADE_USER_ENV)
+        aade_key = os.getenv("AADE_SUBSCRIPTION_KEY", AADE_KEY_ENV)
         if selected:
             c = next((x for x in creds if x.get("name") == selected), None)
             if c:
@@ -7989,87 +8091,107 @@ def fetch():
                                error=error, preview=preview, active_page="fetch",
                                active_credential=active_name)
 
-        try:
-            all_rows, summary_list = request_docs(
-                date_from=d1,
-                date_to=d2,
-                mark="000000000000000",
-                aade_user=aade_user,
-                aade_key=aade_key,
-                debug=True,
-                save_excel=False
-            )
-            added_docs = 0
-            added_summaries = 0
-            # track marks seen during this run so we can prune stale
-            # invoices later (CRUD behaviour on invoices.json)
-            seen_marks = set()
-            for d in all_rows:
-                if vat:
-                    d["AFM_counterpart"] = vat  # προσθέτουμε AFM
-                if d.get("mark"):
-                    seen_marks.add(str(d.get("mark")).strip())
-                if append_doc_to_customer_file(d, vat):
-                    added_docs += 1
-
-            for s in summary_list:
-                if append_summary_to_customer_file(s, vat):
-                    added_summaries += 1
-
-            # delete any invoice entries that were within the current fetch
-            # interval but were *not* returned.  This keeps older invoices
-            # outside the range intact when the user fetches overlapping
-            # periods.
-            if vat and seen_marks:
-                try:
-                    prune_customer_invoices(vat, seen_marks, date_from=d1, date_to=d2)
-                except Exception:
-                    # best-effort, ignore pruning errors
-                    pass
-
-            # Track last fetch date for this selected client (prefer VAT key).
-            fetch_key = _get_fetch_tracking_key(selected, vat)
-            if fetch_key:
-                set_last_fetch_date(fetch_key)
-            
-            # Log fetch operation as structured activity (so admin UI shows details)
+        # perform the actual fetch+save in background so the request can
+        # return immediately and avoid timeouts.
+        def _do_fetch(aade_user, aade_key, vat, d1, d2, selected, group_dir):
+            # store the captured group directory in thread-local storage so that
+            # any subsequent calls to ``group_path``/``get_group_base_dir``
+            # inside this worker use the correct folder even though the Flask
+            # request context has gone away.
             try:
-                from auth import get_active_group
-                from utils import log_user_activity
-                grp = get_active_group()
-                if grp:
-                    uid = getattr(current_user, 'id', 'anonymous') if getattr(current_user, 'is_authenticated', False) else 'anonymous'
-                    u_email = getattr(current_user, 'email', None) if getattr(current_user, 'is_authenticated', False) else None
-                    u_name = getattr(current_user, 'username', None) if getattr(current_user, 'is_authenticated', False) else None
-                    details = {
-                        'date_from': str(d1),
-                        'date_to': str(d2),
-                        'vat': vat,
-                        'added_docs': added_docs,
-                        'added_summaries': added_summaries,
-                        'fetched_count': len(all_rows)
-                    }
-                    # action 'fetch_data' used elsewhere; include descriptive details
-                    try:
-                        log_user_activity(uid, grp.name if getattr(grp, 'name', None) else grp.data_folder, 'fetch_data', details=details, user_email=u_email, user_username=u_name)
-                    except Exception:
-                        # best-effort: fall back to appending a plain-text log if structured logging fails
-                        try:
-                            from auth import _append_group_log
-                            _append_group_log(grp, f"Bulk fetch performed: {d1} to {d2}, VAT {vat}, {added_docs} docs + {added_summaries} summaries by {u_name or 'anonymous'}")
-                        except Exception:
-                            pass
+                _set_thread_group_base_dir(group_dir)
             except Exception:
                 pass
 
-            message = (f"Fetched {len(all_rows)} items, newly saved for VAT {vat}: "
-                       f"{added_docs} docs, {added_summaries} summaries.")
+            try:
+                all_rows, summary_list = request_docs(
+                    date_from=d1,
+                    date_to=d2,
+                    mark="000000000000000",
+                    aade_user=aade_user,
+                    aade_key=aade_key,
+                    debug=True,
+                    save_excel=False
+                )
+                added_docs = 0
+                added_summaries = 0
+                seen_marks = set()
+                for d in all_rows:
+                    if vat:
+                        d["AFM_counterpart"] = vat
+                    if d.get("mark"):
+                        seen_marks.add(str(d.get("mark")).strip())
+                    if append_doc_to_customer_file(d, vat):
+                        added_docs += 1
 
-            preview = all_rows[:40]
+                for s in summary_list:
+                    if append_summary_to_customer_file(s, vat):
+                        added_summaries += 1
 
-        except Exception as e:
-            log.exception("Fetch error")
-            error = f"Σφάλμα λήψης: {str(e)[:400]}"
+                if vat and seen_marks:
+                    try:
+                        settings = load_settings() or {}
+                        legacy = bool(settings.get("legacy_fetch_mode"))
+                        if os.getenv("LEGACY_FETCH_MODE"):
+                            legacy = True
+                        if not legacy:
+                            prune_customer_invoices(vat, seen_marks, date_from=d1, date_to=d2)
+                    except Exception:
+                        pass
+
+                fetch_key = _get_fetch_tracking_key(selected, vat)
+                if fetch_key:
+                    set_last_fetch_date(fetch_key)
+
+                try:
+                    from auth import get_active_group
+                    from utils import log_user_activity
+                    grp = get_active_group()
+                    if grp:
+                        uid = getattr(current_user, 'id', 'anonymous') if getattr(current_user, 'is_authenticated', False) else 'anonymous'
+                        u_email = getattr(current_user, 'email', None) if getattr(current_user, 'is_authenticated', False) else None
+                        u_name = getattr(current_user, 'username', None) if getattr(current_user, 'is_authenticated', False) else None
+                        details = {
+                            'date_from': str(d1),
+                            'date_to': str(d2),
+                            'vat': vat,
+                            'added_docs': added_docs,
+                            'added_summaries': added_summaries,
+                            'fetched_count': len(all_rows)
+                        }
+                        try:
+                            log_user_activity(uid, grp.name if getattr(grp, 'name', None) else grp.data_folder, 'fetch_data', details=details, user_email=u_email, user_username=u_name)
+                        except Exception:
+                            try:
+                                from auth import _append_group_log
+                                _append_group_log(grp, f"Bulk fetch performed: {d1} to {d2}, VAT {vat}, {added_docs} docs + {added_summaries} summaries by {u_name or 'anonymous'}")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            except Exception:
+                log.exception("Fetch error (background)")
+            # broadcast notification for any listening clients
+            try:
+                global_notifications.append(f"Fetch complete for VAT {vat}: {added_docs} docs, {added_summaries} summaries.")
+            except Exception:
+                pass
+
+        # spawn thread and return early.  capture the current group directory
+        # so the worker can continue to write to the same location.
+        group_dir = get_group_base_dir()
+        try:
+            t = threading.Thread(
+                target=_do_fetch,
+                args=(aade_user, aade_key, vat, d1, d2, selected, group_dir),
+                daemon=True,
+            )
+            t.start()
+        except Exception:
+            log.exception("Failed to start background fetch thread")
+
+        message = "Fetch started – results will be saved shortly."
+        preview = []
 
     return safe_render("fetch.html", credentials=creds, message=message,
                        error=error, preview=preview, active_page="fetch",

@@ -2052,6 +2052,31 @@
     </div>
 
     {% block content %}{% endblock %}
+
+    <script>
+    // poll for global notifications and display as flash banners
+    async function pollGlobalNotifs(){
+      try{
+        const res = await fetch('/api/global_notifications', {credentials:'same-origin'});
+        if(res.ok){
+          const data = await res.json();
+          if(data.msgs && data.msgs.length){
+            data.msgs.forEach(msg=>{
+              const div = document.createElement('div');
+              div.className = 'flash-banner flash-success';
+              div.textContent = msg;
+              div.setAttribute('data-flash','');
+              div.setAttribute('data-ttl','6000');
+              const container = document.getElementById('flashContainer');
+              if(container) container.prepend(div);
+              makeDismissable(div);
+            });
+          }
+        }
+      }catch(e){console.warn('notif poll failed', e);}
+    }
+    setInterval(pollGlobalNotifs, 5000);
+    </script>
     
     <!-- FOOTER -->
     <footer class="mt-8 pt-6 pb-4 border-t border-gray-200 dark:border-gray-700">
