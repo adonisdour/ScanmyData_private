@@ -10,6 +10,8 @@ from app import (
     append_summary_to_customer_file,
     get_customer_docs_file,
     get_customer_summary_file,
+    load_settings,
+    save_settings,
 )
 
 
@@ -22,6 +24,8 @@ def _clean_file(path):
 
 
 def test_append_doc_promotes_classification(tmp_path):
+    # make sure legacy mode not active for this scenario
+    os.environ.pop('LEGACY_FETCH_MODE', None)
     vat = "999111222"
     invoices_path = get_customer_docs_file(vat)
     os.makedirs(os.path.dirname(invoices_path), exist_ok=True)
@@ -79,6 +83,27 @@ def test_append_doc_promotes_classification(tmp_path):
     assert len(data) == 1
     assert data[0].get("memo") == 1
 
+    # legacy mode append-only behaviour should coexist with normal tests
+    # for this portion of the test we toggle legacy mode via environment
+    orig_env = os.environ.get("LEGACY_FETCH_MODE")
+    os.environ["LEGACY_FETCH_MODE"] = "1"
+    try:
+        # start clean again
+        with open(invoices_path, "w", encoding="utf-8") as f:
+            json.dump([], f, ensure_ascii=False)
+        a = {"mark": "AAA", "classification": ""}
+        append_doc_to_customer_file(a, vat)
+        b = {"mark": "AAA", "classification": "χαρακτηρισμενο"}
+        append_doc_to_customer_file(b, vat)
+        with open(invoices_path, encoding="utf-8") as f:
+            dlist = json.load(f)
+        assert len(dlist) == 2
+    finally:
+        if orig_env is None:
+            os.environ.pop("LEGACY_FETCH_MODE", None)
+        else:
+            os.environ["LEGACY_FETCH_MODE"] = orig_env
+
     # test pruning helper removes stale invoice marks
     from app import prune_customer_invoices
     # add a fresh invoice and a stale one
@@ -135,6 +160,128 @@ def test_prune_respects_date_window(tmp_path):
 
     _clean_file(invoices_path)
 
+
+def test_fetch_route_background_returns(monkeypatch):
+    """POSTing to /fetch should return a page immediately even if request_docs
+    takes time; the work runs in a background thread."""
+    from app import app
+
+    def fake_request_docs(date_from, date_to, mark, aade_user, aade_key, debug, save_excel):
+        import time
+        time.sleep(0.1)
+        return [], []
+
+    monkeypatch.setattr('app.request_docs', fake_request_docs)
+    os.environ['AADE_USER_ID'] = 'dummy'
+    os.environ['AADE_SUBSCRIPTION_KEY'] = 'dummy'
+
+    with app.test_client() as client, app.app_context():
+        app.config['LOGIN_DISABLED'] = True
+        resp = client.post('/fetch', data={
+            'date_from': '01/01/2026',
+            'date_to': '02/01/2026',
+            'vat_number': '123456789',
+            'use_credential': ''
+        })
+        assert resp.status_code == 200
+        assert b'Fetch started' in resp.data
+        # now poll notification API until the background thread adds the
+        # completion message
+        import time
+        notif = []
+        for _ in range(20):
+            nr = client.get('/api/global_notifications')
+            assert nr.status_code == 200
+            data = nr.get_json() or {}
+            notif = data.get('msgs') or []
+            if any('Fetch complete for VAT' in m for m in notif):
+                break
+            time.sleep(0.05)
+        assert any('Fetch complete for VAT' in m for m in notif), notif
+
+    os.environ.pop('AADE_USER_ID', None)
+    os.environ.pop('AADE_SUBSCRIPTION_KEY', None)
+
+
+def test_background_fetch_uses_group_folder(tmp_path, monkeypatch):
+    """The worker should still write into the active group's directory.
+
+    When the fetch thread runs there is no request context and
+    ``auth.get_active_group`` will return ``None``.  in the past this
+    meant documents landed in the global ``DATA_DIR`` rather than the
+    group's folder; the fix stores the directory in thread-local storage.
+    """
+    from app import app, get_customer_docs_file
+    import auth, threading
+
+    # make the base dir point inside tmp_path so we can inspect it
+    monkeypatch.setattr('app.BASE_DIR', str(tmp_path))
+
+    # fake active group: available on main thread only
+    class DummyGrp:
+        data_folder = 'grpX'
+        name = 'grpX'
+
+    def fake_active_group():
+        if threading.current_thread().name == 'MainThread':
+            return DummyGrp()
+        return None
+
+    monkeypatch.setattr('auth.get_active_group', fake_active_group)
+
+    # patch the fetch machinery to return a single invoice/summary
+    def fake_request_docs(date_from, date_to, mark, aade_user, aade_key, debug, save_excel):
+        return ([{'mark': 'ZZZ1'}], [{ 'mark': 'ZZZ1'}])
+    monkeypatch.setattr('app.request_docs', fake_request_docs)
+
+    os.environ['AADE_USER_ID'] = 'dummy'
+    os.environ['AADE_SUBSCRIPTION_KEY'] = 'dummy'
+
+    with app.test_client() as client, app.app_context():
+        app.config['LOGIN_DISABLED'] = True
+        resp = client.post('/fetch', data={
+            'date_from': '01/01/2026',
+            'date_to': '02/01/2026',
+            'vat_number': '111222333',
+            'use_credential': ''
+        })
+        assert resp.status_code == 200
+        assert b'Fetch started' in resp.data
+        # wait for completion message
+        import time
+        for _ in range(20):
+            nr = client.get('/api/global_notifications')
+            data = nr.get_json() or {}
+            if any('Fetch complete for VAT' in m for m in data.get('msgs', [])):
+                break
+            time.sleep(0.05)
+
+    os.environ.pop('AADE_USER_ID', None)
+    os.environ.pop('AADE_SUBSCRIPTION_KEY', None)
+
+    # the invoices file should exist under tmp_path/data/grpX
+    expected = os.path.join(str(tmp_path), 'data', 'grpX', '111222333_invoices.json')
+    assert os.path.exists(expected), f"expected group file {expected} to be written"
+
+
+
+def test_global_notifications_endpoint():
+    from app import global_notifications, app
+    # clear any state
+    global_notifications.clear()
+    # add a couple of messages
+    global_notifications.append('foo')
+    global_notifications.append('bar')
+    with app.test_client() as client, app.app_context():
+        app.config['LOGIN_DISABLED'] = True
+        resp = client.get('/api/global_notifications')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('msgs') == ['foo', 'bar']
+        # second call should return empty list
+        resp2 = client.get('/api/global_notifications')
+        assert resp2.get_json().get('msgs') == []
+
 def test_find_client_no_default():
     # helper should return None when a vat/name isn't found instead of
     # falling back to the first credential in the list.
@@ -146,6 +293,8 @@ def test_find_client_no_default():
 
 
 def test_append_summary_promotes_classification(tmp_path):
+    # ensure no legacy flag influences summary logic
+    os.environ.pop('LEGACY_FETCH_MODE', None)
     vat = "999111333"
     summary_path = get_customer_summary_file(vat)
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
