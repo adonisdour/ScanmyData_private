@@ -1319,7 +1319,7 @@ DEFAULT_CRED_PATH = ROOT_DIR / "data" / "credentials.json"
 CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH", DEFAULT_CRED_PATH))
 
 VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
-VAT_RATE_NUMERIC = ["0", "6", "13", "17", "24"]
+VAT_RATE_NUMERIC = ["0", "3", "4", "6", "9", "13", "17", "24"]
 
 SERIES_SETTING_KEYS = [
     "invoice_general",

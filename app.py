@@ -1167,7 +1167,11 @@ def _find_client(creds, vat=None, name=None):
                     return c
     except Exception:
         pass
-    return creds[0] if creds else None
+    # do not return a default credential when no match is found; callers
+    # will handle a None appropriately (e.g. falling back to active session
+    # object).  Returning the first item caused mismatches in multi-client
+    # tests.
+    return None
 
 def _load_all_credentials():
     try:
@@ -1498,9 +1502,9 @@ VAT_MAP = {
     "4": "ΦΠΑ 17%",
     "5": "ΦΠΑ 9%",
     "6": "ΦΠΑ 4%",
-    "7": "Εξαιρούμενο άρθρο 39α",
-    "8": "Εξαιρούμενο άρθρο 47β",
-    "9": "Άνευ ΦΠΑ",
+    "7": "Άνευ ΦΠΑ",
+    "8": "Εξαιρούμενο άρθρο 39α",
+    "9": "Εξαιρούμενο άρθρο 47β",
 }
 # ==== app.py (HEAD) ====
 from pathlib import Path
@@ -1511,7 +1515,7 @@ DEFAULT_CRED_PATH = ROOT_DIR / "data" / "credentials.json"
 CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH", DEFAULT_CRED_PATH))
 
 VAT_KEYS = ["0%", "6%", "13%", "17%", "24%"]
-VAT_RATE_NUMERIC = ["0", "6", "13", "17", "24"]
+VAT_RATE_NUMERIC = ["0", "3", "4", "6", "9", "13", "17", "24"]
 
 
 def _normalize_repeat_mapping(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -7665,18 +7669,97 @@ def set_active_credential():
 
 # ---------------- Fetch page ----------------
 # ---------------- Helpers for per-customer JSON & summary ----------------
+def _is_receipt_record(r: dict) -> bool:
+    # extracted helper used by both append and pruning logic
+    if not isinstance(r, dict):
+        return False
+    if r.get("_is_receipt") or r.get("is_receipt"):
+        return True
+    t = str(r.get("type") or "").strip()
+    if t.startswith("8"):
+        return True
+    return False
+
+
 def append_doc_to_customer_file(doc, vat):
     """
-    Add a doc to per-customer JSON file, avoiding duplicates.
+    Add or update a detailed document in the per-customer JSON file.
+
+    Behavior differs depending on whether ``doc`` represents an invoice or a
+    receipt.  Only invoices participate in the mark-based dedup/merge logic;
+    receipts are treated as distinct records and will be appended even if an
+    entry with the same MARK already exists (to preserve the full audit
+    trail).
+
+    Identification of a receipt is best-effort and uses any available flag
+    produced by the fetch machinery (``_is_receipt`` or ``is_receipt``) or
+    a ``type`` code beginning with ``8``.  This mirrors the same heuristic
+    used elsewhere in the application.
+
+    The implementation now behaves fully like CRUD:
+      * **Create** when a brand-new mark appears.
+      * **Update** existing entry when the same mark is fetched again (any
+        field change, or promotion to χαρακτηρισμενο), merging new values
+        and stamping ``updated_at`` on promotions.
+      * **Delete** stray duplicates automatically – if the cache already
+        contains multiple rows for the same invoice mark (perhaps due to a
+        previous bug), only one record is kept and extras are removed.
+
+    Receipts still bypass the mark-based merge and continue to append
+    duplicates only when the entire payload differs.
+
     Filename (per group): <group_path>/{VAT}_invoices.json
     """
     if not vat:
         return False
 
-    # ΠΑΛΙΑ: customer_file = os.path.join(DATA_DIR, f"{vat}_invoices.json")
     customer_file = get_customer_docs_file(vat)
-
     cache = json_read(customer_file)
+
+    mark = str(doc.get("mark", "")).strip()
+    is_receipt = _is_receipt_record(doc)
+
+    if mark and not is_receipt:
+        # gather indices of every entry with this mark
+        matching_idxs = []
+        for idx, existing in enumerate(cache):
+            try:
+                emark = str(existing.get("mark", "")).strip()
+            except Exception:
+                emark = ""
+            if emark and emark == mark:
+                matching_idxs.append(idx)
+
+        if matching_idxs:
+            first_idx = matching_idxs[0]
+            existing = cache[first_idx]
+            old_class = str(existing.get("classification", "")).strip()
+            new_class = str(doc.get("classification", "")).strip()
+
+            try:
+                same_payload = json.dumps(existing, sort_keys=True, ensure_ascii=False) == json.dumps(doc, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                same_payload = False
+
+            # need update if payload changed, classification changed, or
+            # there are stray duplicates to remove
+            if not same_payload or old_class != new_class or len(matching_idxs) > 1:
+                merged = dict(existing)
+                merged.update(doc)
+                if new_class == "χαρακτηρισμενο" and old_class != new_class:
+                    merged["updated_at"] = datetime.datetime.utcnow().isoformat()
+                cache[first_idx] = merged
+                # drop any extras we found previously
+                for j in reversed(matching_idxs[1:]):
+                    cache.pop(j)
+                json_write(customer_file, cache)
+                try:
+                    log.info("append_doc_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
+                except Exception:
+                    pass
+                return True
+            return False
+    # otherwise (receipt or no existing invoice) do simple duplicate check and append
     sig = json.dumps(doc, sort_keys=True, ensure_ascii=False)
     for d in cache:
         try:
@@ -7689,25 +7772,140 @@ def append_doc_to_customer_file(doc, vat):
     json_write(customer_file, cache)
     return True
 
+
+# ------------ helper for pruning stale invoice records -------------------
+def _date_in_range(date_str: str, from_str: str, to_str: str) -> bool:
+    """Return True if *date_str* lies between *from_str* and *to_str*.
+
+    Dates are normalized with ``normalize_input_date_to_iso`` (dd/mm/YYYY
+    ↦ ISO) and compared as ISO strings.
+    """
+    if not date_str or not from_str or not to_str:
+        return False
+    def _to_iso(s: str) -> str | None:
+        iso = normalize_input_date_to_iso(s)
+        return iso
+    d = _to_iso(date_str)
+    if not d:
+        return False
+    f = _to_iso(from_str)
+    t = _to_iso(to_str)
+    if not f or not t:
+        return False
+    return f <= d <= t
+
+
+def prune_customer_invoices(vat: str, keep_marks: set, 
+                             date_from: str = None, date_to: str = None) -> bool:
+    """
+    Remove any **invoice** records from the per-customer JSON file whose
+    mark is *not* present in ``keep_marks`` **and** whose issueDate falls
+    within the optional ``date_from``/``date_to`` window.  Invoices outside
+    that window are preserved.  Receipts are never deleted.
+
+    ``date_from`` and ``date_to`` should be strings in dd/mm/YYYY (the
+    same format produced by the fetch UI) or ISO; if either is missing the
+    function falls back to pruning all non-kept marks (legacy behaviour).
+
+    Returns True if the file was modified, False otherwise.
+    """
+    # we need a vat; if both keep_marks and date range are empty there's
+    # nothing sensible to prune, so bail out early.  but an empty keep_marks
+    # is acceptable when a date window is supplied.
+    if not vat:
+        return False
+    if not keep_marks and not date_from and not date_to:
+        return False
+    customer_file = get_customer_docs_file(vat)
+    cache = json_read(customer_file)
+    new_cache = []
+    changed = False
+    for rec in cache:
+        mark = str(rec.get("mark", "")).strip()
+        if mark and mark not in keep_marks and not _is_receipt_record(rec):
+            # only remove if invoice lies inside the supplied date window
+            if date_from and date_to:
+                if _date_in_range(rec.get("issueDate", ""), date_from, date_to):
+                    changed = True
+                    continue
+            else:
+                changed = True
+                continue
+        new_cache.append(rec)
+    if changed:
+        json_write(customer_file, new_cache)
+    return changed
+
+
 def append_summary_to_customer_file(summary, vat):
     """
     Save summary for a customer into per-customer summary JSON
     Filename: data/{VAT}_summary.json
+
+    Matching behaviour mirrors ``append_doc_to_customer_file``: invoices are
+    deduped/merged by MARK, while receipts are always appended.  Promotion
+    from unclassified to χαρακτηρισμενο is recorded with ``updated_at``.
+    The old fallback-identity logic for receipts using
+    ``RECEIPT_FALLBACK_MARK`` is preserved.
     """
     if not vat:
         return False
     summary_file = group_path(f"{vat}_summary.json")
     summaries = json_read(summary_file)
     mark = str(summary.get("mark", "")).strip()
-    for s in summaries:
-        if str(s.get("mark", "")).strip() != mark:
+
+    def _is_receipt_summary(s: dict) -> bool:
+        if not isinstance(s, dict):
+            return False
+        if s.get("is_receipt") or s.get("_is_receipt"):
+            return True
+        t = str(s.get("type") or "").strip()
+        if t.startswith("8"):
+            return True
+        return False
+
+    is_receipt = _is_receipt_summary(summary)
+
+    for idx, s in enumerate(summaries):
+        try:
+            if str(s.get("mark", "")).strip() != mark:
+                continue
+        except Exception:
             continue
-        # For fallback receipt MARK, dedupe only when it is the same actual receipt identity.
+        # existing match
         if mark == RECEIPT_FALLBACK_MARK:
+            # fallback dedupe uses stronger identity check
             if _same_receipt_identity(summary, s):
                 return False
+            else:
+                # continue scanning others (shouldn't normally happen)
+                continue
+        if is_receipt:
+            # receipts do not merge; treat as distinct record
             continue
-        return False
+        # at this point we have same mark and not a receipt
+        old_class = str(s.get("classification", "")).strip()
+        new_class = str(summary.get("classification", "")).strip()
+        # determine if anything at all changed
+        try:
+            same_payload = json.dumps(s, sort_keys=True, ensure_ascii=False) == json.dumps(summary, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            same_payload = False
+        if same_payload and old_class == new_class:
+            return False
+        # merge and possibly stamp updated_at
+        merged = dict(s)
+        merged.update(summary)
+        if new_class == "χαρακτηρισμενο" and old_class != new_class:
+            merged["updated_at"] = datetime.datetime.utcnow().isoformat()
+        summaries[idx] = merged
+        json_write(summary_file, summaries)
+        try:
+            log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
+        except Exception:
+            pass
+        return True
+    # no matching mark or only receipts found -> append normally
     summaries.append(summary)
     json_write(summary_file, summaries)
     return True
@@ -7803,15 +8001,31 @@ def fetch():
             )
             added_docs = 0
             added_summaries = 0
+            # track marks seen during this run so we can prune stale
+            # invoices later (CRUD behaviour on invoices.json)
+            seen_marks = set()
             for d in all_rows:
                 if vat:
                     d["AFM_counterpart"] = vat  # προσθέτουμε AFM
+                if d.get("mark"):
+                    seen_marks.add(str(d.get("mark")).strip())
                 if append_doc_to_customer_file(d, vat):
                     added_docs += 1
 
             for s in summary_list:
                 if append_summary_to_customer_file(s, vat):
                     added_summaries += 1
+
+            # delete any invoice entries that were within the current fetch
+            # interval but were *not* returned.  This keeps older invoices
+            # outside the range intact when the user fetches overlapping
+            # periods.
+            if vat and seen_marks:
+                try:
+                    prune_customer_invoices(vat, seen_marks, date_from=d1, date_to=d2)
+                except Exception:
+                    # best-effort, ignore pruning errors
+                    pass
 
             # Track last fetch date for this selected client (prefer VAT key).
             fetch_key = _get_fetch_tracking_key(selected, vat)

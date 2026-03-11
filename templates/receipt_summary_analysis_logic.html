@@ -1,4 +1,6 @@
 /* ====== Render summary lines into modal and wire handlers ====== */
+
+
  function renderSummaryLinesFromObject(obj) {
   // keep a reference so other logic (toggles) can re-open the modal later
   window._lastSummaryObj = obj || {};
@@ -15,6 +17,10 @@
   } catch (_) {}
   const receiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked) || !!obj?.is_receipt;
   const RECEIPT_CATEGORY = 'αποδειξακια';
+
+  if (!receiptsMode) {
+    // nothing special for invoices
+  }
   // if the summary object itself is marked as requiring analysis, bypass the
   // normal summary modal and open the dedicated receipt-classification modal
   // open classification modal whenever we are handling receipts and
@@ -202,11 +208,21 @@
 
   function normalizeVatCategoryValue(raw){
     let norm = (raw || '').toString().toLowerCase().trim().replace(',', '.');
+
+    // Numeric VAT category codes from myDATA (ν. 5144/2024)
+    if (/^[1-7]$/.test(norm)) {
+      const codeMap = { '1': '24%', '2': '13%', '3': '6%', '4': '17%', '5': '9%', '6': '4%', '7': '0%' };
+      return codeMap[norm] || '';
+    }
+
     if (/\b24\b|24%|24\.0/.test(norm)) return '24%';
     if (/\b17\b|17%|17\.0/.test(norm)) return '17%';
     if (/\b13\b|13%|13\.0/.test(norm)) return '13%';
     if (/\b6\b|6%|6\.0/.test(norm)) return '6%';
-    if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|exempt|no\s*vat/.test(norm)) return '0%';
+    if (/\b9\b|9%|9\.0/.test(norm)) return '9%';
+    if (/\b4\b|4%|4\.0/.test(norm)) return '4%';
+    if (/\b3\b|3%|3\.0/.test(norm)) return '3%';
+    if (/\b0\b|0%|0\.0|μηδεν|απαλλ|χωρις|χωρίς|ανευ|άνευ|exempt|no\s*vat|39α|47β/.test(norm)) return '0%';
     return (raw || '').toString().trim();
   }
 
@@ -258,6 +274,20 @@
     
     lines.forEach((ln, idx) => {
       const tr = document.createElement('tr');
+      // invoice-only debug for each line
+      const isReceiptsMode = !!(document.getElementById('useReceiptsSwitch')?.checked);
+      if (!isReceiptsMode) {
+        try {
+          const rawVat = ln.vatCategory || ln.vat || '';
+          const normVat = (typeof normalizeVatKey === 'function') ? normalizeVatKey(rawVat) : rawVat;
+          let categoriesForVat;
+          if (receiptsAnalysis) {
+            categoriesForVat = getCategoriesForVatInReceiptAnalysis(rawVat, categories || []);
+          } else {
+            categoriesForVat = (categories || []).filter(c => categoryAllowedForVat(c, rawVat));
+          }
+        } catch(e){ }
+      }
       tr.dataset.lineId = ln.id || ('l' + idx);
       tr.dataset.vat = ln.vatCategory || ln.vat || '';
 
@@ -514,17 +544,64 @@
   }
 
   function getCategoriesForVatInReceiptAnalysis(vatKey, baseCategories){
-    let receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
-      ? window.RECEIPT_CUSTOMER_CATEGORIES.slice()
-      : (Array.isArray(window.__RC_RECEIPT_CATEGORIES_CACHE) ? window.__RC_RECEIPT_CATEGORIES_CACHE.slice() : []);
+    /*
+      Historically this helper was used for both invoices and receipts, but its
+      name reflects the receipt-analysis flow. the change requested by the user
+      is to *only* adjust dropdown lists for invoices (i.e. the normal mode) when
+      a category exists solely in the repeat-mapping modal. receipts should stay
+      with the original behaviour.
 
-    if ((!receiptOnly || !receiptOnly.length) && Array.isArray(baseCategories) && baseCategories.length) {
-      receiptOnly = baseCategories.slice();
+      We decide based on the global "receipts" flags exposed elsewhere; when
+      either `isReceiptsOn()` or `isReceiptAnalysisActive()` is true we treat the
+      call as part of a receipt flow and skip merging repeat-mapping entries.
+      Otherwise the routine runs the invoice-specific logic (the repeat lookup).
+    */
+    const receiptsMode =
+      (typeof isReceiptsOn === 'function' && isReceiptsOn()) ||
+      (typeof isReceiptAnalysisActive === 'function' && isReceiptAnalysisActive());
+
+    // For invoices, always start from invoice/base categories.
+    // For receipts, use receipt-specific category caches first.
+    let receiptOnly = [];
+    if (receiptsMode) {
+      receiptOnly = (Array.isArray(window.RECEIPT_CUSTOMER_CATEGORIES) && window.RECEIPT_CUSTOMER_CATEGORIES.length)
+        ? window.RECEIPT_CUSTOMER_CATEGORIES.slice()
+        : (Array.isArray(window.__RC_RECEIPT_CATEGORIES_CACHE) ? window.__RC_RECEIPT_CATEGORIES_CACHE.slice() : []);
+      if ((!receiptOnly || !receiptOnly.length) && Array.isArray(baseCategories) && baseCategories.length) {
+        receiptOnly = baseCategories.slice();
+      }
+    } else {
+      // Keep invoice mode aligned with repeat-mapping modal source: use
+      // CUSTOMER_CATEGORIES first, then fallback to passed base categories.
+      receiptOnly = (Array.isArray(window.CUSTOMER_CATEGORIES) && window.CUSTOMER_CATEGORIES.length)
+        ? window.CUSTOMER_CATEGORIES.slice()
+        : (Array.isArray(baseCategories) ? baseCategories.slice() : []);
+    }
+
+    // only merge repeat-mapping categories when NOT in receipts mode
+    if (!receiptsMode && typeof getRepeatMappingCategoriesForVat === 'function') {
+      const repeatCats = getRepeatMappingCategoriesForVat(vatKey) || [];
+      repeatCats.forEach(c => {
+        if (c && !receiptOnly.includes(c)) receiptOnly.push(c);
+      });
     }
 
     if (!receiptOnly.includes('αποδειξακια')) receiptOnly.unshift('αποδειξακια');
 
-    return normalizeCategoryListSafe(receiptOnly).filter(c => receiptCategoryAllowedForVatStrict(c, vatKey));
+    const normalizedCategories = normalizeCategoryListSafe(receiptOnly);
+
+    // In invoice mode use the same VAT-category availability logic used by the
+    // repeat-mapping modal (categoryAllowedForVat), so dropdown behavior is
+    // identical even when repeat entry is disabled.
+    if (!receiptsMode) {
+      if (typeof categoryAllowedForVat === 'function') {
+        const allowedByRepeatLogic = normalizedCategories.filter(c => categoryAllowedForVat(c, vatKey));
+        if (allowedByRepeatLogic.length) return allowedByRepeatLogic;
+      }
+      return normalizedCategories;
+    }
+
+    return normalizedCategories.filter(c => receiptCategoryAllowedForVatStrict(c, vatKey));
   }
 
   function ensureSummaryCategories(){
@@ -533,6 +610,11 @@
     const existingNormalized = normalizeCategoryListSafe(existing || []);
     const existingOnlyReceiptPlaceholder = existingNormalized.length === 1
       && String(existingNormalized[0] || '').trim().toLowerCase() === 'αποδειξακια';
+
+    // debug for invoices only
+    if (!receiptsAnalysis) {
+      // debug removed
+    }
 
     if (Array.isArray(existing) && existing.length && !(receiptsAnalysis && existingOnlyReceiptPlaceholder)) {
       window.__SUMMARY_CATEGORIES_FETCHED = true;
@@ -585,11 +667,15 @@
           } catch(_) {}
         }
         window.__SUMMARY_CATEGORIES_FETCHED = true;
-        return getCategories();
+        const cats = getCategories();
+        // no debug
+        return cats;
       })
       .catch(() => {
         window.__SUMMARY_CATEGORIES_FETCHED = true;
-        return getCategories();
+        const cats = getCategories();
+        // no debug
+        return cats;
       })
       .finally(() => {
         window.__SUMMARY_CATEGORIES_PROMISE = null;
@@ -806,8 +892,8 @@
     const hasOnlyReceiptPlaceholder = Array.isArray(categories)
       && categories.length === 1
       && String(categories[0] || '').trim().toLowerCase() === 'αποδειξακια';
-    const mustAwaitCategoryFetch = !window.__SUMMARY_CATEGORIES_FETCHED
-      && ((!categories || !categories.length) || (receiptsAnalysis && hasOnlyReceiptPlaceholder));
+    const missingCategories = (!categories || !categories.length) || (receiptsAnalysis && hasOnlyReceiptPlaceholder);
+    const mustAwaitCategoryFetch = missingCategories && !window.__SUMMARY_CATEGORIES_PROMISE;
 
     if (mustAwaitCategoryFetch) {
       const loading = document.createElement('div');
