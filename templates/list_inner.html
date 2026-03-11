@@ -145,125 +145,90 @@
               </style>
 
             <script>
-    // Defensive fallback: attach a minimal click handler immediately so the
-    // delete button works even if other JS fails or DOMContentLoaded handlers
-    // didn't run. It collects selected marks and shows the modal; on confirm
-    // it posts the same payload shape the main handler expects.
     (function(){
-      const btn = document.getElementById('deleteBtn');
-      if(!btn) return;
-      btn.addEventListener('click', function fallbackDeleteOpen(e){
-        console.log('list_inner fallback: deleteBtn click');
+      function collectDeleteMarks(){
         try{
-          // prefer Tabulator helper if available
-          let marks = [];
-          try{ if(window && typeof window._fbp_collect_marks_from_tabulator === 'function') marks = window._fbp_collect_marks_from_tabulator() || []; }catch(_){ marks = []; }
-          // fallback to DOM checkboxes
-          if(!marks || !marks.length){
-            Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
-              try{
-                const v = (cb.value||'').toString().trim();
-                if(v && v.toLowerCase() !== 'on') { marks.push(v); return; }
-                if(cb.dataset && cb.dataset.mark){ marks.push(String(cb.dataset.mark).trim()); return; }
-                const tr = cb.closest && cb.closest('tr');
-                if(tr && typeof window.parseRowToData === 'function'){
-                  const thead = document.querySelector('.summary-table thead');
-                  const colCount = thead? thead.querySelectorAll('th').length||0 : 0;
-                  const markColIndex = thead? (typeof window.findMarkCol === 'function' ? window.findMarkCol(thead) : -1) : -1;
-                  const d = window.parseRowToData ? window.parseRowToData(tr, colCount, markColIndex) : null;
-                  if(d && d._mark) marks.push(String(d._mark).trim());
-                }
-              }catch(_){ }
-            });
-          }
+          const marks = new Set();
+          try{
+            if(window && typeof window._fbp_collect_marks_from_tabulator === 'function'){
+              const selected = window._fbp_collect_marks_from_tabulator() || [];
+              if(Array.isArray(selected)) selected.forEach(v=>{ if(v) marks.add(String(v).trim()); });
+            }
+          }catch(_){ }
 
-          if(!marks || !marks.length){
-            // keep behavior consistent with other UI: show a quick alert
-            try{ if(typeof showModalAlert === 'function') { showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.');
-                  if(e && typeof e.stopImmediatePropagation==='function') e.stopImmediatePropagation();
-                  return;
-                } }catch(_){ }
-            uiAlert('Επίλεξε πρώτα γραμμές για διαγραφή.');
-            if(e && typeof e.stopImmediatePropagation==='function') e.stopImmediatePropagation();
-          }
-          const modal = document.getElementById('deleteModal');
-          const modalMsg = document.getElementById('deleteModalMessage');
-          if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;
-          if(modal) {
-            // force display in case other CSS rules conflict
-            modal.style.display = 'flex';
-            modal.classList.remove('hidden').classList.add('flex');
-            const closeBtn = document.getElementById('deleteModalClose');
-            if(closeBtn) closeBtn.addEventListener('click', ()=> {
-              modal.style.display = 'none';
-              modal.classList.add('hidden').classList.remove('flex');
-            });
-          }
-
-          const confirmBtn = document.getElementById('deleteConfirm');
-          if(!confirmBtn) return;
-          // replace confirm handler with a safe submit that builds the same payload
-          confirmBtn.onclick = function fallbackConfirm(){
+          Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
             try{
-              confirmBtn.disabled = true;
-              const spinner = document.getElementById('deleteSpinner'); if(spinner) spinner.classList.remove('hidden');
-              const tdelete = (function(){ try{ return Array.isArray(marks)?marks.slice() : []; }catch(_){ return []; } })();
-              if(!tdelete.length){ if(modal) modal.classList.add('hidden').classList.remove('flex'); confirmBtn.disabled=false; if(spinner) spinner.classList.add('hidden'); return; }
-              const form = document.createElement('form'); form.method='POST'; form.action = (window.DELETE_ENDPOINT || "{{ url_for('delete_invoices') }}");
-              const existingCsrf = document.querySelector('input[name="csrf_token"]');
-              if(existingCsrf){ const t = document.createElement('input'); t.type='hidden'; t.name='csrf_token'; t.value=existingCsrf.value; form.appendChild(t); }
-              tdelete.forEach(v=>{ const a=document.createElement('input'); a.type='hidden'; a.name='delete_mark'; a.value=v; form.appendChild(a); const b=document.createElement('input'); b.type='hidden'; b.name='delete_mark[]'; b.value=v; form.appendChild(b); });
-              const blob = document.createElement('input'); blob.type='hidden'; blob.name='delete_mark_json'; blob.value = JSON.stringify(tdelete); form.appendChild(blob);
-              const dbg = document.createElement('input'); dbg.type='hidden'; dbg.name='client_submitted_marks'; dbg.value = JSON.stringify(tdelete); form.appendChild(dbg);
-              document.body.appendChild(form); form.submit();
-            }catch(err){ console.warn('fallbackConfirm failed', err); confirmBtn.disabled=false; }
-          };
-        }catch(err){ console.warn('fallbackDeleteOpen failed', err); }
-      }, { passive:true });
+              const v = (cb.value||'').toString().trim();
+              if(v && v.toLowerCase() !== 'on') { marks.add(v); return; }
+              if(cb.dataset && cb.dataset.mark){ marks.add(String(cb.dataset.mark).trim()); return; }
+              const tr = cb.closest && cb.closest('tr');
+              if(tr && typeof window.parseRowToData === 'function'){
+                const thead = document.querySelector('.summary-table thead');
+                const colCount = thead ? thead.querySelectorAll('th').length || 0 : 0;
+                const markColIndex = thead && typeof window.findMarkCol === 'function' ? window.findMarkCol(thead) : -1;
+                const data = window.parseRowToData(tr, colCount, markColIndex);
+                if(data && data._mark) marks.add(String(data._mark).trim());
+              }
+            }catch(_){ }
+          });
+
+          return Array.from(marks).filter(Boolean);
+        }catch(_){
+          return [];
+        }
+      }
+
+      function closeDeleteModal(){
+        const modal = document.getElementById('deleteModal');
+        if(!modal) return;
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+
+      function openDeleteModal(count){
+        const modal = document.getElementById('deleteModal');
+        const modalMsg = document.getElementById('deleteModalMessage');
+        if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${count} εγγραφή(ες);`;
+        if(!modal) return;
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+      }
+
+      function showDeleteSelectionAlert(){
+        try{
+          if(window.__fbpDeleteAlertOpen) return;
+          window.__fbpDeleteAlertOpen = true;
+          if(typeof showModalAlert === 'function'){
+            const maybePromise = showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.');
+            if(maybePromise && typeof maybePromise.finally === 'function'){
+              maybePromise.finally(()=>{ window.__fbpDeleteAlertOpen = false; });
+              return;
+            }
+          } else if(typeof uiAlert === 'function'){
+            uiAlert('Επίλεξε πρώτα γραμμές για διαγραφή.');
+          }
+        }catch(_){
+        } finally {
+          setTimeout(()=>{ window.__fbpDeleteAlertOpen = false; }, 300);
+        }
+      }
+
+      window.FBP_DELETE = {
+        collectMarks: collectDeleteMarks,
+        closeModal: closeDeleteModal,
+        openModal: openDeleteModal,
+        showNoSelectionAlert: showDeleteSelectionAlert,
+      };
     })();
     </script>
   </div>
 
 <script>
-// capture-phase listener: ensure delete modal opens even if other handlers block
-// also close modal when × clicked
 document.addEventListener('click', function(e){
-  if(e.target && e.target.id==='deleteBtn'){
-    // collect marks same way as fallback
-    let marks = [];
-    try{ if(window && typeof window._fbp_collect_marks_from_tabulator === 'function') marks = window._fbp_collect_marks_from_tabulator() || []; }catch(_){ }
-    if(!marks || !marks.length){
-      Array.from(document.querySelectorAll('input[name="delete_mark"]:checked')).forEach(cb=>{
-        try{
-          const v = (cb.value||'').toString().trim();
-          if(v && v.toLowerCase() !== 'on') { marks.push(v); return; }
-          if(cb.dataset && cb.dataset.mark){ marks.push(String(cb.dataset.mark).trim()); return; }
-          const tr = cb.closest && cb.closest('tr');
-          if(tr && typeof window.parseRowToData === 'function'){
-            const thead = document.querySelector('.summary-table thead');
-            const colCount = thead? thead.querySelectorAll('th').length||0 : 0;
-            const markColIndex = thead? (typeof window.findMarkCol === 'function' ? window.findMarkCol(thead) : -1) : -1;
-            const d = window.parseRowToData ? window.parseRowToData(tr, colCount, markColIndex) : null;
-            if(d && d._mark) marks.push(String(d._mark).trim());
-          }
-        }catch(_){ }
-      });
-    }
-    if(!marks || !marks.length){
-      try{ if(typeof showModalAlert==='function') showModalAlert('Ενημέρωση','Επίλεξε πρώτα γραμμές για διαγραφή.'); }
-      catch(_){ }
-      return;
-    }
-    const modal = document.getElementById('deleteModal');
-    const modalMsg = document.getElementById('deleteModalMessage');
-    if(modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${marks.length} εγγραφή(ες);`;
-    if(modal){ modal.style.display='flex'; modal.classList.remove('hidden'); modal.classList.add('flex'); }
-  }
-  // close button handler
-  if(e.target && e.target.id==='deleteModalClose'){
-    console.log('capture close clicked');
-    const m = document.getElementById('deleteModal');
-    if(m){ m.style.display='none'; m.classList.add('hidden'); m.classList.remove('flex'); }
+  if(e.target && e.target.id==='deleteModalClose' && window.FBP_DELETE){
+    window.FBP_DELETE.closeModal();
   }
 }, true);
 </script>
@@ -860,36 +825,9 @@ document.addEventListener('click', function(e){
       
     }
 
-    const deleteBtn=qs('#deleteBtn'); if(deleteBtn){
-      const modal=qs('#deleteModal');
-      const modalMsg=qs('#deleteModalMessage');
-      const cancelBtn=qs('#deleteCancel');
-      const confirmBtn=qs('#deleteConfirm');
-      const spinner=qs('#deleteSpinner');
-      let toDelete=[];
-      deleteBtn.addEventListener('click', async ()=>{
-        console.log('inline list_inner: deleteBtn clicked');
-        // Prefer Tabulator selection if available
-        try{
-          if(window && typeof window._fbp_collect_marks_from_tabulator === 'function'){
-            toDelete = window._fbp_collect_marks_from_tabulator() || [];
-          }
-        }catch(_){ }
-        if(!toDelete || !toDelete.length){ toDelete = qsa('input[name="delete_mark"]:checked').map(cb=>cb.value).filter(v=>v.trim()!==''); }
-        console.log('inline list_inner: toDelete after fallback', toDelete);
-        if(!toDelete.length){ await showModalAlert('Ενημέρωση', 'Επίλεξε πρώτα γραμμές για διαγραφή.'); return; }
-        modalMsg.textContent=`Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
-        if(modal){ modal.style.display='flex'; }
-        modal.classList.remove('hidden').classList.add('flex');
-      });
-      
-      cancelBtn?.addEventListener('click', ()=>{
-        if(modal){ modal.style.display='none'; }
-        modal.classList.add('hidden').classList.remove('flex');
-      });
-      // The actual submit is handled by the consolidated delete handler below.
-      // Keep this confirmBtn listener inert to avoid duplicate submissions.
-      confirmBtn?.addEventListener('click', ()=>{ /* noop - handled elsewhere */ });
+    const cancelBtn=qs('#deleteCancel');
+    if(cancelBtn && window.FBP_DELETE){
+      cancelBtn.addEventListener('click', ()=> window.FBP_DELETE.closeModal());
     }
   });
 })();
@@ -900,6 +838,9 @@ document.addEventListener('click', function(e){
 (function(){
   const $ = window.jQuery;
   function collectCheckedMarks(){
+    if(window.FBP_DELETE && typeof window.FBP_DELETE.collectMarks === 'function'){
+      return window.FBP_DELETE.collectMarks();
+    }
     // Combine Tabulator live selection with any legacy DOM checkboxes and dedupe
     try{
       const set = new Set();
@@ -938,18 +879,41 @@ document.addEventListener('click', function(e){
     const spinner     = document.getElementById('deleteSpinner');
 
     if(!deleteBtn || !modal || !confirmBtn) return;
+    if(deleteBtn.dataset.deleteBound === '1') return;
+    deleteBtn.dataset.deleteBound = '1';
 
-    deleteBtn.addEventListener('click', ()=>{
+    deleteBtn.addEventListener('click', (event)=>{
+      event.preventDefault();
       const toDelete = collectCheckedMarks();
-      if (!toDelete.length){  return; }
-      if (modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
-      modal.classList.remove('hidden').classList.add('flex');
+      if (!toDelete.length){
+        if(window.FBP_DELETE && typeof window.FBP_DELETE.showNoSelectionAlert === 'function'){
+          window.FBP_DELETE.showNoSelectionAlert();
+        }
+        return;
+      }
+      if(window.FBP_DELETE && typeof window.FBP_DELETE.openModal === 'function'){
+        window.FBP_DELETE.openModal(toDelete.length);
+      } else {
+        if (modalMsg) modalMsg.textContent = `Θες σίγουρα να διαγράψεις ${toDelete.length} εγγραφή(ες);`;
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+      }
 
       // override τυχόν προηγούμενα handlers για να μη διπλοστέλνει
       confirmBtn.onclick = ()=>{
         // Re-collect marks at confirmation time (in case selection changed)
         const tdelete = collectCheckedMarks() || [];
-        if(!tdelete.length){ if(modal){ modal.style.display='none'; } modal.classList.add('hidden').classList.remove('flex'); return; }
+        if(!tdelete.length){
+          if(window.FBP_DELETE && typeof window.FBP_DELETE.closeModal === 'function'){
+            window.FBP_DELETE.closeModal();
+          } else if(modal){
+            modal.style.display='none';
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+          }
+          return;
+        }
         confirmBtn.disabled = true;
         if (spinner) spinner.classList.remove('hidden');
 
@@ -988,7 +952,15 @@ document.addEventListener('click', function(e){
     });
 
     if (cancelBtn){
-      cancelBtn.addEventListener('click', ()=> modal.classList.add('hidden').classList.remove('flex'));
+      cancelBtn.addEventListener('click', ()=>{
+        if(window.FBP_DELETE && typeof window.FBP_DELETE.closeModal === 'function'){
+          window.FBP_DELETE.closeModal();
+          return;
+        }
+        modal.style.display='none';
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      });
     }
   });
 })();
