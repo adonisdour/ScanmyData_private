@@ -269,8 +269,48 @@ document.addEventListener("DOMContentLoaded", function() {
       vatInput.value = selectedOption.dataset.vat || '';
     }
   } catch(e) {}
+
+  let fetchPollInterval = null;
+  const waitOverlay = document.getElementById('waitOverlay');
+
+  function showWaitOverlay() {
+    if (waitOverlay) waitOverlay.style.display = 'flex';
+  }
+  function hideWaitOverlay() {
+    if (waitOverlay) waitOverlay.style.display = 'none';
+  }
+
+  async function pollFetchCompletion() {
+    try {
+      const res = await fetch('/api/global_notifications');
+      if (!res.ok) return;
+      const data = await res.json();
+      const msgs = Array.isArray(data.msgs) ? data.msgs : [];
+      const vat = (document.getElementById('vat_input')?.value || '').trim();
+      const match = msgs.find(m => typeof m === 'string' && m.includes('Λήψη ολοκληρώθηκε για ΑΦΜ') && (!vat || m.includes(`ΑΦΜ ${vat}`)));
+      if (match) {
+        await loadLastFetch();
+        stopFetchPolling();
+        hideWaitOverlay();
+      }
+    } catch (e) {
+      // ignore transient errors; we'll try again
+    }
+  }
+
+  function startFetchPolling() {
+    if (fetchPollInterval) return;
+    fetchPollInterval = setInterval(pollFetchCompletion, 3000);
+  }
+
+  function stopFetchPolling() {
+    if (!fetchPollInterval) return;
+    clearInterval(fetchPollInterval);
+    fetchPollInterval = null;
+  }
+
   loadLastFetch();
-  
+
   // Αποτρέψου αλλαγή του credential αν είναι κλειδωμένο
   credentialSelect.addEventListener('change', (e) => {
     const vatInput = document.getElementById('vat_input');
@@ -307,7 +347,16 @@ document.addEventListener("DOMContentLoaded", function() {
     vatInputEl.addEventListener('blur', loadLastFetch);
     vatInputEl.addEventListener('change', loadLastFetch);
   }
-  
+
+  // When the form is submitted, show the wait overlay and start polling
+  const fetchForm = document.querySelector('form');
+  if (fetchForm) {
+    fetchForm.addEventListener('submit', () => {
+      showWaitOverlay();
+      startFetchPolling();
+    });
+  }
+
   // Αποθήκευσε την αρχική τιμή
   credentialSelect.setAttribute('data-original-value', credentialSelect.value);
 

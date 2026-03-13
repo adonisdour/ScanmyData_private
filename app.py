@@ -8324,7 +8324,7 @@ def fetch():
                 log.exception("Fetch error (background)")
             # broadcast notification for any listening clients
             try:
-                global_notifications.append(f"Fetch complete for VAT {vat}: {added_docs} docs, {added_summaries} summaries.")
+                global_notifications.append(f"Λήψη ολοκληρώθηκε για ΑΦΜ {vat}: {added_docs} έγγραφα, {added_summaries} συνοψίσεις.")
             except Exception:
                 pass
 
