@@ -1668,12 +1668,15 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
             if iname:
                 target["issuer_name"] = str(iname).strip()
 
+        explicit_paa = None
+        m_aa = re.search(r"(?:Προοδευτικ(?:ός|ο)\s*α\/?α|Αρ\.?\s*Παραστατικού|Α\s*\/\s*Α|A\s*\/\s*A|(?:\bΑΑ\b|\bAA\b)|Serial|No\.)\s*[:#]?\s*#?\s*([A-Za-z0-9\-_/]+)", page_text, re.I)
+        if m_aa:
+            explicit_paa = m_aa.group(1)
+        if explicit_paa:
+            target["progressive_aa"] = str(explicit_paa).strip()
+
         if not target.get("progressive_aa"):
             paa = _extract_input_or_text(soup_obj, "saa", "s_aa", "aa", "invoiceNo", "invoiceNumber", "serial")
-            if not paa:
-                m_aa = re.search(r"(?:Προοδευτικ(?:ός|ο)\s*α\/?α|Αρ\.?\s*Παραστατικού|Serial|No\.)\s*[:]?\s*([A-Za-z0-9\-_/]+)", page_text, re.I)
-                if m_aa:
-                    paa = m_aa.group(1)
             if paa:
                 target["progressive_aa"] = str(paa).strip()
 
@@ -1780,6 +1783,10 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
     seen = set()
     candidate_urls = [u for u in candidate_urls if u and not (u in seen or seen.add(u))]
 
+    # Parse static HTML early so we can preserve fields (e.g. progressive_aa)
+    # even when we later return data from MyData.
+    _parse_html(out, html, soup)
+
     for cu in candidate_urls:
         try:
             rr = sess.get(cu, timeout=timeout, allow_redirects=True)
@@ -1796,6 +1803,11 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
         if debug: print("simpleinvoicing resolved myDATA URL:", mydata_url)
         sub = scrape_mydatapi(mydata_url, timeout=timeout, debug=debug)
         if any(sub.get(k) for k in ("issuer_vat", "issue_date", "total_amount", "MARK")):
+            for key in ("progressive_aa", "series", "doc_type", "issuer_name"):
+                if (not sub.get(key)) and out.get(key):
+                    sub[key] = out.get(key)
+            if out.get("is_invoice") is not None:
+                sub["is_invoice"] = out.get("is_invoice")
             sub["source"] = "SimpleInvoicing->MyData"
             return sub
 
@@ -1819,12 +1831,30 @@ def scrape_simpleinvoicing(url, timeout=20, debug=False):
         if debug: print("simpleinvoicing browser-resolved myDATA URL:", mydata_url)
         sub = scrape_mydatapi(mydata_url, timeout=timeout, debug=debug)
         if any(sub.get(k) for k in ("issuer_vat", "issue_date", "total_amount", "MARK")):
+            for key in ("progressive_aa", "series", "doc_type", "issuer_name"):
+                if (not sub.get(key)) and out.get(key):
+                    sub[key] = out.get(key)
+            if out.get("is_invoice") is not None:
+                sub["is_invoice"] = out.get("is_invoice")
             sub["source"] = "SimpleInvoicing->MyData"
             return sub
 
     _parse_html(out, html, soup)
     if rendered_html:
         _parse_html(out, rendered_html, BeautifulSoup(rendered_html, "html.parser"))
+
+    # URL-based AA fallback as last resort only.
+    if not out.get("progressive_aa"):
+        for u in (url, r.url):
+            try:
+                token = urlparse(str(u)).path.split("/invoice/", 1)[1].split("/", 1)[0]
+            except Exception:
+                continue
+            parts = [p.strip() for p in token.split("-") if p.strip()]
+            numeric_parts = [p for p in parts if re.fullmatch(r"\d{1,10}", p)]
+            if numeric_parts:
+                out["progressive_aa"] = numeric_parts[0]
+                break
     return out
 
 # ---------- entry point demonstration ----------
