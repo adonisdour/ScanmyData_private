@@ -1,6 +1,7 @@
 # app.py (ολοκληρωμένο, με ενσωματωμένη λογική για per-line categorization -> epsilon per-vat files)
 import os
 import sys
+import logging
 
 # Load environment variables from .env file first
 try:
@@ -9,14 +10,19 @@ try:
 except ImportError:
     pass
 
+# Load runtime secrets from Infisical using only Infisical bootstrap vars
+try:
+    from infisical_bootstrap import bootstrap_infisical_secrets
+    bootstrap_infisical_secrets()
+except Exception as _infisical_exc:
+    logging.getLogger(__name__).warning("Infisical bootstrap unavailable: %s", _infisical_exc)
+
 # Warn if MASTER_ENCRYPTION_KEY is missing or empty
-import logging
 if not os.getenv("MASTER_ENCRYPTION_KEY") or os.getenv("MASTER_ENCRYPTION_KEY") == "":
      logging.warning("MASTER_ENCRYPTION_KEY is missing or empty! Decryption will fail.")
 
 import json
 import traceback
-import logging
 import base64
 import re
 from urllib.parse import urlsplit, urlparse, urlunparse
