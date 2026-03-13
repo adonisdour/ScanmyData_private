@@ -7746,6 +7746,53 @@ def _is_receipt_record(r: dict) -> bool:
     return False
 
 
+def _is_legacy_fetch_mode_enabled() -> bool:
+    """Return True when legacy fetch mode is explicitly enabled.
+
+    Priority:
+    1) `LEGACY_FETCH_MODE` env var (supports 1/true/yes/on and 0/false/no/off)
+    2) settings.json `legacy_fetch_mode`
+    """
+    def _to_bool(v, default=False):
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return default
+        s = str(v).strip().lower()
+        if s in {"1", "true", "yes", "y", "on"}:
+            return True
+        if s in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return default
+
+    env_val = os.getenv("LEGACY_FETCH_MODE")
+    if env_val is not None:
+        return _to_bool(env_val, default=False)
+
+    try:
+        settings = load_settings() or {}
+        return _to_bool(settings.get("legacy_fetch_mode"), default=False)
+    except Exception:
+        return False
+
+
+def _doc_identity_key(doc: dict, ignore_keys=None) -> str:
+    """Return a stable identity string for a document.
+
+    This is used to dedupe/merge records while allowing fields like
+    `updated_at` to differ without treating the record as a new/changed
+    document.
+    """
+    if not isinstance(doc, dict):
+        return json.dumps(doc, sort_keys=True, ensure_ascii=False)
+    if ignore_keys is None:
+        ignore_keys = {"updated_at"}
+    else:
+        ignore_keys = set(ignore_keys) | {"updated_at"}
+    clean = {k: v for k, v in doc.items() if k not in ignore_keys}
+    return json.dumps(clean, sort_keys=True, ensure_ascii=False)
+
+
 def append_doc_to_customer_file(doc, vat):
     """
     Add or update a detailed document in the per-customer JSON file.
@@ -7786,14 +7833,7 @@ def append_doc_to_customer_file(doc, vat):
 
     # check for legacy mode, where we simply append new documents (avoiding
     # merges and pruning entirely).  Duplicate payloads are still suppressed.
-    legacy = False
-    try:
-        settings = load_settings() or {}
-        legacy = bool(settings.get("legacy_fetch_mode"))
-    except Exception:
-        legacy = False
-    if os.getenv("LEGACY_FETCH_MODE"):
-        legacy = True
+    legacy = _is_legacy_fetch_mode_enabled()
 
     if legacy:
         sig = json.dumps(doc, sort_keys=True, ensure_ascii=False)
@@ -7827,9 +7867,18 @@ def append_doc_to_customer_file(doc, vat):
             new_class = str(doc.get("classification", "")).strip()
 
             try:
-                same_payload = json.dumps(existing, sort_keys=True, ensure_ascii=False) == json.dumps(doc, sort_keys=True, ensure_ascii=False)
+                existing_sig = _doc_identity_key(existing)
+                new_sig = _doc_identity_key(doc)
+                same_payload = existing_sig == new_sig
             except Exception:
                 same_payload = False
+
+            # always prune duplicates for this mark, even if payload hasn't changed
+            if len(matching_idxs) > 1 and same_payload and old_class == new_class:
+                for j in reversed(matching_idxs[1:]):
+                    cache.pop(j)
+                json_write(customer_file, cache)
+                return True
 
             # need update if payload changed, classification changed, or
             # there are stray duplicates to remove
@@ -7850,10 +7899,10 @@ def append_doc_to_customer_file(doc, vat):
                 return True
             return False
     # otherwise (receipt or no existing invoice) do simple duplicate check and append
-    sig = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+    sig = _doc_identity_key(doc)
     for d in cache:
         try:
-            if json.dumps(d, sort_keys=True, ensure_ascii=False) == sig:
+            if _doc_identity_key(d) == sig:
                 return False
         except Exception:
             if str(d) == str(doc):
@@ -7927,6 +7976,37 @@ def prune_customer_invoices(vat: str, keep_marks: set,
     return changed
 
 
+def prune_customer_summaries(vat: str, keep_marks: set, 
+                             date_from: str = None, date_to: str = None) -> bool:
+    """Remove stale invoice summaries from the per-customer summary JSON.
+
+    Works similarly to :func:`prune_customer_invoices` but operates on summary
+    records. Receipts are never deleted.
+    """
+    if not vat:
+        return False
+    if not keep_marks and not date_from and not date_to:
+        return False
+    summary_file = get_customer_summary_file(vat)
+    summaries = json_read(summary_file)
+    new_summaries = []
+    changed = False
+    for rec in summaries:
+        mark = str(rec.get("mark", "")).strip()
+        if mark and mark not in keep_marks and not _is_receipt_record(rec):
+            if date_from and date_to:
+                if _date_in_range(rec.get("issueDate", ""), date_from, date_to):
+                    changed = True
+                    continue
+            else:
+                changed = True
+                continue
+        new_summaries.append(rec)
+    if changed:
+        json_write(summary_file, new_summaries)
+    return changed
+
+
 def append_summary_to_customer_file(summary, vat):
     """
     Save summary for a customer into per-customer summary JSON
@@ -7949,14 +8029,7 @@ def append_summary_to_customer_file(summary, vat):
     mark = str(summary.get("mark", "")).strip()
 
     # check legacy flag from settings or environment
-    legacy = False
-    try:
-        settings = load_settings() or {}
-        legacy = bool(settings.get("legacy_fetch_mode"))
-    except Exception:
-        legacy = False
-    if os.getenv("LEGACY_FETCH_MODE"):
-        legacy = True
+    legacy = _is_legacy_fetch_mode_enabled()
 
     if legacy:
         sig = json.dumps(summary, sort_keys=True, ensure_ascii=False)
@@ -7983,46 +8056,95 @@ def append_summary_to_customer_file(summary, vat):
 
     is_receipt = _is_receipt_summary(summary)
 
+    # If this looks like a receipt *with a real mark*, treat it as an invoice
+    # for merge/dedupe purposes so we don't end up with duplicate entries for
+    # the same mark.
+    if is_receipt and mark and mark != RECEIPT_FALLBACK_MARK:
+        is_receipt = False
+
+    # receipts (fallback mark or explicit receipts) should be deduped/merged by identity (AA + issueDate + AFM)
+    # to avoid duplicate identical receipt entries while keeping audit history.
+    if is_receipt:
+        for idx, s in enumerate(summaries):
+            if not _is_receipt_summary(s):
+                continue
+            if not _same_receipt_identity(summary, s):
+                continue
+
+            old_class = str(s.get("classification", "")).strip()
+            new_class = str(summary.get("classification", "")).strip()
+            try:
+                same_payload = _doc_identity_key(s) == _doc_identity_key(summary)
+            except Exception:
+                same_payload = False
+
+            if same_payload and old_class == new_class:
+                return False
+
+            # merge and possibly stamp updated_at
+            merged = dict(s)
+            merged.update(summary)
+            if new_class == "χαρακτηρισμενο" and old_class != new_class:
+                merged["updated_at"] = datetime.datetime.utcnow().isoformat()
+            summaries[idx] = merged
+            json_write(summary_file, summaries)
+            try:
+                log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
+            except Exception:
+                pass
+            return True
+
+        # no matching receipt found -> append
+        summaries.append(summary)
+        json_write(summary_file, summaries)
+        return True
+
+    # invoices are deduped/merged by mark
+    matching_idxs = []
     for idx, s in enumerate(summaries):
         try:
-            if str(s.get("mark", "")).strip() != mark:
-                continue
+            if str(s.get("mark", "")).strip() == mark:
+                matching_idxs.append(idx)
         except Exception:
             continue
-        # existing match
-        if mark == RECEIPT_FALLBACK_MARK:
-            # fallback dedupe uses stronger identity check
-            if _same_receipt_identity(summary, s):
-                return False
-            else:
-                # continue scanning others (shouldn't normally happen)
-                continue
-        if is_receipt:
-            # receipts do not merge; treat as distinct record
-            continue
-        # at this point we have same mark and not a receipt
-        old_class = str(s.get("classification", "")).strip()
+
+    if matching_idxs:
+        first_idx = matching_idxs[0]
+        existing = summaries[first_idx]
+        old_class = str(existing.get("classification", "")).strip()
         new_class = str(summary.get("classification", "")).strip()
-        # determine if anything at all changed
+
         try:
-            same_payload = json.dumps(s, sort_keys=True, ensure_ascii=False) == json.dumps(summary, sort_keys=True, ensure_ascii=False)
+            existing_sig = _doc_identity_key(existing)
+            new_sig = _doc_identity_key(summary)
+            same_payload = existing_sig == new_sig
         except Exception:
             same_payload = False
-        if same_payload and old_class == new_class:
-            return False
-        # merge and possibly stamp updated_at
-        merged = dict(s)
-        merged.update(summary)
-        if new_class == "χαρακτηρισμενο" and old_class != new_class:
-            merged["updated_at"] = datetime.datetime.utcnow().isoformat()
-        summaries[idx] = merged
-        json_write(summary_file, summaries)
-        try:
-            log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
-        except Exception:
-            pass
-        return True
-    # no matching mark or only receipts found -> append normally
+
+        # always prune duplicates for this mark, even if nothing else changed
+        if len(matching_idxs) > 1 and same_payload and old_class == new_class:
+            for j in reversed(matching_idxs[1:]):
+                summaries.pop(j)
+            json_write(summary_file, summaries)
+            return True
+
+        if not same_payload or old_class != new_class or len(matching_idxs) > 1:
+            merged = dict(existing)
+            merged.update(summary)
+            if new_class == "χαρακτηρισμενο" and old_class != new_class:
+                merged["updated_at"] = datetime.datetime.utcnow().isoformat()
+            summaries[first_idx] = merged
+            for j in reversed(matching_idxs[1:]):
+                summaries.pop(j)
+            json_write(summary_file, summaries)
+            try:
+                log.info("append_summary_to_customer_file: merged/updated mark=%s vat=%s", mark, vat)
+            except Exception:
+                pass
+            return True
+        return False
+
+    # no matching mark -> append normally
     summaries.append(summary)
     json_write(summary_file, summaries)
     return True
@@ -8161,12 +8283,10 @@ def fetch():
 
                 if vat and seen_marks:
                     try:
-                        settings = load_settings() or {}
-                        legacy = bool(settings.get("legacy_fetch_mode"))
-                        if os.getenv("LEGACY_FETCH_MODE"):
-                            legacy = True
+                        legacy = _is_legacy_fetch_mode_enabled()
                         if not legacy:
                             prune_customer_invoices(vat, seen_marks, date_from=d1, date_to=d2)
+                            prune_customer_summaries(vat, seen_marks, date_from=d1, date_to=d2)
                     except Exception:
                         pass
 
