@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from activity_monitor import monitor_resources
+
 # ----------------------- basic utils -----------------------
 def _digits(s: Any) -> str:
     return "".join(ch for ch in str(s or "") if ch.isdigit())
@@ -990,6 +992,7 @@ def export_multiclient_strict(
     return True, paths["out"], issues
 
 
+@monitor_resources('run_and_report_dynamic')
 def run_and_report_dynamic(
     vat: str,
     credentials_json: str = "data/credentials.json",

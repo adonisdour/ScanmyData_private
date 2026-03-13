@@ -2075,7 +2075,9 @@
         }
       }catch(e){console.warn('notif poll failed', e);}
     }
+    {% if current_user and current_user.is_authenticated %}
     setInterval(pollGlobalNotifs, 5000);
+    {% endif %}
     </script>
     
     <!-- FOOTER -->
@@ -3079,6 +3081,8 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   const box=document.getElementById('helpBotMessages');
   let open=false;
   let poller=null; // will be set to a timer that adapts depending on `open`
+  let supportSse = null;
+  let supportSseRetry = null;
   let lastPresence={support_typing:false};
   const NAME_KEY='support_display_name';
   const SEEN_KEY='support_last_seen';
@@ -3086,10 +3090,23 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
   let lastTicket=null;
   let archivedTickets=[];
 
+  // Track the timestamp of the last support message we’ve seen.
+  // When the panel is closed we poll slowly; if a new support message arrives,
+  // we speed up polling for a short while so the user sees new replies quickly.
+  let lastSupportMsgTs = 0;
+  let closedFastUntil = 0;
+  const CLOSED_POLL_INTERVAL = 30000; // 30s when panel closed and idle
+  const FAST_POLL_INTERVAL = 2000; // 2s when panel open or when new message arrived
+  const FAST_POLL_AFTER_NEW_MS = 30000; // keep fast polling for N seconds after new incoming message
+
   // Adjust polling interval depending on whether the panel is open (faster when open)
   function _setPollIntervalForOpenState(){
     try{ if(poller) clearInterval(poller); }catch(_e){}
-    poller = setInterval(refresh, open ? 2000 : 8000);
+
+    const now = Date.now();
+    const shouldFastPoll = open || now < closedFastUntil;
+    const interval = shouldFastPoll ? FAST_POLL_INTERVAL : CLOSED_POLL_INTERVAL;
+    poller = setInterval(refresh, interval);
   }
 
   function updateNameFieldState(ticket){
@@ -3240,6 +3257,22 @@ html[data-theme="dark"] #helpBotPresence,html[data-theme="dark"] #helpBotFileSta
       updateTitle(lastTicket);
       updateNameFieldState(lastTicket);
       const messages = lastTicket ? (j.messages||[]) : [];
+
+      // Detect new support messages (when panel is closed we poll slowly, but
+      // if a new message arrives we speed up polling briefly for better UX)
+      const supportMsgs = (messages||[]).filter(m => m.sender === 'support');
+      if (supportMsgs.length) {
+        const maxTs = Math.max(...supportMsgs.map(m => parseTs(m.timestamp) || 0));
+        if (maxTs > lastSupportMsgTs) {
+          lastSupportMsgTs = maxTs;
+          closedFastUntil = Date.now() + FAST_POLL_AFTER_NEW_MS;
+          // If panel is closed but we detected a new support message, refresh more often
+          if (!open) {
+            try{ _setPollIntervalForOpenState(); }catch(_e){}
+          }
+        }
+      }
+
       render(messages);
       updateBadge(messages);
 

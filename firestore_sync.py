@@ -8,6 +8,8 @@ import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+from activity_monitor import monitor_resources
+
 # Load environment variables
 try:
     from dotenv import load_dotenv
@@ -51,6 +53,7 @@ def get_firestore_client():
     return _fs_client
 
 
+@monitor_resources('fs_atomic_add_user_to_group')
 def fs_atomic_add_user_to_group(uid: str, group_name: str, role: str = 'member') -> bool:
     """
     Atomically add user to group in Firestore and sync to SQLite.
@@ -288,6 +291,7 @@ def fs_atomic_set_user_group_role(uid: str, group_name: str, role: str) -> bool:
         return False
 
 
+@monitor_resources('fs_get_user_groups')
 def fs_get_user_groups(uid: str) -> Dict[str, str]:
     """
     Get user's groups and roles from Firestore.

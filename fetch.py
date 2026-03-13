@@ -14,6 +14,8 @@ try:
 except ImportError:
     import xml.etree.ElementTree as ET
 
+from activity_monitor import monitor_resources
+
 def _safe_strip(s):
     return str(s).strip() if s else ""
 
@@ -279,6 +281,7 @@ def _fetch_e3_info(mark: str, date_from: str, date_to: str, aade_user: str, aade
 
     return mark_class
 
+@monitor_resources('request_docs')
 def request_docs(
     date_from: str,
     date_to: str,
