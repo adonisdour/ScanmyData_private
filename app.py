@@ -38,6 +38,8 @@ from flask import (
     jsonify,
     session,
     after_this_request,
+    Response,
+    stream_with_context,
 )
 import tempfile
 import zipfile
@@ -48,6 +50,7 @@ import pandas as pd
 from shutil import move
 import importlib
 import io
+from activity_monitor import monitor_resources, start_request_monitoring, end_request_monitoring
 import csv
 import unicodedata
 import secrets
@@ -1078,6 +1081,7 @@ def credentials_path_for_request():
 
 
 @app.route('/api/sync_progress', methods=['GET'])
+@monitor_resources('api_sync_progress')
 def api_sync_progress():
     """Return current sync progress for the active group (non-blocking)."""
     try:
@@ -1105,6 +1109,7 @@ def api_sync_progress():
 
 @app.route('/api/debug/role', methods=['GET'])
 @login_required
+@monitor_resources('api_debug_role')
 def api_debug_role():
     """Debug endpoint to check user role detection in active group."""
     try:
@@ -1297,8 +1302,16 @@ def _profiles_set_for_active(profiles):
 
 @app.before_request
 def log_request_path():
+    label = f"{request.method} {request.path}"
+    start_request_monitoring(label)
     log.info("Incoming request: method=%s path=%s remote=%s ref=%s", request.method, request.path, request.remote_addr, request.referrer)
-    
+
+
+@app.after_request
+def log_request_complete(response):
+    # Capture status and end timing for every request
+    end_request_monitoring(status_code=response.status_code)
+    return response
 
 
 @app.before_request
@@ -2618,6 +2631,7 @@ def _meaningful_summary(d: dict) -> bool:
     except Exception:
         return False
 
+@monitor_resources('save_receipt')
 def save_receipt(afm: str, year: str, summary: dict, lines: list, active_years: list):
     """
     Αποθηκεύει μια απόδειξη στα αρχεία AFM_invoices.xlsx και AFM_epsilon_invoices.json
@@ -2689,6 +2703,7 @@ def save_receipt(afm: str, year: str, summary: dict, lines: list, active_years: 
 
     return {"ok": True}
 
+@monitor_resources('run_scraper_subprocess')
 def run_scraper_subprocess(arg=None, timeout=240):
     """
     Καλεί scraper_receipt.py με τον ίδιο python interpreter (sys.executable).
@@ -3325,7 +3340,7 @@ def _safe_save_epsilon_cache(vat_code, epsilon_list):
         try:
             log.exception("_safe_save_epsilon_cache: fallback write failed")
         except Exception:
-            print("fallback write failed for", epsilon_path)
+            log.exception("fallback write failed for %s", epsilon_path)
         # cleanup tmp
         try:
             if tmp and os.path.exists(tmp):
@@ -3947,7 +3962,7 @@ def _append_to_excel(rec_dict, vat: Optional[str] = None, cred_name: Optional[st
             try:
                 log.exception("append_to_excel failed (pandas err=%s, openpyxl err=%s)", e_pandas, e_openpyxl)
             except Exception:
-                print("append_to_excel failed:", e_pandas, e_openpyxl)
+                log.exception("append_to_excel failed (pandas err=%s, openpyxl err=%s)", e_pandas, e_openpyxl)
             return False
     """
     Append a single record as a row to EXCEL_FILE.
@@ -4193,11 +4208,8 @@ def json_read(path, default=None):
         try:
             log.error("json_read failed for %s: %s", path, str(e))
         except Exception:
-            # if logging itself fails, fall back to print (rare)
-            try:
-                print("json_read failed for", path, str(e))
-            except Exception:
-                pass
+            # if logging itself fails, just ignore (rare)
+            pass
         # return default to avoid crashing the app (caller should handle None/default)
         return default
 
@@ -4229,7 +4241,7 @@ def json_write(path, obj):
         try:
             log.exception("json_write failed for %s: %s", path, str(e))
         except Exception:
-            print("json_write failed for", path, str(e))
+            pass
         # cleanup tmp if present
         try:
             if tmp and os.path.exists(tmp):
@@ -4879,11 +4891,13 @@ def serve_icons(filename):
     return send_file(os.path.join(icons_dir, filename))
 
 @app.route("/")
+@monitor_resources('home')
 def home():
     return safe_render("nav.html", active_page="home")
 
 
 @app.route('/terms')
+@monitor_resources('terms_page')
 def terms_page():
     """Terms of Service page - publicly accessible"""
     from datetime import datetime
@@ -4891,6 +4905,7 @@ def terms_page():
 
 
 @app.route('/privacy')
+@monitor_resources('privacy_page')
 def privacy_page():
     """Privacy Policy & GDPR page - publicly accessible"""
     from datetime import datetime
@@ -4898,6 +4913,7 @@ def privacy_page():
 
 
 @app.route('/get_fiscal_year', methods=['GET'])
+@monitor_resources('route_get_fiscal_year')
 def route_get_fiscal_year():
     """
     GET -> return current fiscal year if present:
@@ -4907,6 +4923,7 @@ def route_get_fiscal_year():
     return jsonify(exists=(y is not None), fiscal_year=y), 200
 
 @app.route('/set_fiscal_year', methods=['POST'])
+@monitor_resources('route_set_fiscal_year')
 def route_set_fiscal_year():
     """
     POST JSON or form: { fiscal_year: 2025 } or { year: 2025 }
@@ -5210,6 +5227,7 @@ def validate_date_field_against_active_fiscal(date_str, field_name='date'):
     return True, "OK"
 # --- NEW: safer GET that also returns profile_name ---
 @app.route('/api/repeat_entry/get_v2', methods=['GET'])
+@monitor_resources('api_repeat_entry_get_v2')
 def api_repeat_entry_get_v2():
     """
     Επιστρέφει repeat_entry {enabled, mapping, profile_name} + expense_tags (χωρίς 'αποδειξάκια').
@@ -5279,6 +5297,7 @@ def api_repeat_entry_get_v2():
 
 
 @app.route('/api/repeat_entry/get', methods=['GET'])
+@monitor_resources('api_repeat_entry_get')
 def api_repeat_entry_get():
     """
     Επιστρέφει στοιχεία repeat_entry + expense_tags και -όταν είναι διαθέσιμο-
@@ -5663,6 +5682,7 @@ def api_validate_payment_mtype():
 
 
 @app.route("/api/get_vat_name", methods=["POST"])
+@monitor_resources('api_get_vat_name')
 def api_get_vat_name():
     """
     Λαμβάνει ΑΦΜ και επιστρέφει το όνομα της επιχείρησης από VAT validator (VIES + Business Portal fallback).
@@ -6410,6 +6430,7 @@ def mobile_qr_scanner():
 
 
 @app.route('/credentials/add', methods=['POST'])
+@monitor_resources('credentials_add')
 def credentials_add():
     # Only group admin may add credentials
     try:
@@ -6480,6 +6501,7 @@ def _delete_credential_and_related_data(name: str):
 
 
 @app.route('/credentials/delete/<name>', methods=['POST'])
+@monitor_resources('credentials_delete_post')
 def credentials_delete_post(name):
     # Only group admin may delete credentials
     try:
@@ -6514,6 +6536,7 @@ def credentials_delete_post(name):
     return redirect(url_for('credentials'))
 
 @app.route('/credentials/set_active', methods=['POST'])
+@monitor_resources('credentials_set_active')
 def credentials_set_active():
     active_name = request.form.get('active_name')
     credentials = load_credentials()
@@ -6525,6 +6548,7 @@ def credentials_set_active():
     return redirect(url_for('credentials'))
 
 @app.route('/credentials/save_settings', methods=['POST'])
+@monitor_resources('credentials_save_settings')
 def credentials_save_settings():
     # Only group admin may update settings
     try:
@@ -6545,6 +6569,7 @@ def credentials_save_settings():
     return jsonify({'status':'error'}), 400
 
 @app.route('/api/validate_vat', methods=['POST'])
+@monitor_resources('api_validate_vat')
 def api_validate_vat():
     """
     Validate Greek VAT number using EU VIES service
@@ -6573,6 +6598,7 @@ def api_validate_vat():
 
 
 @app.route('/api/save_receipt', methods=['POST'])
+@monitor_resources('api_save_receipt')
 def api_save_receipt():
     """
     Expects JSON { "summary": {...} }
@@ -6617,6 +6643,7 @@ def api_save_receipt():
         return jsonify(ok=False, error=str(e)), 500
 
 @app.route('/upload_client_db', methods=['POST'])
+@monitor_resources('upload_client_db')
 def upload_client_db():
     """
     Accept multipart/form-data with field 'client_file' and save/update it in group DATA_DIR
@@ -6827,6 +6854,7 @@ def upload_client_db():
 
 
 @app.route('/upload_chart_of_accounts', methods=['POST'])
+@monitor_resources('upload_chart_of_accounts')
 def upload_chart_of_accounts():
     """
     Upload λογιστικού σχεδίου για Γ Κατηγορία.
@@ -6835,6 +6863,7 @@ def upload_chart_of_accounts():
     return _upload_chart_of_accounts_impl('G')
 
 @app.route('/upload_chart_of_accounts_b', methods=['POST'])
+@monitor_resources('upload_chart_of_accounts_b')
 def upload_chart_of_accounts_b():
     """
     Upload λογιστικού σχεδίου για Β Κατηγορία.
@@ -7001,11 +7030,13 @@ def _upload_chart_of_accounts_impl(category='G'):
 
 
 @app.route('/remove_chart_of_accounts', methods=['POST'])
+@monitor_resources('remove_chart_of_accounts')
 def remove_chart_of_accounts():
     """Αφαίρεση λογιστικού σχεδίου Γ Κατηγορίας"""
     return _remove_chart_of_accounts_impl('G')
 
 @app.route('/remove_chart_of_accounts_b', methods=['POST'])
+@monitor_resources('remove_chart_of_accounts_b')
 def remove_chart_of_accounts_b():
     """Αφαίρεση λογιστικού σχεδίου Β Κατηγορίας"""
     return _remove_chart_of_accounts_impl('B')
@@ -11944,6 +11975,26 @@ def api_confirm_receipt():
 
 
 # ---------------- Help / Support Desk (Discord bridge) ----------------
+
+# Simple SSE push subsystem for support chat.
+# Clients can open an EventSource to /api/support/events to receive new-message
+# notifications without polling.
+_support_sse_lock = threading.Lock()
+_support_sse_clients: List["queue.Queue[str]"] = []
+
+import queue  # noqa: E402
+
+
+def _support_sse_broadcast(payload: Dict[str, Any]):
+    msg = json.dumps(payload)
+    with _support_sse_lock:
+        for q in list(_support_sse_clients):
+            try:
+                q.put_nowait(msg)
+            except Exception:
+                pass
+
+
 def _support_store_path() -> str:
     return group_path("support_tickets.json")
 
@@ -12378,6 +12429,30 @@ def _support_discord_deliver_message(ticket: Dict[str, Any], message: str, attac
         f"{message}"
     )
     return _support_discord_send_message(thread_id, content, headers, attachments=attachments), thread_id
+
+
+@app.get("/api/support/events")
+@login_required
+def api_support_events():
+    """Server-Sent Events stream for support chat updates."""
+    def generator():
+        q = queue.Queue()
+        with _support_sse_lock:
+            _support_sse_clients.append(q)
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=15)
+                    yield f"data: {msg}\n\n"
+                except queue.Empty:
+                    # keep-alive comment
+                    yield ": keep-alive\n\n"
+        finally:
+            with _support_sse_lock:
+                if q in _support_sse_clients:
+                    _support_sse_clients.remove(q)
+
+    return Response(stream_with_context(generator()), mimetype='text/event-stream')
 
 
 @app.get("/api/support/attachment/<attachment_id>")
@@ -12839,6 +12914,17 @@ def api_support_discord_reply():
     ticket["last_support_read_at"] = now
 
     _support_save(data)
+
+    # Notify SSE listeners (see /api/support/events) that a new support message arrived
+    try:
+        _support_sse_broadcast({
+            "type": "support_reply",
+            "ticket_id": int(ticket.get("id") or 0),
+            "content": content[:4000],
+        })
+    except Exception:
+        pass
+
     return jsonify({"ok": True})
 
 
