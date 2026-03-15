@@ -227,7 +227,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
     if (!credentialName && !vatVal) {
       lastFetchInfo.textContent = 'Τελευταία λήψη: —';
-      return null;
+      return;
     }
     try {
       const selectedOption = credentialSelect.options[credentialSelect.selectedIndex];
@@ -245,18 +245,14 @@ document.addEventListener("DOMContentLoaded", function() {
         const data = await res.json();
         if (data.last_fetch_date) {
           lastFetchInfo.textContent = 'Τελευταία λήψη: ' + data.last_fetch_date;
-          return data.last_fetch_date;
         } else {
           lastFetchInfo.textContent = 'Τελευταία λήψη: δεν υπάρχει';
-          return null;
         }
       }
     } catch(e) {
       console.warn('Failed to load last fetch date', e);
       lastFetchInfo.textContent = 'Τελευταία λήψη: —';
-      return null;
     }
-    return null;
   }
   
   // Κλείδωσε το credential και φόρτωσε την τελευταία λήψη
@@ -269,48 +265,8 @@ document.addEventListener("DOMContentLoaded", function() {
       vatInput.value = selectedOption.dataset.vat || '';
     }
   } catch(e) {}
-
-  let fetchPollInterval = null;
-  const waitOverlay = document.getElementById('waitOverlay');
-
-  function showWaitOverlay() {
-    if (waitOverlay) waitOverlay.style.display = 'flex';
-  }
-  function hideWaitOverlay() {
-    if (waitOverlay) waitOverlay.style.display = 'none';
-  }
-
-  async function pollFetchCompletion() {
-    try {
-      const res = await fetch('/api/global_notifications');
-      if (!res.ok) return;
-      const data = await res.json();
-      const msgs = Array.isArray(data.msgs) ? data.msgs : [];
-      const vat = (document.getElementById('vat_input')?.value || '').trim();
-      const match = msgs.find(m => typeof m === 'string' && m.includes('Λήψη ολοκληρώθηκε για ΑΦΜ') && (!vat || m.includes(`ΑΦΜ ${vat}`)));
-      if (match) {
-        await loadLastFetch();
-        stopFetchPolling();
-        hideWaitOverlay();
-      }
-    } catch (e) {
-      // ignore transient errors; we'll try again
-    }
-  }
-
-  function startFetchPolling() {
-    if (fetchPollInterval) return;
-    fetchPollInterval = setInterval(pollFetchCompletion, 3000);
-  }
-
-  function stopFetchPolling() {
-    if (!fetchPollInterval) return;
-    clearInterval(fetchPollInterval);
-    fetchPollInterval = null;
-  }
-
   loadLastFetch();
-
+  
   // Αποτρέψου αλλαγή του credential αν είναι κλειδωμένο
   credentialSelect.addEventListener('change', (e) => {
     const vatInput = document.getElementById('vat_input');
@@ -347,16 +303,7 @@ document.addEventListener("DOMContentLoaded", function() {
     vatInputEl.addEventListener('blur', loadLastFetch);
     vatInputEl.addEventListener('change', loadLastFetch);
   }
-
-  // When the form is submitted, show the wait overlay and start polling
-  const fetchForm = document.querySelector('form');
-  if (fetchForm) {
-    fetchForm.addEventListener('submit', () => {
-      showWaitOverlay();
-      startFetchPolling();
-    });
-  }
-
+  
   // Αποθήκευσε την αρχική τιμή
   credentialSelect.setAttribute('data-original-value', credentialSelect.value);
 
@@ -402,27 +349,6 @@ document.addEventListener("DOMContentLoaded", function() {
   // Show wait overlay when the fetch form is submitted
   const fetchForm = document.querySelector('form[method="POST"]');
   const waitOverlay = document.getElementById('waitOverlay');
-  let fetchPollingInterval = null;
-  let lastFetchKnown = null;
-
-  function startFetchPolling() {
-    // Poll for an updated last-fetch date until it changes (or for 5 minutes).
-    if (fetchPollingInterval) return;
-    const startTime = Date.now();
-    fetchPollingInterval = setInterval(async () => {
-      const latest = await loadLastFetch();
-      if (latest && latest !== lastFetchKnown) {
-        lastFetchKnown = latest;
-        clearInterval(fetchPollingInterval);
-        fetchPollingInterval = null;
-      }
-      if (Date.now() - startTime > 5 * 60 * 1000) {
-        clearInterval(fetchPollingInterval);
-        fetchPollingInterval = null;
-      }
-    }, 8000);
-  }
-
   if (fetchForm && waitOverlay) {
     fetchForm.addEventListener('submit', function(e){
       // show overlay immediately
@@ -431,11 +357,6 @@ document.addEventListener("DOMContentLoaded", function() {
         // ensure focus on overlay for screen readers
         waitOverlay.setAttribute('aria-hidden', 'false');
       } catch(err){}
-
-      // Capture current last-fetch value so we can detect updates.
-      lastFetchKnown = lastFetchInfo.textContent;
-      startFetchPolling();
-
       // leave normal form submit to proceed; overlay will hide when response renders
     });
   }
