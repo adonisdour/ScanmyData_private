@@ -3,10 +3,12 @@ import os
 import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
+import base64
 import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,98 @@ RESEND_INBOUND_HOURLY_FALLBACK_ENABLED = os.getenv('RESEND_INBOUND_HOURLY_FALLBA
 RAILWAY_PROXY_URL = os.getenv('RAILWAY_PROXY_URL', '')
 
 
+def _inline_logo_data_uri() -> str:
+    """Return a small inline logo as a data URI.
+
+    This is used so that email clients (e.g. Outlook / Gmail) do not block the
+    logo as an external image. Prefer a small favicon PNG for best compatibility.
+    """
+    # Prefer a small favicon to keep message size low.
+    candidates = [
+        os.path.join(os.getcwd(), 'icons', 'favicon-96x96.png'),
+        os.path.join(os.getcwd(), 'icons', 'scanmydata_logo_3000w.png'),
+    ]
+    for p in candidates:
+        try:
+            if not os.path.exists(p):
+                continue
+            with open(p, 'rb') as fh:
+                data = fh.read()
+            b64 = base64.b64encode(data).decode('ascii')
+            return f"data:image/png;base64,{b64}"
+        except Exception:
+            continue
+
+    # Fallback to a very small SVG icon if no PNG is found.
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0%" stop-color="#1a56db"/><stop offset="100%" stop-color="#0b3a8b"/></linearGradient></defs>'
+        '<rect width="64" height="64" rx="12" fill="url(#g)"/>'
+        '<text x="32" y="38" font-family="Arial,Helvetica,sans-serif" font-size="28" fill="#fff" text-anchor="middle" font-weight="700">S</text>'
+        '</svg>'
+    )
+    return f"data:image/svg+xml;base64,{base64.b64encode(svg.encode('utf-8')).decode('ascii')}"
+
+
+def _get_logo_data() -> tuple[bytes, str]:
+    """Return raw logo bytes and mime type for embedding in email attachments."""
+    # Prefer PNG as it is broadly supported, but fall back to SVG if PNG not found.
+    candidates = [
+        os.path.join(os.getcwd(), 'icons', 'favicon-96x96.png'),
+        os.path.join(os.getcwd(), 'icons', 'scanmydata_logo_3000w.png'),
+    ]
+    for path in candidates:
+        try:
+            if not os.path.exists(path):
+                continue
+            with open(path, 'rb') as fh:
+                data = fh.read()
+            return data, 'image/png'
+        except Exception:
+            continue
+
+    # Fallback to inline SVG content
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0%" stop-color="#1a56db"/><stop offset="100%" stop-color="#0b3a8b"/></linearGradient></defs>'
+        '<rect width="64" height="64" rx="12" fill="url(#g)"/>'
+        '<text x="32" y="38" font-family="Arial,Helvetica,sans-serif" font-size="28" fill="#fff" text-anchor="middle" font-weight="700">S</text>'
+        '</svg>'
+    )
+    return svg.encode('utf-8'), 'image/svg+xml'
+
+
+def _get_default_logo_url(logo_cid: str = 'scanmydata_logo') -> str:
+    """Return the default logo URL to use in email HTML.
+
+    For SMTP, we prefer `cid:` so the logo can be attached as an inline MIME part.
+    For providers that don't support MIME attachments (e.g. Resend API), we fall
+    back to an inline data URI via `_inline_logo_data_uri`.
+    """
+    return f"cid:{logo_cid}"
+
+
+def _public_logo_url() -> str:
+    """Return a public logo URL for providers that don't render CID reliably."""
+    base = (
+        os.getenv('PUBLIC_BASE_URL', '').strip()
+        or os.getenv('RENDER_EXTERNAL_URL', '').strip()
+        or APP_URL.strip()
+    )
+    if not base or 'localhost' in base or base.startswith('http://127.'):
+        base = 'https://www.scanmydata.gr'
+    return f"{base.rstrip('/')}/icons/favicon-96x96.png"
+
+
+def _replace_cid_with_data_uri(html: str, cid: str = 'scanmydata_logo') -> str:
+    """Replace a CID reference with an inline data URI (PNG)."""
+    if not html or f"cid:{cid}" not in html:
+        return html
+    return html.replace(f"cid:{cid}", _inline_logo_data_uri())
+
+
 def make_email_html(
     greeting: str,
     body_html: str,
@@ -38,71 +132,97 @@ def make_email_html(
     expiry_note: str = None,
     security_note: str = None,
     logo_url: str = None,
+    header_subtitle: str = None,
+    preheader: str = None,
 ) -> str:
     """Build a clean, transactional-style email (minimal, inbox-friendly).
 
     Modelled on plain service-notification emails (e.g. Papaki / bank alerts)
     to avoid Gmail/Hotmail classifying the message as "Promotions".
     """
+
+    # Default preheader (Gmail/Outlook preview line)
+    if preheader is None:
+        preheader = 'Σας στέλνουμε αυτό το email από το ScanmyData.'
+
+    if header_subtitle is None:
+        header_subtitle = 'Ειδοποίηση Λογαριασμού'
+
+    provider = get_email_provider()
+
+    # For Resend/OAuth/Railway use a small public image directly.
+    # Outlook web renders this more reliably than CID attachments.
     if not logo_url:
-        logo_url = f"{APP_URL}/icons/scanmydata_logo_3000w.png"
+        if provider in ('resend', 'oauth2_outlook', 'railway_proxy'):
+            logo_url = _public_logo_url()
+        else:
+            logo_url = 'cid:scanmydata_logo'
 
     cta_block = ''
     if cta_url:
         cta_block = f"""
-        <p style="margin: 20px 0 8px;">
-          <a href="{cta_url}" style="color: #1a56db; font-size: 14px; font-weight: bold; text-decoration: underline;">{cta_text}</a>
-        </p>
-        <p style="margin: 4px 0 16px; font-size: 12px; color: #666; word-break: break-all;">
-          Αν ο σύνδεσμος δεν λειτουργεί, αντιγράψτε τον στον browser σας:<br>
-          {cta_url}
-        </p>"""
+                <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" style=\"margin:18px 0 12px;\">
+                    <tr>
+                        <td style=\"border-radius:6px;background:#1a56db;\">
+                            <a href=\"{cta_url}\" style=\"display:inline-block;padding:12px 22px;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;\">{cta_text}</a>
+                        </td>
+                    </tr>
+                </table>
+                <p style=\"margin:0 0 14px;font-size:12px;color:#666;word-break:break-all;\">{cta_url}</p>"""
 
     expiry_block = (
-        f'<p style="margin: 8px 0; font-size: 12px; color: #666;">{expiry_note}</p>'
+        f'<p style="margin:0 0 8px;font-size:12px;color:#666;">{expiry_note}</p>'
         if expiry_note else ''
     )
     security_block = (
-        f'<p style="margin: 8px 0; font-size: 12px; color: #888;">{security_note}</p>'
+        f'<p style="margin:0 0 8px;font-size:12px;color:#888;">{security_note}</p>'
         if security_note else ''
     )
 
     return f"""<!DOCTYPE html>
-<html lang="el">
+<html lang=\"el\">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset=\"UTF-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
 </head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:Arial,sans-serif;font-size:14px;color:#333333;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0">
-  <tr>
-    <td align="center">
-      <table cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;padding:24px 20px;">
+<body style=\"margin:0;padding:0;background:#f5f5f5;font-family:Arial,sans-serif;font-size:14px;color:#333;\">
+  <!-- Preheader: hidden text shown in preview snippets -->
+  <div style=\"display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;\">{preheader}</div>
+    <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" style=\"background:#f5f5f5;\">
         <tr>
-          <td style="padding-bottom:14px;border-bottom:2px solid #dddddd;">
-            <img src="{logo_url}" alt="ScanmyData"
-                 style="height:34px;width:auto;display:inline-block;vertical-align:middle;" />
-            <span style="font-size:15px;font-weight:bold;color:#333;margin-left:10px;vertical-align:middle;">ScanmyData</span>
-          </td>
+            <td align=\"center\" style=\"padding:20px 10px 36px;\">
+                <table role=\"presentation\" width=\"600\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" style=\"width:600px;max-width:600px;\">
+                    <tr>
+                        <td style=\"padding:0 0 16px;\">
+                            <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\">
+                                <tr>
+                                    <td style=\"border-right:2px solid #e3e3e3;padding-right:12px;\">
+                                        <a href=\"https://www.scanmydata.gr\" target=\"_blank\" style=\"text-decoration:none;\">
+                                            <img src=\"{logo_url}\" alt=\"ScanmyData\" width=\"48\" height=\"48\" style=\"display:block;border:0;width:48px;height:48px;\" />
+                                        </a>
+                                    </td>
+                                    <td style=\"padding-left:16px;vertical-align:middle;\">
+                                        <div style=\"font-family:Helvetica,Arial,sans-serif;font-size:20px;color:#424244;font-weight:bold;line-height:1.2;\">ScanmyData</div>
+                                        <div style=\"font-size:12px;color:#666;line-height:1.3;\">{header_subtitle}</div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style=\"background:#ffffff;border:1px solid #e3e3e3;padding:24px 24px 30px;font-family:Arial,sans-serif;font-size:15px;color:#131212;line-height:1.6;\">
+                            <p style=\"margin:0 0 16px;font-size:16px;font-weight:600;\">{greeting}</p>
+                            {body_html}
+                            {cta_block}
+                            {expiry_block}
+                            {security_block}
+                            <p style=\"margin:16px 0 0;font-size:13px;color:#666;\">Αυτό το email στάλθηκε από το ScanmyData.</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
         </tr>
-        <tr>
-          <td style="padding:22px 0 16px 0;line-height:1.6;">
-            <p style="margin:0 0 14px;">{greeting}</p>
-            {body_html}
-            {cta_block}
-            {expiry_block}
-            {security_block}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding-top:14px;border-top:1px solid #dddddd;font-size:13px;color:#666666;">
-            <p style="margin:0;">Τμήμα Εξυπηρέτησης Πελατών<br><strong>ScanmyData</strong></p>
-          </td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
+    </table>
 </body>
 </html>"""
 
@@ -142,11 +262,18 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     provider = get_email_provider()
     logger.info(f"send_email called: to={to_email}, subject={subject}, provider={provider}")
     
-    # Try to inline local logo image as data URI so recipients see it even when remote images are blocked
+    # Optionally inline the logo image as a data URI (can be blocked by some
+    # clients; enabled via environment variable when desired).
     try:
-        html_body = _inline_logo_into_html(html_body)
+        inline_logo = os.getenv('EMAIL_INLINE_LOGO', 'false').strip().lower() in ('1', 'true', 'yes')
+        if inline_logo:
+            html_body = _inline_logo_into_html(html_body)
     except Exception:
         pass
+
+    # Ensure we always have a plain-text fallback (helps mail clients and deliverability).
+    if not text_body:
+        text_body = _strip_html_to_text(html_body)
 
     # Route to appropriate sending function
     if provider == 'railway_proxy':
@@ -175,6 +302,7 @@ def _inline_logo_into_html(html: str) -> str:
 
         # Common logo file paths to try (project relative)
         candidates = [
+            os.path.join(os.getcwd(), 'icons', 'favicon-96x96.png'),
             os.path.join(os.getcwd(), 'icons', 'scanmydata_logo_3000w.png'),
             os.path.join(os.getcwd(), 'static', 'icons', 'scanmydata_logo_3000w.png'),
             os.path.join(os.getcwd(), 'icons', 'scanmydata_logo.png'),
@@ -214,22 +342,45 @@ def send_smtp_email(to_email: str, subject: str, html_body: str, text_body: Opti
     if not SMTP_USER or not SMTP_PASSWORD:
         logger.warning(f"SMTP not configured; skipping email to {to_email}")
         return False
-    
+
     try:
-        msg = MIMEMultipart('alternative')
+        # Use multipart/related to allow inline images (CID) plus alternative parts.
+        msg = MIMEMultipart('related')
+        alternative = MIMEMultipart('alternative')
+        msg.attach(alternative)
+
         msg['Subject'] = subject
         msg['From'] = SENDER_EMAIL
         msg['To'] = to_email
-        
+
+        # Attach the plain text version first
         if text_body:
-            msg.attach(MIMEText(text_body, 'plain'))
-        msg.attach(MIMEText(html_body, 'html'))
-        
+            alternative.attach(MIMEText(text_body, 'plain', 'utf-8'))
+        alternative.attach(MIMEText(html_body, 'html', 'utf-8'))
+
+        # Attach inline logo if the HTML references it via CID
+        if 'cid:scanmydata_logo' in html_body:
+            logo_paths = [
+                os.path.join(os.getcwd(), 'icons', 'favicon-96x96.png'),
+                os.path.join(os.getcwd(), 'icons', 'scanmydata_logo_3000w.png'),
+            ]
+            logo_path = next((p for p in logo_paths if os.path.exists(p)), None)
+            if logo_path:
+                try:
+                    with open(logo_path, 'rb') as fh:
+                        img_data = fh.read()
+                    img = MIMEImage(img_data)
+                    img.add_header('Content-ID', '<scanmydata_logo>')
+                    img.add_header('Content-Disposition', 'inline', filename=os.path.basename(logo_path))
+                    msg.attach(img)
+                except Exception as e:
+                    logger.warning(f"Failed to attach inline logo {logo_path}: {e}")
+
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
-        
+
         logger.info(f"Email sent via SMTP to {to_email}: {subject}")
         return True
     except Exception as e:
@@ -280,6 +431,27 @@ def send_resend_email(to_email: str, subject: str, html_body: str, text_body: Op
         # Set the API key
         resend.api_key = RESEND_API_KEY
         
+        had_cid_logo = 'cid:scanmydata_logo' in html_body
+
+        # Keep inline attachment as a secondary fallback for clients that do support CID.
+        attachments = None
+        if had_cid_logo:
+            data, mime = _get_logo_data()
+            b64 = base64.b64encode(data).decode('ascii')
+            attachments = [
+                {
+                    "content": b64,
+                    "filename": "scanmydata_logo.png" if mime == 'image/png' else "scanmydata_logo.svg",
+                    "content_type": mime,
+                    "content_id": "scanmydata_logo",
+                    "inline_content_id": "scanmydata_logo",
+                }
+            ]
+
+        # Use public URL in HTML for better Outlook web support.
+        if had_cid_logo:
+            html_body = html_body.replace('cid:scanmydata_logo', _public_logo_url())
+
         # Prepare email params - Resend requires 'from' to be a verified domain
         reply_to = RESEND_REPLY_TO or sender
         params = {
@@ -289,6 +461,9 @@ def send_resend_email(to_email: str, subject: str, html_body: str, text_body: Op
             "html": html_body,
             "reply_to": reply_to,
         }
+
+        if attachments:
+            params["attachments"] = attachments
 
         # Add text body if provided
         if text_body:
@@ -300,7 +475,7 @@ def send_resend_email(to_email: str, subject: str, html_body: str, text_body: Op
 
         logger.info(f"Email sent via Resend to {to_email}: {subject} (ID: {email.get('id', 'unknown')})")
         return True
-        
+
     except ImportError:
         logger.error("Resend library not available. Install it with: pip install resend")
         return False

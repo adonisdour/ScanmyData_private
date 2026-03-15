@@ -179,18 +179,29 @@ class FirebedEmailVerification:
 
             from email_utils import make_email_html
             display = display_name or email.split('@')[0]
+            body_html = f"""
+            <p style='margin:0 0 14px; font-size: 15px;'>Γεια σου <strong>{display}</strong>! 👋</p>
+            <p style='margin:0 0 14px;'>Σε ευχαριστούμε που εγγράφηκες στο <strong>ScanmyData</strong>! Για να ενεργοποιήσεις τον λογαριασμό σου και να έχεις πρόσβαση σε όλες τις δυνατότητες, χρειάζεται να επιβεβαιώσεις το email σου.</p>
+            <p style='margin:0 0 10px;font-weight:600;'>✅ Επιβεβαίωση Email</p>
+            <ul style='margin:0 0 14px;padding-left:20px;line-height:1.5;'>
+              <li>Θα ενεργοποιηθεί ο λογαριασμός σου</li>
+              <li>Θα μπορείς να κάνεις login</li>
+              <li>Θα έχεις πρόσβαση στο dashboard</li>
+              <li>Θα λαμβάνεις σημαντικές ενημερώσεις</li>
+            </ul>
+            <p style='margin:0 0 14px;color:#666;font-size:13px;'>🔒 Ασφάλεια: Αν δεν δημιούργησες εσύ αυτόν τον λογαριασμό, απλά αγνόησε αυτό το email. Ο λογαριασμός δεν θα ενεργοποιηθεί χωρίς επιβεβαίωση.</p>
+            <p style='margin:0 0 10px;font-size:13px;'>Δεν μπορείς να κάνεις κλικ στο κουμπί; Αντίγραψε και επικόλλησε αυτό το link στον browser σου:</p>
+            <p style='margin:0 0 14px;font-size:13px;word-break:break-all;'><a href='{verify_url}' style='color:#1a56db;text-decoration:none;'>{verify_url}</a></p>
+            """
+
             html_body = make_email_html(
-                greeting=f"Γεια σου {display},",
-                body_html=(
-                    "<p style='margin:0 0 14px;'>Σε ευχαριστούμε που εγγράφηκες στο <strong>ScanmyData</strong>!"
-                    " Για να ενεργοποιήσεις τον λογαριασμό σου, παρακαλώ επιβεβαίωσε τη διεύθυνσή σου:"
-                    "</p>"
-                ),
+                greeting="Καλώς ήρθες στο ScanmyData!",
+                body_html=body_html,
                 cta_url=verify_url,
                 cta_text="Επιβεβαίωση Email",
-                expiry_note="Ο σύνδεσμος λήγει σε 24 ώρες.",
-                security_note="Εάν δεν δημιούργησες αυτόν τον λογαριασμό, παρακαλώ αγνόησε αυτό το email.",
-                logo_url=f"{base_url}/icons/scanmydata_logo_3000w.png",
+                expiry_note="Το link επιβεβαίωσης ισχύει για 24 ώρες.",
+                security_note="Αν δεν δημιούργησες εσύ αυτόν τον λογαριασμό, αγνόησε αυτό το email.",
+                header_subtitle='📧 Μήνυμα από Διαχειριστή',
             )
             
             # Plain text fallback
@@ -282,7 +293,8 @@ ScanmyData Team
                 cta_url=reset_url,
                 cta_text="Επαναφορά Κωδικού",
                 expiry_note="Ο σύνδεσμος λήγει σε 1 ώρα.",
-                security_note="Εάν δεν ζήτησατε εσείς επαναφορά, αγνοήστε αυτό το email. Ο κωδικός σας παραμένει αμετάβλητος.",
+                security_note="Εάν δεν ζήτησες εσύ επαναφορά, αγνόησε αυτό το email. Ο κωδικός σου παραμένει αμετάβλητος.",
+                header_subtitle='🔐 Επαναφορά Κωδικού',
                 logo_url=logo_url,
             )
             
