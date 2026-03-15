@@ -1023,6 +1023,11 @@ try:
         if endpoint in remote_public_endpoints:
             return None
 
+        # Allow Resend inbound webhooks to hit this endpoint without a login session.
+        # Authentication is handled via the Svix signature verification in the webhook handler.
+        if request.path.startswith('/admin/api/resend/inbound'):
+            return None
+
         try:
             if not getattr(current_user, 'is_authenticated', False):
                 # API requests: return 401 JSON
